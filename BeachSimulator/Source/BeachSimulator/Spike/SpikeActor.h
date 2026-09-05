@@ -36,10 +36,10 @@ public:
 	float Radius = 2.5f;
 
 	UPROPERTY(EditAnywhere, Category = "Spike|Solver")
-	int32 Substeps = 10;
+	int32 Substeps = 20;
 
 	UPROPERTY(EditAnywhere, Category = "Spike|Solver")
-	int32 Iterations = 2;
+	int32 Iterations = 1;
 
 	UPROPERTY(EditAnywhere, Category = "Spike|Solver")
 	float Friction = 0.7f;

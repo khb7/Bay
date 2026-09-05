@@ -75,6 +75,7 @@ FSpikeRunResult SpikeBatch::RunOne(const FSandParams& Params, const FColumnSetup
 	}
 
 	R.Angle = SpikeMeasure::AngleOfRepose(Sim.GetPositions(), Params.Radius);
+	R.Profile = SpikeMeasure::RadialProfile(Sim.GetPositions(), Params.Radius, R.ProfileBinWidth);
 
 	if (bCapturePerFrame)
 	{
@@ -88,7 +89,7 @@ FSpikeRunResult SpikeBatch::RunOne(const FSandParams& Params, const FColumnSetup
 FString SpikeBatch::SummaryHeader()
 {
 	return TEXT("mu,omega,substeps,iterations,particles,")
-	       TEXT("angleMode,angleMedian,angleMean,surface,sampled,")
+	       TEXT("angleProfile,angleMode,angleMedian,angleMean,surface,sampled,")
 	       TEXT("releaseFrame,released,settleFrame,settleTime,settled,valid,")
 	       TEXT("peakHeight,creepCmPerSec,avgSpeed,maxSpeed,wallSeconds");
 }
@@ -96,9 +97,10 @@ FString SpikeBatch::SummaryHeader()
 FString SpikeBatch::SummaryRow(const FSpikeRunResult& R)
 {
 	return FString::Printf(
-		TEXT("%.2f,%.2f,%d,%d,%d,%.1f,%.1f,%.1f,%d,%d,%d,%d,%d,%.2f,%d,%d,%.2f,%.3f,%.3f,%.3f,%.1f"),
+		TEXT("%.2f,%.2f,%d,%d,%d,%.1f,%.1f,%.1f,%.1f,%d,%d,%d,%d,%d,%.2f,%d,%d,%.2f,%.3f,%.3f,%.3f,%.1f"),
 		R.Friction, R.Relaxation, R.Substeps, R.Iterations, R.Particles,
-		R.Angle.ModeDeg, R.Angle.MedianDeg, R.Angle.MeanDeg, R.Angle.SurfaceNum, R.Angle.SampledNum,
+		R.Angle.ProfileDeg, R.Angle.ModeDeg, R.Angle.MedianDeg, R.Angle.MeanDeg,
+		R.Angle.SurfaceNum, R.Angle.SampledNum,
 		R.ReleaseFrame, R.bReleased ? 1 : 0, R.SettleFrame, R.SettleTime, R.bSettled ? 1 : 0,
 		(R.bReleased && R.bSettled) ? 1 : 0,
 		R.PeakHeight, R.CreepRate, R.AvgSpeed, R.MaxSpeed, R.WallSeconds);

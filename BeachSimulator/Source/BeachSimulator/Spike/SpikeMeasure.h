@@ -10,7 +10,8 @@ class FSandSpike;
 /** 안식각 측정 결과. 히스토그램 최빈값이 판정값이다. */
 struct FAngleStats
 {
-	float ModeDeg     = 0.f;   // ★ 판정값 — 통과 기준 34° ± 3°
+	float ProfileDeg  = 0.f;   // ★ 판정값 — 반경 구간별 표면 높이의 기울기. 격자 계단에 안 휘둘린다
+	float ModeDeg     = 0.f;   // 법선 히스토그램 최빈. 완만할수록 낮게 읽는 편향이 있다
 	float MedianDeg   = 0.f;
 	float MeanDeg     = 0.f;
 	int32 SurfaceNum  = 0;     // 표면으로 분류된 입자 수
@@ -27,6 +28,9 @@ namespace SpikeMeasure
 	 * 표면 입자만 뽑아 지역 법선의 경사각을 재고, 그 히스토그램의 최빈값을 쓴다.
 	 */
 	FAngleStats AngleOfRepose(const TArray<FVector3f>& Pos, float Radius);
+
+	/** 반경 구간별 최고점. 구간 폭은 입자 지름. 빈 구간은 -1. */
+	TArray<float> RadialProfile(const TArray<FVector3f>& Pos, float Radius, float& OutBinWidth);
 
 	float PeakHeight(const TArray<FVector3f>& Pos);
 	float ComHeight(const TArray<FVector3f>& Pos);

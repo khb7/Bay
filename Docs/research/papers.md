@@ -164,6 +164,45 @@ PBD를 고른 것만으로 이미 해결돼 있다.**
 
 ---
 
+## A-R. 안식각을 **어떻게 재는가** — 측정 프로토콜
+
+M0에서 부딪혀 뒤늦게 찾은 절. **안식각은 값보다 측정법이 먼저다.**
+
+### A-R1. Beakawi Al-Hashemi & Baghabra Al-Amoudi (2018)
+**"A review on the angle of repose of granular materials"** — Powder Technology 330, 397-417
+
+> *"Depending upon the method of measurement, the angle of repose value varies appreciably."*
+
+| 방식 | 하는 일 |
+|---|---|
+| **tilting box** | 용기를 서서히 기울여 **사태가 시작되는 각**을 잰다 |
+| fixed funnel | 깔때기로 부어 쌓은 더미의 옆면 각 |
+| hollow cylinder | 원통을 들어올려 무너뜨린 뒤 옆면 각 |
+| revolving cylinder | 회전 드럼에서 흐르는 표면의 각 |
+
+정적 안식각(막 미끄러지려는 상태)과 동적 안식각(흐르는 중)도 구분한다.
+**값을 적을 땐 측정법을 함께 적어야 하는 종류의 물리량이다.**
+
+### A-R2. 기둥 붕괴는 안식각 측정법이 아니다
+
+Lube 2004 / Lajeunesse 2004 계열은 **런아웃 거리와 최종 높이를 종횡비의 함수로** 특성화하는 실험이다.
+후속 연구는 *"the angle at the base of the deposit"* 가 종횡비뿐 아니라
+**기둥 반지름 / 입자 지름 비**에도 의존한다고 보고한다.
+
+→ **퇴적물 경사 ≠ 재료의 안식각.** M0가 결정성 때문에 기둥 붕괴를 골랐는데(그 근거는 유효하다),
+그걸로 μ를 교정하려던 것이 무리였다. ([m0-log.md](../design/m0-log.md) 실행 #6)
+
+### A-R3. Zhou, Xu, Yu, Zulli (2002)
+**"An experimental and numerical study of the angle of repose of coarse spheres"** — Powder Technology
+
+DEM에서 안식각은 미끄럼 마찰·**구름 마찰**·형상·크기·밀도·반발계수에 함께 의존한다.
+미끄럼 마찰이 지배적이고 구름 마찰이 그다음. **구형 입자는 미끄럼 마찰만으로는 한계가 있다.**
+
+> 우리 입자는 **회전 자유도가 아예 없다.** 구름이 불가능하니 이 논의의 밖에 있고,
+> 그게 유리한지 불리한지는 문헌으로 답이 안 나온다 — 실측이 필요한 지점.
+
+---
+
 ## B. 젖은 모래의 실제 물리 — 강도 곡선의 근거
 
 > 그래픽스가 아니라 **물리/재료 논문**. 파라미터 튜닝의 근거로 쓴다.

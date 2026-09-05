@@ -2,6 +2,7 @@
 
 #include "SpikeBatch.h"
 #include "Async/ParallelFor.h"
+#include "Math/RandomStream.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 
@@ -54,6 +55,93 @@ namespace
 	}
 }
 
+namespace
+{
+	/**
+	 * ★ 자 교정 — 각도를 아는 원뿔을 합성해서 측정기가 그 값을 돌려주는지 본다.
+	 *
+	 * 측정기(표면 추출 임계·법선 추정·제외 구간)는 전부 우리가 정한 값이고
+	 * 맞다는 근거가 없었다. 여기서 통과하지 못하면 지금까지의 모든 각도가 무의미하다.
+	 */
+	TArray<FVector3f> MakeCone(float SlopeDeg, float BaseRadius, float ParticleRadius)
+	{
+		FRandomStream Rng(20260905);
+		const float Jitter = 0.15f * ParticleRadius;   // 실제로 안착한 더미처럼 흐트러뜨린다
+		const float S = 2.f * ParticleRadius;
+		const float Tan = FMath::Tan(FMath::DegreesToRadians(SlopeDeg));
+		const float Height = BaseRadius * Tan;
+
+		TArray<FVector3f> Out;
+		for (float Z = ParticleRadius; Z <= Height; Z += S)
+		{
+			const float RAtZ = BaseRadius - Z / Tan;   // 높이 Z 에서의 반지름
+			const int32 Lat = FMath::CeilToInt(RAtZ / S);
+			for (int32 iy = -Lat; iy <= Lat; ++iy)
+			for (int32 ix = -Lat; ix <= Lat; ++ix)
+			{
+				const float X = ix * S;
+				const float Y = iy * S;
+				if (X * X + Y * Y <= RAtZ * RAtZ)
+				{
+					Out.Add(FVector3f(
+						X + Rng.FRandRange(-Jitter, Jitter),
+						Y + Rng.FRandRange(-Jitter, Jitter),
+						Z + Rng.FRandRange(-Jitter, Jitter)));
+				}
+			}
+		}
+		return Out;
+	}
+
+	/** 더미 단면 — 반경 구간별 최고점. 추정 대신 실제 모양을 본다. */
+	int32 RunProfileDump(const FString& Params)
+	{
+		float Mu = 0.7f;
+		FParse::Value(*Params, TEXT("mu="), Mu);
+
+		FSandParams P;
+		P.Friction = Mu;
+		FColumnSetup C;
+		const FSpikeRunResult R = SpikeBatch::RunOne(P, C, 1200, false);
+
+		UE_LOG(LogSpikeSweep, Display,
+			TEXT("단면 — mu=%.2f, 정지 %d프레임, 최고점 %.1fcm, 프로파일 %.1f° 중앙 %.1f°"),
+			Mu, R.SettleFrame, R.PeakHeight, R.Angle.ProfileDeg, R.Angle.MedianDeg);
+		UE_LOG(LogSpikeSweep, Display, TEXT("  반경(cm)   최고점(cm)   구간기울기(°)"));
+
+		for (int32 b = 0; b < R.Profile.Num(); ++b)
+		{
+			const float Rad = R.ProfileBinWidth * (b + 0.5f);
+			float LocalDeg = 0.f;
+			if (b + 1 < R.Profile.Num() && R.Profile[b] >= 0.f && R.Profile[b + 1] >= 0.f)
+			{
+				LocalDeg = FMath::RadiansToDegrees(
+					FMath::Atan((R.Profile[b] - R.Profile[b + 1]) / R.ProfileBinWidth));
+			}
+			UE_LOG(LogSpikeSweep, Display, TEXT("%9.1f %12.1f %14.1f"), Rad, R.Profile[b], LocalDeg);
+		}
+		return 0;
+	}
+
+	int32 RunRulerCalibration()
+	{
+		const float R = 2.5f;
+		UE_LOG(LogSpikeSweep, Display, TEXT("자 교정 — 합성 원뿔의 실제 경사각 대 측정값"));
+		UE_LOG(LogSpikeSweep, Display, TEXT(" 실제 | 프로파일  오차 |  최빈   중앙   평균  오차 | 표본"));
+
+		for (float TrueDeg : { 15.f, 20.f, 25.f, 30.f, 34.f, 40.f, 45.f, 55.f })
+		{
+			const TArray<FVector3f> Cone = MakeCone(TrueDeg, 60.f, R);
+			const FAngleStats A = SpikeMeasure::AngleOfRepose(Cone, R);
+			UE_LOG(LogSpikeSweep, Display,
+				TEXT("%5.1f |   %5.1f  %+5.1f | %5.1f  %5.1f  %5.1f  %+5.1f | %5d"),
+				TrueDeg, A.ProfileDeg, A.ProfileDeg - TrueDeg,
+				A.ModeDeg, A.MedianDeg, A.MeanDeg, A.MedianDeg - TrueDeg, A.SampledNum);
+		}
+		return 0;
+	}
+}
+
 USpikeSweepCommandlet::USpikeSweepCommandlet()
 {
 	IsClient      = false;
@@ -65,6 +153,15 @@ USpikeSweepCommandlet::USpikeSweepCommandlet()
 
 int32 USpikeSweepCommandlet::Main(const FString& Params)
 {
+	if (FParse::Param(*Params, TEXT("selftest")))
+	{
+		return RunRulerCalibration();
+	}
+	if (FParse::Param(*Params, TEXT("profiledump")))
+	{
+		return RunProfileDump(Params);
+	}
+
 	int32 TargetCount = 5000;
 	int32 MaxFrames   = 3000;
 	FParse::Value(*Params, TEXT("particles="), TargetCount);
@@ -133,7 +230,7 @@ int32 USpikeSweepCommandlet::Main(const FString& Params)
 
 	// --- 콘솔 표 ---
 	int32 ValidCount = 0;
-	UE_LOG(LogSpikeSweep, Display, TEXT("  mu    w   ss  it |  최빈   중앙 | 표본 | 상태      | 크리프  | 초"));
+	UE_LOG(LogSpikeSweep, Display, TEXT("  mu    w   ss  it | 프로파일  중앙 | 표본 | 상태      | 크리프  | 초"));
 	for (const FSpikeRunResult& R : Results)
 	{
 		const bool bValid = R.bReleased && R.bSettled;
@@ -141,8 +238,8 @@ int32 USpikeSweepCommandlet::Main(const FString& Params)
 
 		// 유효하지 않으면 각도를 아예 찍지 않는다. 실행 #2에서 89.5°(원기둥 옆면)에 속았다
 		const FString Angles = bValid
-			? FString::Printf(TEXT("%5.1f° %5.1f°"), R.Angle.ModeDeg, R.Angle.MedianDeg)
-			: FString(TEXT("    —      —"));
+			? FString::Printf(TEXT("%7.1f° %5.1f°"), R.Angle.ProfileDeg, R.Angle.MedianDeg)
+			: FString(TEXT("      —      —"));
 
 		const TCHAR* State = !R.bReleased ? TEXT("벽 못 뺌 ") : (!R.bSettled ? TEXT("붕괴 상한") : TEXT("정지     "));
 
@@ -150,7 +247,7 @@ int32 USpikeSweepCommandlet::Main(const FString& Params)
 			TEXT("%5.2f %4.2f %4d %3d | %s | %4d | %s | %6.3f | %5.1f%s"),
 			R.Friction, R.Relaxation, R.Substeps, R.Iterations,
 			*Angles, R.Angle.SampledNum, State, R.CreepRate, R.WallSeconds,
-			(bValid && FMath::Abs(R.Angle.ModeDeg - 34.f) <= 3.f) ? TEXT("  ★통과") : TEXT(""));
+			(bValid && FMath::Abs(R.Angle.ProfileDeg - 34.f) <= 3.f) ? TEXT("  ★통과") : TEXT(""));
 	}
 	UE_LOG(LogSpikeSweep, Display, TEXT("유효 %d / %d"), ValidCount, Results.Num());
 

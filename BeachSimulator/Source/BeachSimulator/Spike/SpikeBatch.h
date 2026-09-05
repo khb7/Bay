@@ -37,6 +37,10 @@ struct FSpikeRunResult
 
 	double WallSeconds = 0.0;
 
+	/** 반경 구간별 최고점 (진단용). 빈 값은 -1. */
+	TArray<float> Profile;
+	float ProfileBinWidth = 0.f;
+
 	/** 프레임별 CSV 본문. 저장은 주 스레드가 한다 (워커에서 파일을 쓰지 않는다). */
 	FString PerFrameCsv;
 };

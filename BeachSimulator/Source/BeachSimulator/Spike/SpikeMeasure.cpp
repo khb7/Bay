@@ -11,12 +11,17 @@ namespace
 	// 표면 입자는 그 절반쯤이 잡힌다 — 그 격차로 표면을 가른다
 	constexpr float NeighborRadiusInDiameters = 2.f;
 
-	// 표면 판정: 이웃 수가 중앙값의 이 비율 미만이면 노출된 것으로 본다
-	constexpr float SurfaceRatio = 0.7f;
+	// 표면 판정 — 이웃 중심이 자기 위치에서 얼마나 밀려나 있는가.
+	//
+	// 이웃 "수"를 이 더미의 중앙값과 비교하던 방식은 얇은 더미에서 기준이 같이 내려가
+	// 아무도 표면으로 안 뽑혔다 (합성 원뿔 15~34°에서 표본 0개).
+	// 반구형으로 이웃이 있으면 중심이 반경의 3/8 만큼 안쪽에 놓인다 — 그 절반을 임계로 쓴다.
+	constexpr float SurfaceOffsetRatio = 0.19f;   // × 탐색 반경
 
-	// 제외 구간 (§3-0 판정 ③) — 둘 다 입자 지름 3개분
-	constexpr float ExcludeBottomInDiameters = 3.f;
-	constexpr float ExcludeTopRadiusInDiameters = 3.f;
+	// 제외 구간 (§3-0 판정 ③) — 더미 크기에 대한 비율. 절대값이면 작은 더미가 통째로 잘린다
+	constexpr float ExcludeBottomFraction = 0.10f;   // 높이의 10% (바닥 마찰)
+	constexpr float ExcludeTopFraction    = 0.15f;   // 반지름의 15% (꼭대기 노이즈)
+	constexpr float ExcludeRimFraction    = 0.97f;   // 최외곽 3% (밑동이 수평으로 눕는 구간)
 
 	FORCEINLINE uint64 GridKey(int32 X, int32 Y, int32 Z)
 	{
@@ -90,30 +95,45 @@ FAngleStats SpikeMeasure::AngleOfRepose(const TArray<FVector3f>& Pos, float Radi
 		NeighborMean[i] = Count > 0 ? Sum / (float)Count : Pos[i];
 	}
 
-	TArray<int32> Sorted = Counts;
-	Sorted.Sort();
-	const int32 MedianCount = Sorted[N / 2];
-	const int32 SurfaceThreshold = FMath::Max(1, FMath::FloorToInt(SurfaceRatio * MedianCount));
+	const float SurfaceOffset = SurfaceOffsetRatio * SearchR;
 
-	// --- 제외 구간 기준 (바닥 3층, 꼭대기 반경 3입자) ---
+	// --- 제외 구간은 더미 자체의 크기에서 뽑는다 ---
 	FVector3f Centroid(0.f);
+	float PileHeight = 0.f;
 	for (const FVector3f& P : Pos)
 	{
 		Centroid += P;
+		PileHeight = FMath::Max(PileHeight, P.Z);
 	}
 	Centroid /= (float)N;
 
-	const float MinZ         = ExcludeBottomInDiameters * D;
-	const float MinAxisDist2 = FMath::Square(ExcludeTopRadiusInDiameters * D);
+	float PileRadius = 0.f;
+	for (const FVector3f& P : Pos)
+	{
+		PileRadius = FMath::Max(PileRadius,
+			FMath::Sqrt(FMath::Square(P.X - Centroid.X) + FMath::Square(P.Y - Centroid.Y)));
+	}
+
+	const float MinZ         = FMath::Max(D, ExcludeBottomFraction * PileHeight);
+	const float MinAxisDist2 = FMath::Square(ExcludeTopFraction * PileRadius);
+	const float MaxAxisDist2 = FMath::Square(ExcludeRimFraction * PileRadius);
 
 	// --- ② 지역 법선 → 경사각 ---
 	TArray<float> Angles;
 	Angles.Reserve(N / 4);
 	for (int32 i = 0; i < N; ++i)
 	{
-		if (Counts[i] >= SurfaceThreshold)
+		if (Counts[i] == 0)
 		{
-			continue;   // 내부 입자
+			continue;   // 외톨이
+		}
+
+		// 이웃 중심에서 바깥을 향하는 벡터가 곧 표면 법선이고, 그 길이가 노출 정도다
+		const FVector3f Dir = Pos[i] - NeighborMean[i];
+		const float Len = Dir.Size();
+		if (Len < SurfaceOffset)
+		{
+			continue;   // 이웃에 둘러싸임 = 내부 입자
 		}
 		++Out.SurfaceNum;
 
@@ -126,13 +146,9 @@ FAngleStats SpikeMeasure::AngleOfRepose(const TArray<FVector3f>& Pos, float Radi
 		{
 			continue;   // 꼭대기 — 단일 입자 노이즈
 		}
-
-		// 이웃 중심에서 바깥을 향하는 벡터가 곧 표면 법선
-		const FVector3f Dir = Pos[i] - NeighborMean[i];
-		const float Len = Dir.Size();
-		if (Len < UE_KINDA_SMALL_NUMBER)
+		if (AxisDist2 > MaxAxisDist2)
 		{
-			continue;
+			continue;   // 최외곽 — 경사가 수평으로 눕는다
 		}
 		const float NZ = FMath::Clamp(Dir.Z / Len, -1.f, 1.f);
 
@@ -172,7 +188,86 @@ FAngleStats SpikeMeasure::AngleOfRepose(const TArray<FVector3f>& Pos, float Radi
 	}
 	Out.ModeDeg = BestBin + 0.5f;
 
+	// --- ③ 표면 높이 프로파일의 기울기 ---
+	//
+	// 반경 구간마다 가장 높은 입자를 뽑으면 그게 옆면이다. 최소제곱으로 직선을 맞춘다.
+	// 개별 법선과 달리 격자 계단이 평균으로 상쇄되어, 완만한 경사에서도 편향이 없다.
+	{
+		const int32 NumBins = FMath::Max(4, FMath::FloorToInt(PileRadius / D));
+		TArray<float> BinTop;
+		BinTop.Init(-1.f, NumBins);
+
+		for (const FVector3f& P : Pos)
+		{
+			const float Rad = FMath::Sqrt(FMath::Square(P.X - Centroid.X) + FMath::Square(P.Y - Centroid.Y));
+			const int32 B = FMath::Clamp(FMath::FloorToInt(Rad / PileRadius * NumBins), 0, NumBins - 1);
+			BinTop[B] = FMath::Max(BinTop[B], P.Z);
+		}
+
+		// 꼭대기·최외곽은 같은 이유로 제외한다
+		const int32 First = FMath::FloorToInt(ExcludeTopFraction * NumBins);
+		const int32 Last  = FMath::CeilToInt(ExcludeRimFraction * NumBins) - 1;
+
+		double SumX = 0, SumY = 0, SumXY = 0, SumXX = 0;
+		int32 Count = 0;
+		for (int32 b = First; b <= Last && b < NumBins; ++b)
+		{
+			if (BinTop[b] < 0.f)
+			{
+				continue;
+			}
+			const double X = (b + 0.5) * PileRadius / NumBins;
+			const double Y = BinTop[b];
+			SumX += X; SumY += Y; SumXY += X * Y; SumXX += X * X;
+			++Count;
+		}
+
+		if (Count >= 3)
+		{
+			const double Denom = Count * SumXX - SumX * SumX;
+			if (FMath::Abs(Denom) > UE_DOUBLE_SMALL_NUMBER)
+			{
+				const double Slope = (Count * SumXY - SumX * SumY) / Denom;
+				Out.ProfileDeg = FMath::RadiansToDegrees((float)FMath::Atan(-Slope));
+			}
+		}
+	}
+
 	return Out;
+}
+
+TArray<float> SpikeMeasure::RadialProfile(const TArray<FVector3f>& Pos, float Radius, float& OutBinWidth)
+{
+	TArray<float> Bins;
+	OutBinWidth = 2.f * Radius;
+	if (Pos.Num() == 0)
+	{
+		return Bins;
+	}
+
+	FVector3f Centroid(0.f);
+	for (const FVector3f& P : Pos)
+	{
+		Centroid += P;
+	}
+	Centroid /= (float)Pos.Num();
+
+	float PileRadius = 0.f;
+	for (const FVector3f& P : Pos)
+	{
+		PileRadius = FMath::Max(PileRadius,
+			FMath::Sqrt(FMath::Square(P.X - Centroid.X) + FMath::Square(P.Y - Centroid.Y)));
+	}
+
+	const int32 NumBins = FMath::Max(1, FMath::CeilToInt(PileRadius / OutBinWidth));
+	Bins.Init(-1.f, NumBins);
+	for (const FVector3f& P : Pos)
+	{
+		const float Rad = FMath::Sqrt(FMath::Square(P.X - Centroid.X) + FMath::Square(P.Y - Centroid.Y));
+		const int32 B = FMath::Clamp(FMath::FloorToInt(Rad / OutBinWidth), 0, NumBins - 1);
+		Bins[B] = FMath::Max(Bins[B], P.Z);
+	}
+	return Bins;
 }
 
 float SpikeMeasure::PeakHeight(const TArray<FVector3f>& Pos)
