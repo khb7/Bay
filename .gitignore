@@ -25,3 +25,9 @@ Build/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# UBT가 생성하는 것 (프로젝트 파일 재생성으로 언제든 복구)
+*.slnx
+*.code-workspace
+.vsconfig
+.ignore
