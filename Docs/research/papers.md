@@ -246,6 +246,11 @@ x = p;
 완전히 되돌림 = 정지 마찰 / 클램프됨 = 운동 마찰. **A2의 [리턴 매핑](terms/return-mapping.md)과 같은 구조.**
 이 마찰만 제대로 넣으면 안식각이 나온다.
 
+> ⚠ **이 클램프는 반복마다 예산이 새로 주어진다.** 반복이 많으면 접선 변위를 결국 전부 지워
+> **반복 횟수가 마찰 계수 역할을 한다** — μ는 도달점이 아니라 도달 시점만 바꾼다.
+> M0에서 실측으로 확인했다(각 22.7→55.8°, 반복 16↑에서 마른 기둥이 수직으로 섬).
+> → 해결은 **C2**. ([m0-log.md](../design/m0-log.md) 실행 #4)
+
 **cohesion / adhesion 파라미터** — 여기가 우리 지렛대.
 ```csharp
 particle.cohesion = cohesionCurve.Evaluate(saturation);
@@ -261,13 +266,45 @@ A1의 결론을 실시간 가격에 사는 방법. 포화도가 계산되어 나
   - Niagara Fluids 예제가 이 구조로 돼 있어 뼈대를 재사용 가능
 - (B) PhysX 5 (오픈소스, PBD 파티클 내장) 직접 연동 — 통합 비용 큼
 
+### C2. Müller, Macklin, Chentanez, Jeschke, Kim (2020)
+**"Detailed Rigid Body Simulation with Extended Position Based Dynamics"** — SCA 2020 / CGF 39(8)
+→ **C1의 마찰을 XPBD 승수로 다시 쓴 판.** M0에서 원문 대조함 (§3.5–3.6)
+
+**접촉마다 승수 두 개를 0으로 초기화한다** — `λn`(법선) · `λt`(접선). 서브스텝마다 새로.
+
+```
+법선      침투 d = (p1−p2)·n,  d ≤ 0 이면 건너뜀
+          Δx = d·n 을 α = 0 과 λn 으로 적용            ← λn 누적
+
+정지마찰  Δp   = (p1−p̄1) − (p2−p̄2)                   p̄ = 서브스텝 적분 전 위치
+          Δp_t = Δp − (Δp·n)n
+          Δx = Δp_t,  단 λt < μs·λn 일 때만            ← ★ 게이트. 전부 아니면 전무
+```
+
+**정지마찰은 위치, 동마찰은 속도.** 위치 풀이가 끝난 뒤 속도 패스를 따로 돈다.
+
+```
+Δv ← −(v_t/|v_t|) · min(h·μd·|f_n|, |v_t|)        f_n = λn / h²   ← 실제 법선력
+```
+
+`min`이 "보정이 속도 자체를 못 넘는다"를 보장 → **무조건 안정**이라고 명시.
+같은 패스에서 반발도 처리하는데, **떨림 방지로 `|v_n| ≤ 2|g|h` 면 `e = 0`**.
+
+| 우리에게 중요한 것 | |
+|---|---|
+| `f_n = λn/h²` | 하중이 마찰에 정직하게 들어온다. C1의 침투량 근사가 못 하던 것 |
+| **반복은 1회** | 표 1이 전부 `iters/substep = 1`. substep 10~40 × 반복 1 |
+| 브로드페이즈 | **프레임당 1회** (AABB를 `k·Δt·v`로 부풀림, `k=2`). 좁은 판정만 서브스텝마다 |
+| 입자에 적용 시 | 회전이 없어 `r1·r2`·관성텐서가 사라짐. `p̄ = PrevPos`, 질량 동일이라 `Δλ = d/2` |
+
 ### C. 보충
 
 | 논문 | 내용 |
 |---|---|
 | Macklin & Müller (2013), "Position Based Fluids", SIGGRAPH | 유체의 밀도 제약. C1의 전제 |
 | Müller et al. (2007), "Position Based Dynamics" | PBD 원조 |
-| **Macklin et al. (2016), "XPBD: Position-Based Simulation of Compliant Constrained Dynamics"** | **실제로 쓸 버전.** 강성이 반복 횟수에 안 휘둘림 |
+| **Macklin et al. (2016), "XPBD: Position-Based Simulation of Compliant Constrained Dynamics"** | **실제로 쓸 버전.** 강성이 반복 횟수에 안 휘둘림. 단 **탄성 제약만** — 마찰은 다루지 않는다 |
+| **Macklin et al. (2019), "Small Steps in Physics Simulation"** | 같은 예산이면 반복보다 서브스텝. **"반복 1회" 관행의 출처** — C1 마찰의 반복 의존이 안 보이게 된 이유이기도 하다 |
 | Gao et al. (2018), "GPU Optimization of Material Point Methods", SIGGRAPH Asia | MPM을 GPU로 |
 | Wang et al. (2020), "A Massively Parallel and Scalable Multi-GPU Material Point Method", SIGGRAPH | 위의 확장 |
 
