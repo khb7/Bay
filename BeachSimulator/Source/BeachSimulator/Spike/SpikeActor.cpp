@@ -75,6 +75,13 @@ void ASpikeActor::ResetSim()
 	Accumulator      = 0.f;
 	SettledTimer     = 0.f;
 	bReportedSettled = false;
+	LastAngle        = FAngleStats();
+
+	if (bWriteCsv)
+	{
+		Recorder.Begin(FString::Printf(TEXT("aor_mu%.2f_ss%d_it%d_n%d"),
+			P.Friction, P.Substeps, P.Iterations, Sim.Num()), Sim);
+	}
 
 	const float Scale = Radius / EngineSphereRadius;
 	Instances->ClearInstances();
@@ -123,18 +130,24 @@ void ASpikeActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	// 고정 스텝. 프레임률이 결과를 바꾸면 재현성이 없다
-	Accumulator += DeltaSeconds;
+	// 측정까지 끝났으면 멈춘다. 결과를 들여다보는 동안 프레임을 잡아먹을 이유가 없다.
+	// 다시 보려면 spike.restart
 	int32 Steps = 0;
-	while (Accumulator >= FixedDt && Steps < MaxStepsPerFrame)
+	if (!bReportedSettled)
 	{
-		Sim.Step(FixedDt);
-		Accumulator -= FixedDt;
-		++Steps;
-	}
-	if (Steps == MaxStepsPerFrame)
-	{
-		Accumulator = 0.f;   // 밀린 시간은 버린다. 따라잡으려다 더 밀리는 것을 막는다
+		// 고정 스텝. 프레임률이 결과를 바꾸면 재현성이 없다
+		Accumulator += DeltaSeconds;
+		while (Accumulator >= FixedDt && Steps < MaxStepsPerFrame)
+		{
+			Sim.Step(FixedDt);
+			Recorder.RecordFrame(Sim);
+			Accumulator -= FixedDt;
+			++Steps;
+		}
+		if (Steps == MaxStepsPerFrame)
+		{
+			Accumulator = 0.f;   // 밀린 시간은 버린다. 따라잡으려다 더 밀리는 것을 막는다
+		}
 	}
 
 	if (Steps > 0)
@@ -156,14 +169,23 @@ void ASpikeActor::Tick(float DeltaSeconds)
 		{
 			bReportedSettled = true;
 
-			float PeakZ = 0.f;
-			for (const FVector3f& P : Sim.GetPositions())
-			{
-				PeakZ = FMath::Max(PeakZ, P.Z);
-			}
+			LastAngle = SpikeMeasure::AngleOfRepose(Sim.GetPositions(), Radius);
+
+			const bool bPass = FMath::Abs(LastAngle.ModeDeg - 34.f) <= 3.f;
 			UE_LOG(LogTemp, Display,
-				TEXT("[Spike] 정지 — frame %d, t=%.2fs, 최고점 %.1fcm, 평균 |v| %.3f cm/s"),
-				Sim.FrameIndex(), Sim.SimTime(), PeakZ, Sim.AvgSpeed());
+				TEXT("[Spike] 정지 — frame %d, t=%.2fs, 최고점 %.1fcm"),
+				Sim.FrameIndex(), Sim.SimTime(), SpikeMeasure::PeakHeight(Sim.GetPositions()));
+			UE_LOG(LogTemp, Display,
+				TEXT("[Spike] 안식각 최빈 %.1f° (중앙 %.1f° 평균 %.1f°) 표면 %d / 표본 %d — %s"),
+				LastAngle.ModeDeg, LastAngle.MedianDeg, LastAngle.MeanDeg,
+				LastAngle.SurfaceNum, LastAngle.SampledNum,
+				bPass ? TEXT("통과 (34±3)") : TEXT("불통과 (34±3)"));
+
+			Recorder.Finish(Sim, LastAngle);
+			if (Recorder.IsFinished())
+			{
+				UE_LOG(LogTemp, Display, TEXT("[Spike] CSV → %s"), *Recorder.GetFilePath());
+			}
 		}
 	}
 
@@ -172,6 +194,15 @@ void ASpikeActor::Tick(float DeltaSeconds)
 		GEngine->AddOnScreenDebugMessage(1, 0.f, FColor::White,
 			FString::Printf(TEXT("입자 %d  frame %d  t=%.2fs  step %.1fms"),
 				Sim.Num(), Sim.FrameIndex(), Sim.SimTime(), Sim.LastStepMs()));
+		if (LastAngle.SampledNum > 0)
+		{
+			const bool bPass = FMath::Abs(LastAngle.ModeDeg - 34.f) <= 3.f;
+			GEngine->AddOnScreenDebugMessage(3, 0.f, bPass ? FColor::Green : FColor::Red,
+				FString::Printf(TEXT("안식각 최빈 %.1f°  중앙 %.1f°  표본 %d  —  %s"),
+					LastAngle.ModeDeg, LastAngle.MedianDeg, LastAngle.SampledNum,
+					bPass ? TEXT("통과") : TEXT("불통과 (34±3)")));
+		}
+
 		GEngine->AddOnScreenDebugMessage(2, 0.f, Sim.WallsActive() ? FColor::Yellow : FColor::Green,
 			FString::Printf(TEXT("%s  |  평균 |v| %.2f  최대 %.2f cm/s  %s"),
 				Sim.WallsActive() ? TEXT("벽 있음") : TEXT("벽 제거됨"),

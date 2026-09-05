@@ -6,6 +6,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "SandSpike.h"
+#include "SpikeMeasure.h"
 #include "SpikeActor.generated.h"
 
 class IConsoleObject;
@@ -57,6 +58,10 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Spike|Setup")
 	float AutoReleaseDelay = 0.5f;
 
+	/** 정지 시점에 Saved/SpikeRuns/ 로 CSV를 남긴다. */
+	UPROPERTY(EditAnywhere, Category = "Spike|Setup")
+	bool bWriteCsv = true;
+
 private:
 	void ResetSim();
 	void SyncInstances();
@@ -64,7 +69,9 @@ private:
 	UPROPERTY(VisibleAnywhere, Category = "Spike")
 	TObjectPtr<UInstancedStaticMeshComponent> Instances;
 
-	FSandSpike Sim;
+	FSandSpike     Sim;
+	FSpikeRecorder Recorder;
+	FAngleStats    LastAngle;
 
 	// 콘솔 명령(spike.release / spike.restart). Exec 함수는 임의 액터로 라우팅되지 않는다
 	TArray<IConsoleObject*> ConsoleCommands;
