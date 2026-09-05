@@ -44,6 +44,10 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Spike|Solver")
 	float Friction = 0.7f;
 
+	/** Jacobi 평균에 곱하는 완화 계수 ω. 1이 순수 평균, 크면 빨리 수렴하고 거칠어진다. */
+	UPROPERTY(EditAnywhere, Category = "Spike|Solver")
+	float Relaxation = 1.0f;
+
 	UPROPERTY(EditAnywhere, Category = "Spike|Setup")
 	int32 TargetCount = 5000;
 

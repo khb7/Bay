@@ -64,6 +64,7 @@ void ASpikeActor::ResetSim()
 	P.Substeps   = FMath::Max(1, Substeps);
 	P.Iterations = FMath::Max(1, Iterations);
 	P.Friction   = Friction;
+	P.Relaxation = Relaxation;
 	P.WGlobal    = 0.f;              // 3-0 은 마른 모래. 점착 비활성
 	P.Seed       = (uint32)Seed;
 
@@ -79,8 +80,8 @@ void ASpikeActor::ResetSim()
 
 	if (bWriteCsv)
 	{
-		Recorder.Begin(FString::Printf(TEXT("aor_mu%.2f_ss%d_it%d_n%d"),
-			P.Friction, P.Substeps, P.Iterations, Sim.Num()), Sim);
+		Recorder.Begin(FString::Printf(TEXT("live_mu%.2f_w%.2f_ss%d_it%d"),
+			P.Friction, P.Relaxation, P.Substeps, P.Iterations), Sim);
 	}
 
 	const float Scale = Radius / EngineSphereRadius;

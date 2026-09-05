@@ -29,6 +29,8 @@ void FSandSpike::Init(const FSandParams& InParams, const FColumnSetup& InColumn)
 	}
 	CellStart.SetNumZeroed(TableSize + 1);
 	SortedIdx.SetNumZeroed(Pos.Num());
+	Delta.SetNumZeroed(Pos.Num());
+	ContactCount.SetNumZeroed(Pos.Num());
 
 	bWallsActive  = true;
 	Frame         = 0;
@@ -133,6 +135,9 @@ void FSandSpike::SolveContacts()
 	const float D  = 2.f * Params.Radius;
 	const float D2 = D * D;
 
+	FMemory::Memzero(Delta.GetData(), Delta.Num() * sizeof(FVector3f));
+	FMemory::Memzero(ContactCount.GetData(), ContactCount.Num() * sizeof(int32));
+
 	int32 Keys[27];
 
 	for (int32 i = 0; i < Pos.Num(); ++i)
@@ -166,8 +171,8 @@ void FSandSpike::SolveContacts()
 					continue;   // 쌍마다 한 번만
 				}
 
-				FVector3f Delta = Pos[i] - Pos[j];
-				const float Dist2 = Delta.SizeSquared();
+				const FVector3f Diff = Pos[i] - Pos[j];
+				const float Dist2 = Diff.SizeSquared();
 				if (Dist2 >= D2 || Dist2 < UE_KINDA_SMALL_NUMBER)
 				{
 					continue;
@@ -175,25 +180,39 @@ void FSandSpike::SolveContacts()
 
 				const float Dist  = FMath::Sqrt(Dist2);
 				const float Depth = D - Dist;               // 침투량 = -C
-				const FVector3f N = Delta / Dist;
+				const FVector3f N = Diff / Dist;
 
 				// 접촉 컴플라이언스 0 (강체). 질량이 같으므로 절반씩 나눈다
-				const FVector3f Corr = N * (0.5f * Depth);
-				Pos[i] += Corr;
-				Pos[j] -= Corr;
+				FVector3f Corr = N * (0.5f * Depth);
 
-				// 마찰 — Macklin 2014. 서브스텝 동안의 접선 상대변위를 μ·Depth 까지만 되돌린다
-				const FVector3f Rel  = (Pos[i] - PrevPos[i]) - (Pos[j] - PrevPos[j]);
-				FVector3f Tang       = Rel - N * FVector3f::DotProduct(Rel, N);
-				const float TLen     = Tang.Size();
+				// 마찰 — Macklin 2014. 서브스텝 동안의 접선 상대변위를 μ·Depth 까지만 되돌린다.
+				// 스냅샷 위치를 보므로 방금 계산한 법선 보정이 여기 섞이지 않는다
+				const FVector3f Rel = (Pos[i] - PrevPos[i]) - (Pos[j] - PrevPos[j]);
+				FVector3f Tang      = Rel - N * FVector3f::DotProduct(Rel, N);
+				const float TLen    = Tang.Size();
 				if (TLen > UE_KINDA_SMALL_NUMBER)
 				{
 					const float Slide = FMath::Min(TLen, Params.Friction * Depth);
-					const FVector3f FCorr = Tang * (0.5f * Slide / TLen);
-					Pos[i] -= FCorr;
-					Pos[j] += FCorr;
+					Corr -= Tang * (0.5f * Slide / TLen);
 				}
+
+				Delta[i] += Corr;
+				Delta[j] -= Corr;
+				++ContactCount[i];
+				++ContactCount[j];
 			}
+		}
+	}
+}
+
+void FSandSpike::ApplyDeltas()
+{
+	const float Omega = Params.Relaxation;
+	for (int32 i = 0; i < Pos.Num(); ++i)
+	{
+		if (ContactCount[i] > 0)
+		{
+			Pos[i] += Delta[i] * (Omega / (float)ContactCount[i]);
 		}
 	}
 }
@@ -282,8 +301,9 @@ void FSandSpike::Step(float Dt)
 		BuildHash();
 		for (int32 it = 0; it < Params.Iterations; ++it)
 		{
-			SolveContacts();
-			SolveWalls();
+			SolveContacts();   // 제안만 쌓는다 (Pos 읽기 전용)
+			ApplyDeltas();     // 입자마다 한 번 적용
+			SolveWalls();      // 경계는 입자당 하나뿐이라 경합이 없다. 바로 투영
 			SolveGround();
 		}
 		UpdateVelocities(SubDt);

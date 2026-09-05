@@ -17,6 +17,7 @@ struct FSandParams
 	int32  Substeps   = 10;      // ★ 스윕 대상
 	int32  Iterations = 2;       // ★ 스윕 대상. substep당 투영 횟수
 	float  Friction   = 0.7f;    // ★ 스윕 대상
+	float  Relaxation = 1.0f;    // ★ 스윕 대상. Jacobi 평균에 곱하는 완화 계수 ω (SOR)
 	float  WGlobal    = 0.f;     // 0 = 마른 모래. 점착 비활성
 	uint32 Seed       = 1337;    // 초기 배치 jitter 전용
 };
@@ -69,7 +70,19 @@ private:
 	int32 CellKey(const FVector3f& P) const;
 
 	void PredictPositions(float SubDt);
+
+	/**
+	 * 접촉 + 마찰. 위치를 직접 고치지 않고 Delta/ContactCount 에 제안만 쌓는다.
+	 *
+	 * 즉시 반영(Gauss-Seidel)이면 한 훑기 안에서 침투량이 갱신되어
+	 * "법선으로 밀침 → 마찰 예산 변함 → 접선으로 밀침 → 새 겹침"이 되먹임 고리를 만든다.
+	 * 실행 #3에서 이 고리가 μ에 비례해 에너지를 넣는 것이 확인됐다 (m0-log.md).
+	 */
 	void SolveContacts();
+
+	/** 쌓인 제안을 접촉 수로 나눠 입자마다 한 번만 적용. 접촉이 몇 개든 이동은 한 번이다. */
+	void ApplyDeltas();
+
 	void SolveWalls();
 	void SolveGround();
 	void UpdateVelocities(float SubDt);
@@ -81,6 +94,10 @@ private:
 	TArray<FVector3f> Pos;      // 현재 위치
 	TArray<FVector3f> Vel;
 	TArray<FVector3f> PrevPos;  // 서브스텝 시작 위치. 마찰이 이 차이를 본다
+
+	// Jacobi 누적 버퍼. 훑는 동안 Pos 는 읽기 전용이라 모든 접촉이 같은 스냅샷을 본다
+	TArray<FVector3f> Delta;
+	TArray<int32>     ContactCount;
 
 	// 정렬 기반 공간 해시 — 균일 격자는 빈 공간이 크고, Niagara Neighbor Grid3D는
 	// 셀당 상한 초과를 조용히 자른다 (decision-log.md). 여기선 계수 정렬로 오버플로가 없다.

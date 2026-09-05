@@ -7,16 +7,17 @@ namespace
 }
 
 FSpikeRunResult SpikeBatch::RunOne(const FSandParams& Params, const FColumnSetup& Column,
-                                   int32 MaxFrames, bool bCapturePerFrame)
+                                   int32 MaxFrames, bool bCapturePerFrame, int32 ReleaseDelayFrames)
 {
 	const double T0 = FPlatformTime::Seconds();
 
 	FSpikeRunResult R;
 	R.Friction   = Params.Friction;
+	R.Relaxation = Params.Relaxation;
 	R.Substeps   = Params.Substeps;
 	R.Iterations = Params.Iterations;
-	R.RunName    = FString::Printf(TEXT("aor_mu%.2f_ss%d_it%d"),
-		Params.Friction, Params.Substeps, Params.Iterations);
+	R.RunName    = FString::Printf(TEXT("aor_mu%.2f_w%.2f_ss%d_it%d"),
+		Params.Friction, Params.Relaxation, Params.Substeps, Params.Iterations);
 
 	FSandSpike Sim;
 	Sim.Init(Params, Column);
@@ -28,15 +29,19 @@ FSpikeRunResult SpikeBatch::RunOne(const FSandParams& Params, const FColumnSetup
 		Rec.Begin(R.RunName, Sim);
 	}
 
-	// --- 1단계: 벽 안에서 다지기. 정지하면 벽을 뺀다 ---
+	// --- 1단계: 벽 안에서 다지기. 정지하고 지연이 지나면 벽을 뺀다 ---
+	int32 HeldFrames = 0;
 	while (Sim.WallsActive() && Sim.FrameIndex() < MaxFrames)
 	{
 		Sim.Step(BatchDt);
 		Rec.RecordFrame(Sim);
-		if (Sim.IsSettled())
+
+		HeldFrames = Sim.IsSettled() ? HeldFrames + 1 : 0;
+		if (HeldFrames >= ReleaseDelayFrames)
 		{
 			Sim.ReleaseWalls();
 			R.ReleaseFrame = Sim.FrameIndex();
+			R.bReleased    = true;
 		}
 	}
 
@@ -82,18 +87,19 @@ FSpikeRunResult SpikeBatch::RunOne(const FSandParams& Params, const FColumnSetup
 
 FString SpikeBatch::SummaryHeader()
 {
-	return TEXT("mu,substeps,iterations,particles,")
+	return TEXT("mu,omega,substeps,iterations,particles,")
 	       TEXT("angleMode,angleMedian,angleMean,surface,sampled,")
-	       TEXT("releaseFrame,settleFrame,settleTime,settled,")
+	       TEXT("releaseFrame,released,settleFrame,settleTime,settled,valid,")
 	       TEXT("peakHeight,creepCmPerSec,avgSpeed,maxSpeed,wallSeconds");
 }
 
 FString SpikeBatch::SummaryRow(const FSpikeRunResult& R)
 {
 	return FString::Printf(
-		TEXT("%.2f,%d,%d,%d,%.1f,%.1f,%.1f,%d,%d,%d,%d,%.2f,%d,%.2f,%.3f,%.3f,%.3f,%.1f"),
-		R.Friction, R.Substeps, R.Iterations, R.Particles,
+		TEXT("%.2f,%.2f,%d,%d,%d,%.1f,%.1f,%.1f,%d,%d,%d,%d,%d,%.2f,%d,%d,%.2f,%.3f,%.3f,%.3f,%.1f"),
+		R.Friction, R.Relaxation, R.Substeps, R.Iterations, R.Particles,
 		R.Angle.ModeDeg, R.Angle.MedianDeg, R.Angle.MeanDeg, R.Angle.SurfaceNum, R.Angle.SampledNum,
-		R.ReleaseFrame, R.SettleFrame, R.SettleTime, R.bSettled ? 1 : 0,
+		R.ReleaseFrame, R.bReleased ? 1 : 0, R.SettleFrame, R.SettleTime, R.bSettled ? 1 : 0,
+		(R.bReleased && R.bSettled) ? 1 : 0,
 		R.PeakHeight, R.CreepRate, R.AvgSpeed, R.MaxSpeed, R.WallSeconds);
 }
