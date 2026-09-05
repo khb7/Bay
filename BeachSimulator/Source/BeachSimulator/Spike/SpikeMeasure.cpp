@@ -261,6 +261,12 @@ void FSpikeRecorder::Finish(const FSandSpike& Sim, const FAngleStats& Angle)
 	}
 	bFinished = true;
 
+	FFileHelper::SaveStringToFile(BuildText(Sim, Angle), *FilePath,
+		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+}
+
+FString FSpikeRecorder::BuildText(const FSandSpike& Sim, const FAngleStats& Angle) const
+{
 	const FSandParams& P = Sim.GetParams();
 
 	FString Text;
@@ -289,5 +295,5 @@ void FSpikeRecorder::Finish(const FSandSpike& Sim, const FAngleStats& Angle)
 		Text += Row + TEXT("\n");
 	}
 
-	FFileHelper::SaveStringToFile(Text, *FilePath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	return Text;
 }

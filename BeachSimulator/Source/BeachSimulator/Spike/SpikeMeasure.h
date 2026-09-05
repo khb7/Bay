@@ -49,6 +49,9 @@ public:
 	/** 정지 시점. 각도 측정까지 붙여 파일로 내보낸다. */
 	void Finish(const FSandSpike& Sim, const FAngleStats& Angle);
 
+	/** 파일로 쓰지 않고 내용만. 배치는 워커 스레드에서 돌므로 저장은 주 스레드가 한다. */
+	FString BuildText(const FSandSpike& Sim, const FAngleStats& Angle) const;
+
 	bool IsOpen()     const { return bOpen; }
 	bool IsFinished() const { return bFinished; }
 	const FString& GetFilePath() const { return FilePath; }
