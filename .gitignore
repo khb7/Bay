@@ -1,0 +1,27 @@
+# --- Unreal Engine ---
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+
+# 마법사·빌드가 생성하는 것 (커밋 대상 아님)
+*.sln
+*.suo
+*.sdf
+*.opensdf
+*.opendb
+*.VC.db
+*.VC.opendb
+*.xcodeproj/
+*.xcworkspace/
+
+# --- IDE ---
+.vs/
+.vscode/
+.idea/
+
+# --- OS ---
+Thumbs.db
+Desktop.ini
+.DS_Store
