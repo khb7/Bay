@@ -105,3 +105,267 @@ FString SpikeBatch::SummaryRow(const FSpikeRunResult& R)
 		(R.bReleased && R.bSettled) ? 1 : 0,
 		R.PeakHeight, R.CreepRate, R.AvgSpeed, R.MaxSpeed, R.WallSeconds);
 }
+
+
+// ---------------------------------------------------------------------------
+
+FTiltRunResult SpikeBatch::RunTilt(const FSandParams& Params, const FTiltSetup& Setup,
+                                   float RateDegPerSec, float MaxDeg)
+{
+	const double T0 = FPlatformTime::Seconds();
+
+	FTiltRunResult R;
+	R.Friction      = Params.Friction;
+	R.RateDegPerSec = RateDegPerSec;
+
+	FSandSpike Sim;
+	Sim.InitTiltBox(Params, Setup);
+	R.Particles = Sim.Num();
+
+	// --- 1단계: 수평에서 다진다 ---
+	const int32 PackCap = 1800;
+	while (!Sim.IsSettled() && Sim.FrameIndex() < PackCap)
+	{
+		Sim.Step(BatchDt);
+	}
+	R.PackFrames = (float)Sim.FrameIndex();
+
+	// --- 2단계: 서서히 기울인다 ---
+	// 개시 판정은 정지 판정과 같은 임계를 쓴다(§2-2). 정지의 반대가 곧 개시다.
+	// 단 사면 방향이 열려 있어 가장자리는 항상 조금씩 흘러내리므로 중앙 구역만 본다
+	// 판정은 속도가 아니라 실제 이동 거리로 한다.
+	// 기울이는 동안엔 미세 재배치가 늘 있어서 속도 임계는 그걸 사태로 오인한다
+	// (같은 이유로 기울기 속도 1°/s 와 4°/s 가 11° 차이났다).
+	const float CenterHalfX = Sim.GetBoxHalf().X * 0.6f;
+	const TArray<float>& W = Sim.GetInvMass();
+
+	TArray<int32> Watch;
+	for (int32 i = 0; i < W.Num(); ++i)
+	{
+		if (W[i] > 0.f && FMath::Abs(Sim.GetPositions()[i].X) < CenterHalfX)
+		{
+			Watch.Add(i);
+		}
+	}
+	R.FreeCount = Watch.Num();
+
+	TArray<FVector3f> Start;
+	for (int32 i : Watch)
+	{
+		Start.Add(Sim.GetPositions()[i]);
+	}
+
+	const float Trigger = 0.25f * Params.Radius;
+
+	float Deg = 0.f;
+	while (Deg < MaxDeg)
+	{
+		Deg += RateDegPerSec * BatchDt;
+		Sim.SetTiltDegrees(Deg);
+		Sim.Step(BatchDt);
+
+		// 사면 방향 평균 이동. 한 알이 튀는 것 말고 무리가 움직이는 것을 본다
+		double SumSlide = 0.0;
+		for (int32 k = 0; k < Watch.Num(); ++k)
+		{
+			SumSlide += Sim.GetPositions()[Watch[k]].X - Start[k].X;
+		}
+		const float MeanSlide = Watch.Num() > 0 ? (float)(SumSlide / Watch.Num()) : 0.f;
+
+		if (MeanSlide > Trigger)
+		{
+			R.bOnset   = true;
+			R.OnsetDeg = Deg;
+			break;
+		}
+	}
+
+	R.WallSeconds = FPlatformTime::Seconds() - T0;
+	return R;
+}
+
+FString SpikeBatch::TiltHeader()
+{
+	return TEXT("mu,atanMu,rateDegPerSec,particles,onset,onsetDeg,error,packFrames,wallSeconds");
+}
+
+FString SpikeBatch::TiltRow(const FTiltRunResult& R)
+{
+	const float AtanMu = FMath::RadiansToDegrees(FMath::Atan(R.Friction));
+	return FString::Printf(TEXT("%.2f,%.1f,%.2f,%d,%d,%.2f,%+.2f,%.0f,%.1f"),
+		R.Friction, AtanMu, R.RateDegPerSec, R.Particles,
+		R.bOnset ? 1 : 0, R.OnsetDeg, R.OnsetDeg - AtanMu, R.PackFrames, R.WallSeconds);
+}
+
+
+FTiltRunResult SpikeBatch::RunTiltSingle(const FSandParams& Params, const FTiltSetup& Setup,
+                                         float RateDegPerSec, float MaxDeg)
+{
+	const double T0 = FPlatformTime::Seconds();
+
+	FTiltRunResult R;
+	R.Friction      = Params.Friction;
+	R.RateDegPerSec = RateDegPerSec;
+
+	FSandSpike Sim;
+	Sim.InitTiltBox(Params, Setup);
+	R.Particles = Sim.Num();
+
+	// 얹힌 입자가 자리를 잡을 때까지
+	for (int32 f = 0; f < 120; ++f)
+	{
+		Sim.Step(BatchDt);
+	}
+	R.PackFrames = (float)Sim.FrameIndex();
+
+	// 미끄러짐 판정 — 자유 입자의 사면 방향 누적 변위가 반경의 1/4을 넘는 순간.
+	// 속도 임계는 기울이는 동안의 미세 재배치에 걸리므로, 실제로 이동했는가를 본다
+	const TArray<float>& W = Sim.GetInvMass();
+	TArray<int32> Free;
+	for (int32 i = 0; i < W.Num(); ++i)
+	{
+		if (W[i] > 0.f) { Free.Add(i); }
+	}
+	R.FreeCount = Free.Num();
+
+	TArray<FVector3f> Start;
+	for (int32 i : Free)
+	{
+		Start.Add(Sim.GetPositions()[i]);
+	}
+
+	const float Trigger = 0.25f * Params.Radius;
+	float Deg = 0.f;
+	while (Deg < MaxDeg)
+	{
+		Deg += RateDegPerSec * BatchDt;
+		Sim.SetTiltDegrees(Deg);
+		Sim.Step(BatchDt);
+
+		float MaxSlide = 0.f;
+		for (int32 k = 0; k < Free.Num(); ++k)
+		{
+			MaxSlide = FMath::Max(MaxSlide, Sim.GetPositions()[Free[k]].X - Start[k].X);
+		}
+		if (MaxSlide > Trigger)
+		{
+			R.bOnset   = true;
+			R.OnsetDeg = Deg;
+			break;
+		}
+	}
+
+	R.WallSeconds = FPlatformTime::Seconds() - T0;
+	return R;
+}
+
+
+// ---------------------------------------------------------------------------
+
+namespace
+{
+	constexpr int32 TiltRampFrames = 60;    // 목표 각도까지 1초에 걸쳐 (관성 전이는 여기서 끝낸다)
+	constexpr int32 TiltHoldFrames = 240;   // 붙잡고 4초 관찰
+	constexpr int32 TiltBisectSteps = 8;    // 70° / 2^8 ≈ 0.3° 해상도
+}
+
+FTiltRunResult SpikeBatch::RunTiltStatic(const FSandParams& Params, const FTiltSetup& Setup, float MaxDeg)
+{
+	const double T0 = FPlatformTime::Seconds();
+
+	FTiltRunResult R;
+	R.Friction = Params.Friction;
+
+	FSandSpike Sim;
+	Sim.InitTiltBox(Params, Setup);
+	R.Particles = Sim.Num();
+
+	// --- 수평에서 다진다. 이 상태를 모든 시험이 공유한다 ---
+	while (!Sim.IsSettled() && Sim.FrameIndex() < 1800)
+	{
+		Sim.Step(BatchDt);
+	}
+	R.PackFrames = (float)Sim.FrameIndex();
+
+	FSandState Packed;
+	Sim.SaveState(Packed);
+
+	// 관찰 대상 — 중앙 구역의 자유 입자
+	const float CenterHalfX = Sim.GetBoxHalf().X * 0.6f;
+	const TArray<float>& W = Sim.GetInvMass();
+	TArray<int32> Watch;
+	for (int32 i = 0; i < W.Num(); ++i)
+	{
+		if (W[i] > 0.f && FMath::Abs(Packed.Pos[i].X) < CenterHalfX)
+		{
+			Watch.Add(i);
+		}
+	}
+	R.FreeCount = Watch.Num();
+
+	// 붙잡은 동안 사면 방향으로 반경의 절반 넘게 흐르면 무너진 것
+	const float Trigger = 0.5f * Params.Radius;
+
+	auto IsStableAt = [&](float Deg) -> bool
+	{
+		Sim.RestoreState(Packed);
+
+		for (int32 f = 0; f < TiltRampFrames; ++f)
+		{
+			Sim.SetTiltDegrees(Deg * (f + 1) / (float)TiltRampFrames);
+			Sim.Step(BatchDt);
+		}
+
+		TArray<float> StartX;
+		StartX.Reserve(Watch.Num());
+		for (int32 i : Watch)
+		{
+			StartX.Add(Sim.GetPositions()[i].X);
+		}
+
+		for (int32 f = 0; f < TiltHoldFrames; ++f)
+		{
+			Sim.Step(BatchDt);
+
+			double SumSlide = 0.0;
+			for (int32 k = 0; k < Watch.Num(); ++k)
+			{
+				SumSlide += Sim.GetPositions()[Watch[k]].X - StartX[k];
+			}
+			if (Watch.Num() > 0 && SumSlide / Watch.Num() > Trigger)
+			{
+				return false;
+			}
+		}
+		return true;
+	};
+
+	// --- 이분 탐색 ---
+	float Lo = 0.f;          // 버티는 것이 확인된 각
+	float Hi = MaxDeg;       // 무너지는 것이 확인된 각
+	if (IsStableAt(MaxDeg))
+	{
+		R.bOnset   = false;
+		R.OnsetDeg = MaxDeg;
+		R.WallSeconds = FPlatformTime::Seconds() - T0;
+		return R;
+	}
+
+	for (int32 k = 0; k < TiltBisectSteps; ++k)
+	{
+		const float Mid = 0.5f * (Lo + Hi);
+		if (IsStableAt(Mid))
+		{
+			Lo = Mid;
+		}
+		else
+		{
+			Hi = Mid;
+		}
+	}
+
+	R.bOnset   = true;
+	R.OnsetDeg = 0.5f * (Lo + Hi);
+	R.WallSeconds = FPlatformTime::Seconds() - T0;
+	return R;
+}

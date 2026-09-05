@@ -21,8 +21,49 @@ void FSandSpike::Init(const FSandParams& InParams, const FColumnSetup& InColumn)
 	Params = InParams;
 	Column = InColumn;
 
+	bBoxScene = false;
 	SpawnColumn();
+	InvMass.Init(1.f, Pos.Num());
+	AllocateBuffers();
+}
 
+void FSandSpike::InitTiltBox(const FSandParams& InParams, const FTiltSetup& InTilt)
+{
+	Params = InParams;
+	Tilt   = InTilt;
+
+	bBoxScene = true;
+	SpawnTiltBox();
+	AllocateBuffers();
+}
+
+void FSandSpike::SaveState(FSandState& Out) const
+{
+	Out.Pos     = Pos;
+	Out.Vel     = Vel;
+	Out.TiltDeg = TiltDeg;
+}
+
+void FSandSpike::RestoreState(const FSandState& In)
+{
+	Pos     = In.Pos;
+	Vel     = In.Vel;
+	PrevPos = In.Pos;
+	SetTiltDegrees(In.TiltDeg);
+	SettledFrames = 0;
+	LastMaxSpeed  = 0.f;
+}
+
+void FSandSpike::SetTiltDegrees(float Deg)
+{
+	TiltDeg = Deg;
+	const float R = FMath::DegreesToRadians(Deg);
+	// 상자를 돌리는 대신 중력을 돌린다. 사면 아래 방향은 +X
+	GravityDir = FVector3f(FMath::Sin(R), 0.f, -FMath::Cos(R));
+}
+
+void FSandSpike::AllocateBuffers()
+{
 	// 입자 수의 2배 이상인 2의 거듭제곱. 충돌은 거리 검사가 걸러내므로 정확도가 아니라 비용 문제다
 	TableSize = 1;
 	while (TableSize < Pos.Num() * 2)
@@ -33,6 +74,7 @@ void FSandSpike::Init(const FSandParams& InParams, const FColumnSetup& InColumn)
 	SortedIdx.SetNumZeroed(Pos.Num());
 	Delta.SetNumZeroed(Pos.Num());
 	DeltaCount.SetNumZeroed(Pos.Num());
+	DeltaScale.SetNumZeroed(Pos.Num());
 	GroundLambdaN.SetNumZeroed(Pos.Num());
 	GroundLambdaT.SetNumZeroed(Pos.Num());
 
@@ -41,6 +83,46 @@ void FSandSpike::Init(const FSandParams& InParams, const FColumnSetup& InColumn)
 	Time          = 0.f;
 	SettledFrames = 0;
 	LastMaxSpeed  = 0.f;
+	TiltDeg       = 0.f;
+	GravityDir    = FVector3f(0.f, 0.f, -1.f);
+}
+
+void FSandSpike::SpawnTiltBox()
+{
+	const float R2 = Params.Radius;
+	const float S  = 2.f * R2;
+
+	// 층수를 고정하고 한 변을 역산한다
+	const int32 PerLayer = FMath::Max(1, Tilt.TargetCount / FMath::Max(1, Tilt.Layers));
+	const int32 Side     = FMath::Max(2, FMath::RoundToInt(FMath::Sqrt((float)PerLayer)));
+
+	BoxHalf = FVector3f(Side * S * 0.5f, Side * S * 0.5f, 0.f);
+
+	FRandomStream Rng(Params.Seed);
+	const float Jitter = 0.05f * R2;
+
+	// 고정층(거친 바닥)을 먼저 넣어 인덱스 앞쪽에 모은다
+	Pos.Reset();
+	InvMass.Reset();
+	for (int32 iz = 0; iz < Tilt.Layers; ++iz)
+	{
+		const bool bFixed = iz < Tilt.FixedLayers;
+		for (int32 iy = 0; iy < Side; ++iy)
+		for (int32 ix = 0; ix < Side; ++ix)
+		{
+			const float X = (ix - (Side - 1) * 0.5f) * S;
+			const float Y = (iy - (Side - 1) * 0.5f) * S;
+			const float J = bFixed ? 0.f : Jitter;   // 바닥은 흔들지 않는다
+			Pos.Add(FVector3f(
+				X + Rng.FRandRange(-J, J),
+				Y + Rng.FRandRange(-J, J),
+				R2 + iz * S + Rng.FRandRange(-J, J)));
+			InvMass.Add(bFixed ? 0.f : 1.f);
+		}
+	}
+
+	Vel.SetNumZeroed(Pos.Num());
+	PrevPos = Pos;
 }
 
 void FSandSpike::SpawnColumn()
@@ -181,12 +263,16 @@ void FSandSpike::BuildContacts(float Dt)
 
 void FSandSpike::PredictPositions(float SubDt)
 {
-	const FVector3f G(0.f, 0.f, Params.Gravity);
+	const FVector3f G = GravityDir * FMath::Abs(Params.Gravity);
 	for (int32 i = 0; i < Pos.Num(); ++i)
 	{
 		PrevPos[i] = Pos[i];
-		Vel[i]    += G * SubDt;
-		Pos[i]    += Vel[i] * SubDt;
+		if (InvMass[i] <= 0.f)
+		{
+			continue;   // 고정 입자
+		}
+		Vel[i] += G * SubDt;
+		Pos[i] += Vel[i] * SubDt;
 	}
 }
 
@@ -213,30 +299,187 @@ void FSandSpike::SolveContacts()
 		const float Depth = D - Dist;          // 논문의 d
 		const FVector3f N = Diff / Dist;       // 항상 최신 방향을 쓴다 (논문 §3.4)
 
-		// 법선 — α = 0, w_i = w_j = 1 이므로 Δλ = d/2, 보정은 절반씩
-		const float DLambdaN = 0.5f * Depth;
-		C.LambdaN += DLambdaN;
+		// 법선 — α = 0 이므로 Δλ = d / (w_i + w_j). 보정은 각자의 w 비율로
+		const float WSum = InvMass[i] + InvMass[j];
+		if (WSum <= 0.f)
+		{
+			continue;   // 둘 다 고정
+		}
+		const float DLambdaN = Depth / WSum;
+		C.PendingN = DLambdaN;
+		C.PendingT = 0.f;
 
 		FVector3f Corr = N * DLambdaN;
 
 		// 정지마찰 — 접선 상대변위를 통째로 지운다. 단 λt < μs·λn 일 때만 (논문 §3.5)
-		if (C.LambdaT < Params.Friction * C.LambdaN)
+		// 게이트는 이번 서브스텝의 법선 기여까지 포함해서 본다.
+		// 빼면 프레임 첫 서브스텝에서 λn = 0 이라 마찰이 아예 안 걸린다
+		if (Params.bPositionFriction && C.LambdaT < Params.Friction * (C.LambdaN + DLambdaN))
 		{
 			const FVector3f Dp = (Pos[i] - PrevPos[i]) - (Pos[j] - PrevPos[j]);
 			const FVector3f Dpt = Dp - N * FVector3f::DotProduct(Dp, N);
 			const float TLen = Dpt.Size();
 			if (TLen > UE_KINDA_SMALL_NUMBER)
 			{
-				const float DLambdaT = 0.5f * TLen;
-				C.LambdaT += DLambdaT;
-				Corr -= Dpt * 0.5f;
+				C.PendingT = TLen / WSum;
+				Corr -= Dpt / WSum;
 			}
 		}
 
-		Delta[i] += Corr;
-		Delta[j] -= Corr;
-		++DeltaCount[i];
-		++DeltaCount[j];
+		if (Params.bGaussSeidel)
+		{
+			// 즉시 적용 — 나누지 않으므로 장부가 그대로 맞는다
+			Pos[i] += Corr * InvMass[i];
+			Pos[j] -= Corr * InvMass[j];
+			C.LambdaN += C.PendingN;
+			C.LambdaT += C.PendingT;
+			C.PendingN = 0.f;
+			C.PendingT = 0.f;
+		}
+		else
+		{
+			Delta[i] += Corr * InvMass[i];
+			Delta[j] -= Corr * InvMass[j];
+			++DeltaCount[i];
+			++DeltaCount[j];
+		}
+	}
+}
+
+void FSandSpike::SolveContactsSP(float StepDt, int32 Iter, int32 MaxIter)
+{
+	// Frâncu 2014 Algorithm 1.
+	//   r  = kv·nu + (kc/h)·delta       속도 오차와 위치 오차를 섞은 잔차
+	//   dLambda = -(omega/d)·r - beta·dLambda^{l-1}      (38) 뒤 항이 heavy-ball 모멘텀
+	//   v += W J^T dLambda,  x += h·W J^T dLambda        ★ 같은 임펄스로 둘을 함께
+	const float D    = 2.f * Params.Radius;
+	const float InvH = 1.f / StepDt;
+
+	const float Beta = (Params.MomentumA > 0.f && MaxIter > 1)
+		? FMath::Min(Params.MomentumA * FMath::Pow((float)Iter / (float)MaxIter, Params.MomentumB), 1.f)
+		: 0.f;
+
+	for (FSandContact& C : Contacts)
+	{
+		const int32 i = C.I;
+		const int32 j = C.J;
+		const float Wi = InvMass[i];
+		const float Wj = InvMass[j];
+		const float WSum = Wi + Wj;
+		if (WSum <= 0.f)
+		{
+			continue;
+		}
+
+		const FVector3f Diff = Pos[i] - Pos[j];
+		const float Dist = Diff.Size();
+		if (Dist < UE_KINDA_SMALL_NUMBER)
+		{
+			continue;
+		}
+		const FVector3f N = Diff / Dist;
+		const float Gap = Dist - D;            // 음수면 침투
+
+		// 단방향 제약 — 떨어져 있고 임펄스도 없으면 놓아준다
+		if (Gap > 0.f && C.LambdaN <= 0.f)
+		{
+			C.LambdaN = 0.f;
+			C.LambdaTan = FVector3f::ZeroVector;
+			continue;
+		}
+
+		const FVector3f RelV = Vel[i] - Vel[j];
+
+		// --- 법선 ---
+		const float NuN  = FVector3f::DotProduct(RelV, N);
+		const float ResN = Params.Kv * NuN + (Params.Kc * InvH) * Gap;
+		// (38) 의 −β·Δλ 에서 Δλ 는 직전 반복의 "실제 변화량"이고, 논문 표기의 부호가
+		// 우리 것과 반대다. 그대로 빼면 직전 진행을 거슬러 수렴이 나빠진다(실측 a=2에서 13°→2.9°).
+		// heavy-ball 이 되려면 같은 방향으로 더해야 한다
+		float DLambdaN = -(Params.SorOmega / WSum) * ResN + Beta * C.PrevDLambdaN;
+
+		const float OldN = C.LambdaN;
+		C.LambdaN = FMath::Max(0.f, C.LambdaN + DLambdaN);   // 누적 후 클램프 (Catto 2005)
+		DLambdaN = C.LambdaN - OldN;
+		C.PrevDLambdaN = DLambdaN;
+
+		// --- 접선 ---
+		// 위치 오차는 스텝 시작 이후의 접선 상대변위. 그것이 정지마찰의 실체다
+		const FVector3f Drift  = (Pos[i] - PrevPos[i]) - (Pos[j] - PrevPos[j]);
+		const FVector3f DriftT = Drift - N * FVector3f::DotProduct(Drift, N);
+		const FVector3f NuT    = RelV - N * FVector3f::DotProduct(RelV, N);
+
+		const FVector3f ResT = NuT * Params.Kv + DriftT * (Params.Kc * InvH);
+		FVector3f DLambdaTan = ResT * (-(Params.SorOmega / WSum)) + C.PrevDLambdaTan * Beta;
+
+		const FVector3f OldTan = C.LambdaTan;
+		FVector3f NewTan = C.LambdaTan + DLambdaTan;
+
+		// 원뿔 투영 — |lambda_t| <= mu·lambda_n
+		const float MaxTan = Params.Friction * C.LambdaN;
+		const float TanLen = NewTan.Size();
+		if (TanLen > MaxTan)
+		{
+			NewTan = (TanLen > UE_KINDA_SMALL_NUMBER) ? NewTan * (MaxTan / TanLen) : FVector3f::ZeroVector;
+		}
+		C.LambdaTan = NewTan;
+		DLambdaTan  = NewTan - OldTan;
+		C.PrevDLambdaTan = DLambdaTan;
+
+		// --- 적용: v 와 x 를 같은 임펄스로 ---
+		const FVector3f Impulse = N * DLambdaN + DLambdaTan;
+		Vel[i] += Impulse * Wi;
+		Vel[j] -= Impulse * Wj;
+		Pos[i] += Impulse * (Wi * StepDt);
+		Pos[j] -= Impulse * (Wj * StepDt);
+	}
+}
+
+void FSandSpike::SolveGroundSP(float StepDt)
+{
+	// 지면은 무한 질량. w_world = 0 이므로 d = w_i
+	const float R2   = Params.Radius;
+	const float InvH = 1.f / StepDt;
+	const FVector3f N(0.f, 0.f, 1.f);
+
+	for (int32 i = 0; i < Pos.Num(); ++i)
+	{
+		const float Wi = InvMass[i];
+		if (Wi <= 0.f)
+		{
+			continue;
+		}
+		const float Gap = Pos[i].Z - R2;
+		if (Gap > 0.f && GroundLambdaN[i] <= 0.f)
+		{
+			GroundLambdaN[i] = 0.f;
+			continue;
+		}
+
+		const float ResN = Params.Kv * Vel[i].Z + (Params.Kc * InvH) * Gap;
+		float DLambdaN = -(Params.SorOmega / Wi) * ResN;
+
+		const float OldN = GroundLambdaN[i];
+		GroundLambdaN[i] = FMath::Max(0.f, GroundLambdaN[i] + DLambdaN);
+		DLambdaN = GroundLambdaN[i] - OldN;
+
+		FVector3f DriftT = Pos[i] - PrevPos[i];
+		DriftT.Z = 0.f;
+		FVector3f NuT = Vel[i];
+		NuT.Z = 0.f;
+
+		FVector3f DLambdaTan = (NuT * Params.Kv + DriftT * (Params.Kc * InvH)) * (-(Params.SorOmega / Wi));
+
+		const float MaxTan = Params.Friction * GroundLambdaN[i];
+		const float L = DLambdaTan.Size();
+		if (L > MaxTan)
+		{
+			DLambdaTan = (L > UE_KINDA_SMALL_NUMBER) ? DLambdaTan * (MaxTan / L) : FVector3f::ZeroVector;
+		}
+
+		const FVector3f Impulse = N * DLambdaN + DLambdaTan;
+		Vel[i] += Impulse * Wi;
+		Pos[i] += Impulse * (Wi * StepDt);
 	}
 }
 
@@ -245,10 +488,33 @@ void FSandSpike::ApplyDeltas()
 	const float Omega = Params.Relaxation;
 	for (int32 i = 0; i < Pos.Num(); ++i)
 	{
-		if (DeltaCount[i] > 0)
+		DeltaScale[i] = 0.f;
+		if (DeltaCount[i] > 0 && InvMass[i] > 0.f)
 		{
-			Pos[i] += Delta[i] * (Omega / (float)DeltaCount[i]);
+			DeltaScale[i] = Omega / (float)DeltaCount[i];
+			Pos[i] += Delta[i] * DeltaScale[i];
 		}
+	}
+}
+
+void FSandSpike::CommitLambdas()
+{
+	// 실제로 적용된 비율만큼만 장부에 올린다.
+	// 고정 입자는 안 움직이므로 자유 입자 쪽 비율이 그대로 유효 적용률이 된다
+	for (FSandContact& C : Contacts)
+	{
+		const float Wi = InvMass[C.I];
+		const float Wj = InvMass[C.J];
+		const float WSum = Wi + Wj;
+		if (WSum <= 0.f)
+		{
+			continue;
+		}
+		const float Applied = (Wi * DeltaScale[C.I] + Wj * DeltaScale[C.J]) / WSum;
+		C.LambdaN += C.PendingN * Applied;
+		C.LambdaT += C.PendingT * Applied;
+		C.PendingN = 0.f;
+		C.PendingT = 0.f;
 	}
 }
 
@@ -256,6 +522,26 @@ void FSandSpike::SolveWalls()
 {
 	if (!bWallsActive)
 	{
+		return;
+	}
+
+	if (bBoxScene)
+	{
+		// 경사판 = 수로. 양옆(Y)만 막고 사면 방향(X)과 위는 열어둔다
+		const float LX = BoxHalf.X - Params.Radius;
+		const float LY = BoxHalf.Y - Params.Radius;
+		for (int32 i = 0; i < Pos.Num(); ++i)
+		{
+			if (InvMass[i] <= 0.f)
+			{
+				continue;
+			}
+			if (!Tilt.bOpenDownhill)
+			{
+				Pos[i].X = FMath::Clamp(Pos[i].X, -LX, LX);
+			}
+			Pos[i].Y = FMath::Clamp(Pos[i].Y, -LY, LY);
+		}
 		return;
 	}
 
@@ -281,7 +567,7 @@ void FSandSpike::SolveGround()
 	const float R2 = Params.Radius;
 	for (int32 i = 0; i < Pos.Num(); ++i)
 	{
-		if (Pos[i].Z >= R2)
+		if (InvMass[i] <= 0.f || Pos[i].Z >= R2)
 		{
 			continue;
 		}
@@ -308,7 +594,7 @@ void FSandSpike::UpdateVelocities(float SubDt)
 	const float Inv = 1.f / SubDt;
 	for (int32 i = 0; i < Pos.Num(); ++i)
 	{
-		Vel[i] = (Pos[i] - PrevPos[i]) * Inv;
+		Vel[i] = InvMass[i] > 0.f ? (Pos[i] - PrevPos[i]) * Inv : FVector3f::ZeroVector;
 	}
 }
 
@@ -348,14 +634,18 @@ void FSandSpike::ApplyDynamicFriction(float SubDt)
 		const float Budget = Params.Friction * C.LambdaN * InvH;
 		const FVector3f DV = Vt * (-FMath::Min(Budget, VtLen) / VtLen);
 
-		// w_i = w_j = 1 → 임펄스를 절반씩
-		Vel[i] += DV * 0.5f;
-		Vel[j] -= DV * 0.5f;
+		const float WSum = InvMass[i] + InvMass[j];
+		if (WSum <= 0.f)
+		{
+			continue;
+		}
+		Vel[i] += DV * (InvMass[i] / WSum);
+		Vel[j] -= DV * (InvMass[j] / WSum);
 	}
 
 	for (int32 i = 0; i < Pos.Num(); ++i)
 	{
-		if (GroundLambdaN[i] <= 0.f)
+		if (GroundLambdaN[i] <= 0.f || InvMass[i] <= 0.f)
 		{
 			continue;
 		}
@@ -375,13 +665,19 @@ void FSandSpike::UpdateSettleState(float Dt)
 {
 	double SumSpeed = 0.0;
 	float  MaxSpeed = 0.f;
-	for (const FVector3f& V : Vel)
+	int32  Free = 0;
+	for (int32 i = 0; i < Vel.Num(); ++i)
 	{
-		const float S = V.Size();
+		if (InvMass[i] <= 0.f)
+		{
+			continue;   // 고정 입자는 평균을 희석시킬 뿐이다
+		}
+		const float S = Vel[i].Size();
 		SumSpeed += S;
 		MaxSpeed  = FMath::Max(MaxSpeed, S);
+		++Free;
 	}
-	LastAvgSpeed = Vel.Num() > 0 ? (float)(SumSpeed / Vel.Num()) : 0.f;
+	LastAvgSpeed = Free > 0 ? (float)(SumSpeed / Free) : 0.f;
 	LastMaxSpeed = MaxSpeed;
 
 	// §2-2 — 평균 |v| < 0.01 × (r/dt) 가 60프레임 연속. 반경으로 정규화해 해상도에 무관하다
@@ -396,34 +692,58 @@ void FSandSpike::Step(float Dt)
 	BuildContacts(Dt);   // ★ 프레임당 1회 (논문 §3.5)
 
 	const float SubDt = Dt / (float)Params.Substeps;
-	// λ 는 접촉이 만들어질 때 0에서 시작해 서브스텝들에 걸쳐 누적된다.
-	//
-	// 논문 §3.5의 "At each substep ... we initialize λn and λt with zero"를
-	// 서브스텝마다 리셋으로 읽으면 게이트 λt < μs·λn 이 첫 적용에서 항상 참이 되어
-	// (λt = 0) μ 가 검사에 참여하지 못한다 — 실측으로 μ 0.3~1.0 에서 각이 평평했다.
-	// 누적으로 읽어야 λt 가 μs·λn 을 넘는 시점이 생기고 μ 가 그 시점을 정한다.
-	for (FSandContact& C : Contacts)
-	{
-		C.LambdaN = 0.f;
-		C.LambdaT = 0.f;
-	}
-	FMemory::Memzero(GroundLambdaN.GetData(), GroundLambdaN.Num() * sizeof(float));
-	FMemory::Memzero(GroundLambdaT.GetData(), GroundLambdaT.Num() * sizeof(float));
-
 	for (int32 s = 0; s < Params.Substeps; ++s)
 	{
+		// ★ λn 과 λt 는 같은 범위에서 누적하고 그 안에서 클램프한다 (Catto 2005 / C4 §6).
+		//
+		// 범위를 프레임으로 두면 λn 은 서브스텝마다 무조건 쌓이는데 λt 는 실제로
+		// 미끄러질 때만 쌓여서, 서브스텝·반복을 늘릴수록 예산 μ·λn 만 부풀었다
+		// (실측: ss 5→20 에서 15.2° → 무한, 반복 1→16 에서 8° → 무한).
+		// 스텝 하나를 범위로 잡고 그 안에서 반복을 돌리면 양쪽이 같은 횟수로 쌓인다.
+		for (FSandContact& C : Contacts)
+		{
+			C.LambdaN = 0.f;
+			C.LambdaT = 0.f;
+		}
+		FMemory::Memzero(GroundLambdaN.GetData(), GroundLambdaN.Num() * sizeof(float));
+		FMemory::Memzero(GroundLambdaT.GetData(), GroundLambdaT.Num() * sizeof(float));
+
 		PredictPositions(SubDt);
 
-		for (int32 it = 0; it < Params.Iterations; ++it)
+		if (Params.bSequentialPositions)
 		{
-			SolveContacts();   // 제안만 쌓는다 (Pos 읽기 전용)
-			ApplyDeltas();     // 입자마다 한 번 적용
-			SolveWalls();
-			SolveGround();
-		}
+			for (FSandContact& C : Contacts)
+			{
+				C.LambdaTan      = FVector3f::ZeroVector;
+				C.PrevDLambdaN   = 0.f;
+				C.PrevDLambdaTan = FVector3f::ZeroVector;
+			}
 
-		UpdateVelocities(SubDt);
-		ApplyDynamicFriction(SubDt);   // 위치 풀이가 끝난 뒤 속도 패스
+			for (int32 it = 0; it < Params.Iterations; ++it)
+			{
+				SolveContactsSP(SubDt, it, Params.Iterations);
+				SolveGroundSP(SubDt);
+				SolveWalls();   // 형틀은 비계다. 위치만 자른다
+			}
+			// ★ 속도 역산 없음 — v 는 솔버가 직접 냈다
+		}
+		else
+		{
+			for (int32 it = 0; it < Params.Iterations; ++it)
+			{
+				SolveContacts();
+				if (!Params.bGaussSeidel)
+				{
+					ApplyDeltas();     // 입자마다 한 번 적용
+					CommitLambdas();   // 적용된 만큼만 λ 에 기록
+				}
+				SolveWalls();
+				SolveGround();
+			}
+
+			UpdateVelocities(SubDt);
+			ApplyDynamicFriction(SubDt);   // 위치 풀이가 끝난 뒤 속도 패스
+		}
 	}
 
 	UpdateSettleState(Dt);

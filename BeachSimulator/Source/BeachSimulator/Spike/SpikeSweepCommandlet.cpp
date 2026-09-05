@@ -123,6 +123,189 @@ namespace
 		return 0;
 	}
 
+	int32 RunTiltSweep(const FString& Params, const TArray<float>& MuList,
+	                   const TArray<float>& RateList, const TArray<int32>& IterList,
+	                   const TArray<int32>& SubsList)
+	{
+		int32 Count = 3000;
+		float MaxDeg = 70.f;
+		FParse::Value(*Params, TEXT("particles="), Count);
+		FParse::Value(*Params, TEXT("maxdeg="), MaxDeg);
+
+		FTiltSetup Setup;
+		Setup.TargetCount = Count;
+		Setup.bOpenDownhill = !FParse::Param(*Params, TEXT("closed"));
+
+		const bool bGS = FParse::Param(*Params, TEXT("gs"));
+		const bool bNoPosFric = FParse::Param(*Params, TEXT("noposfric"));
+		const bool bLegacy = FParse::Param(*Params, TEXT("legacy"));   // SP 이전 경로
+
+		float Mb = 0.6f, Omega = 0.5f, Kv = 0.1f;
+		FParse::Value(*Params, TEXT("mb="), Mb);
+		FParse::Value(*Params, TEXT("omega="), Omega);
+		FParse::Value(*Params, TEXT("kv="), Kv);
+		const TArray<float> MaList = ParseList<float>(Params, TEXT("ma="), { 0.f });
+
+		TArray<FSandParams> Configs;
+		TArray<float> Rates;
+		for (float Mu : MuList)
+		for (int32 Subs : SubsList)
+		for (int32 Iters : IterList)
+		for (float Ma : MaList)
+		for (float Rate : RateList)
+		{
+			FSandParams P;
+			P.Friction     = Mu;
+			P.Substeps     = Subs;
+			P.Iterations   = Iters;
+			P.bGaussSeidel = bGS;
+			P.bPositionFriction = !bNoPosFric;
+			P.bSequentialPositions = !bLegacy;
+			P.MomentumA    = Ma;
+			P.MomentumB    = Mb;
+			P.SorOmega     = Omega;
+			P.Kv           = Kv;
+			Configs.Add(P);
+			Rates.Add(Rate);
+		}
+
+		TArray<FTiltRunResult> Results;
+		Results.SetNum(Configs.Num());
+		const double T0 = FPlatformTime::Seconds();
+		ParallelFor(Configs.Num(), [&](int32 i)
+		{
+			Results[i] = SpikeBatch::RunTiltStatic(Configs[i], Setup, MaxDeg);
+		});
+		const double Elapsed = FPlatformTime::Seconds() - T0;
+
+		UE_LOG(LogSpikeSweep, Display, TEXT("경사판 %d 실행 — 입자 %d, 상한 %.0f°, 벽시계 %.1f초"),
+			Results.Num(), Results.Num() > 0 ? Results[0].Particles : 0, MaxDeg, Elapsed);
+		UE_LOG(LogSpikeSweep, Display, TEXT("   mu  atan(mu) | ss  it   a  | 개시각    오차 | 초"));
+
+		FString Text = SpikeBatch::TiltHeader() + TEXT("\n");
+		for (const FTiltRunResult& R : Results)
+		{
+			Text += SpikeBatch::TiltRow(R) + TEXT("\n");
+			const float AtanMu = FMath::RadiansToDegrees(FMath::Atan(R.Friction));
+			const FSandParams& Cfg = Configs[&R - Results.GetData()];
+			UE_LOG(LogSpikeSweep, Display, TEXT("%5.2f    %5.1f° | %2d %3d %4.1f | %s | %4.1f"),
+				R.Friction, AtanMu, Cfg.Substeps, Cfg.Iterations, Cfg.MomentumA,
+				R.bOnset ? *FString::Printf(TEXT("%6.2f° %+6.2f"), R.OnsetDeg, R.OnsetDeg - AtanMu)
+				         : TEXT("  상한까지 안 무너짐"),
+				R.WallSeconds);
+		}
+
+		const FString Path = FPaths::ProjectSavedDir() / TEXT("SpikeRuns") /
+			(TEXT("tilt_") + FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")) + TEXT(".csv"));
+		FFileHelper::SaveStringToFile(Text, *Path, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		UE_LOG(LogSpikeSweep, Display, TEXT("→ %s"), *Path);
+		return 0;
+	}
+
+	/**
+	 * ★ 마찰의 최소 단위 시험 — 거친 바닥 위 입자 하나.
+	 *
+	 * 쿨롱 마찰이면 정확히 atan(μ) 에서 미끄러져야 한다.
+	 * 여기서 안 맞으면 더미·측정·평균은 볼 필요가 없다.
+	 */
+	/**
+	 * ★ 하중 전달 계측 — λn 의 깊이 프로파일을 ρgh 와 대조한다.
+	 *
+	 * 정지한 더미에서 접촉 법선 임펄스는 위에 얹힌 무게에 비례해야 한다(깊이에 선형).
+	 * 평평하면 하중이 아래로 안 가고 있다는 직접 증거다.
+	 */
+	int32 RunLambdaProfile(const FString& Params)
+	{
+		int32 Iters = 15;
+		float Mu = 0.4f;
+		FParse::Value(*Params, TEXT("iterations="), Iters);
+		FParse::Value(*Params, TEXT("mu="), Mu);
+
+		FSandParams P;
+		P.Friction   = Mu;
+		P.Substeps   = 1;
+		P.Iterations = Iters;
+
+		FTiltSetup Setup;
+		Setup.TargetCount   = 3000;
+		Setup.bOpenDownhill = false;
+
+		FSandSpike Sim;
+		Sim.InitTiltBox(P, Setup);
+		while (!Sim.IsSettled() && Sim.FrameIndex() < 1800)
+		{
+			Sim.Step(1.f / 60.f);
+		}
+
+		// 접촉을 높이 구간별로 모은다
+		const float R = P.Radius;
+		const TArray<FVector3f>& Pos = Sim.GetPositions();
+		float Top = 0.f;
+		for (const FVector3f& V : Pos) { Top = FMath::Max(Top, V.Z); }
+
+		const int32 Bins = FMath::Max(1, FMath::CeilToInt(Top / (2.f * R)));
+		TArray<double> Sum;  Sum.Init(0.0, Bins);
+		TArray<int32>  Count; Count.Init(0, Bins);
+
+		for (const FSandContact& C : Sim.GetContacts())
+		{
+			if (C.LambdaN <= 0.f) { continue; }
+			const float Z = 0.5f * (Pos[C.I].Z + Pos[C.J].Z);
+			const int32 B = FMath::Clamp(FMath::FloorToInt(Z / (2.f * R)), 0, Bins - 1);
+			Sum[B] += C.LambdaN;
+			++Count[B];
+		}
+
+		UE_LOG(LogSpikeSweep, Display,
+			TEXT("λn 깊이 프로파일 — mu=%.2f, 반복 %d, 입자 %d, 정지 %d프레임, 높이 %.1fcm"),
+			Mu, Iters, Sim.Num(), Sim.FrameIndex(), Top);
+		UE_LOG(LogSpikeSweep, Display, TEXT("  높이(cm)  깊이(cm) | 접촉수 | 평균 λn    | ρgh 대비"));
+
+		// 맨 위 구간을 1로 두고 선형(깊이 비례)이면 각 구간이 깊이 비율과 같아야 한다
+		double RefLambda = 0.0;
+		double RefDepth  = 0.0;
+		for (int32 b = Bins - 2; b >= 0; --b)
+		{
+			if (Count[b] > 0) { RefLambda = Sum[b] / Count[b]; RefDepth = Top - (b + 0.5) * 2.f * R; break; }
+		}
+
+		for (int32 b = Bins - 1; b >= 0; --b)
+		{
+			if (Count[b] == 0) { continue; }
+			const double Mean  = Sum[b] / Count[b];
+			const double Depth = Top - (b + 0.5) * 2.f * R;
+			const double Ideal = (RefDepth > 0.0) ? RefLambda * (Depth / RefDepth) : 0.0;
+			UE_LOG(LogSpikeSweep, Display, TEXT("%9.1f %9.1f | %6d | %10.5f | %6.2f"),
+				(b + 0.5) * 2.f * R, Depth, Count[b], Mean, Ideal > 0.0 ? Mean / Ideal : 0.0);
+		}
+		return 0;
+	}
+
+	int32 RunFrictionTest()
+	{
+		UE_LOG(LogSpikeSweep, Display, TEXT("단일 입자 마찰 시험 — 거친 바닥 위 입자 1개"));
+		UE_LOG(LogSpikeSweep, Display, TEXT("   mu | atan(mu) |  개시각    오차"));
+
+		for (float Mu : { 0.1f, 0.2f, 0.4f, 0.7f, 1.0f, 1.5f })
+		{
+			FSandParams P;
+			P.Friction = Mu;
+
+			FTiltSetup Setup;
+			Setup.TargetCount = 25;   // 바닥 한 층(5×5) + 그 위 한 개
+			Setup.Layers      = 2;
+			Setup.FixedLayers = 1;
+
+			const FTiltRunResult R = SpikeBatch::RunTiltSingle(P, Setup, 1.0f, 80.f);
+			const float AtanMu = FMath::RadiansToDegrees(FMath::Atan(Mu));
+			UE_LOG(LogSpikeSweep, Display, TEXT("%5.2f |   %5.1f° | %s"),
+				Mu, AtanMu,
+				R.bOnset ? *FString::Printf(TEXT("%6.2f°  %+6.2f"), R.OnsetDeg, R.OnsetDeg - AtanMu)
+				         : TEXT(" 80°까지 안 미끄러짐"));
+		}
+		return 0;
+	}
+
 	int32 RunRulerCalibration()
 	{
 		const float R = 2.5f;
@@ -153,6 +336,14 @@ USpikeSweepCommandlet::USpikeSweepCommandlet()
 
 int32 USpikeSweepCommandlet::Main(const FString& Params)
 {
+	if (FParse::Param(*Params, TEXT("lambdaprofile")))
+	{
+		return RunLambdaProfile(Params);
+	}
+	if (FParse::Param(*Params, TEXT("frictiontest")))
+	{
+		return RunFrictionTest();
+	}
 	if (FParse::Param(*Params, TEXT("selftest")))
 	{
 		return RunRulerCalibration();
@@ -172,6 +363,12 @@ int32 USpikeSweepCommandlet::Main(const FString& Params)
 	const TArray<int32> SubsList = ParseList<int32>(Params, TEXT("substeps="),   { 5, 10, 20 });
 	const TArray<int32> IterList  = ParseList<int32>(Params, TEXT("iterations="), { 1, 2, 4 });
 	const TArray<float> OmegaList = ParseList<float>(Params, TEXT("omega="),      { 1.0f });
+	const TArray<float> RateList  = ParseList<float>(Params, TEXT("rate="),       { 2.0f });
+
+	if (FParse::Param(*Params, TEXT("tilt")))
+	{
+		return RunTiltSweep(Params, MuList, RateList, IterList, SubsList);
+	}
 
 	// --- 설정 목록 ---
 	TArray<FSandParams> Configs;
