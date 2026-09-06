@@ -23,7 +23,6 @@ void FSandSpike::Init(const FSandParams& InParams, const FColumnSetup& InColumn)
 
 	bBoxScene = false;
 	SpawnColumn();
-	InvMass.Init(1.f, Pos.Num());
 	AllocateBuffers();
 }
 
@@ -77,6 +76,7 @@ void FSandSpike::AllocateBuffers()
 	DeltaScale.SetNumZeroed(Pos.Num());
 	GroundLambdaN.SetNumZeroed(Pos.Num());
 	GroundLambdaT.SetNumZeroed(Pos.Num());
+	WallLambdaN.SetNumZeroed(Pos.Num());
 
 	bWallsActive  = true;
 	Frame         = 0;
@@ -134,9 +134,10 @@ void FSandSpike::SpawnColumn()
 	float H = Column.Height;
 	if (R <= 0.f)
 	{
-		// H/R = 1 에서 목표 개수를 담는 반지름. 단순 입방 충전 기준 (N = πR²H / S³)
-		R = FMath::Pow((float)Column.TargetCount * S * S * S / UE_PI, 1.f / 3.f);
-		H = R;
+		// 목표 개수와 종횡비에서 역산. 단순 입방 충전 기준 (N = πR²H / S³, H = a·R)
+		const float A = FMath::Max(0.1f, Column.AspectRatio);
+		R = FMath::Pow((float)Column.TargetCount * S * S * S / (UE_PI * A), 1.f / 3.f);
+		H = A * R;
 	}
 	WallRadius     = R;
 	Column.Radius  = R;   // 역산한 값을 되돌려 놓는다. 로그·측정이 이걸 본다
@@ -149,8 +150,12 @@ void FSandSpike::SpawnColumn()
 	const float Jitter = 0.05f * R2;   // 격자 충전의 인공적인 대칭만 깬다
 
 	Pos.Reset();
+	InvMass.Reset();
 	for (int32 iz = 0; iz < FMath::CeilToInt((H - R2) / S); ++iz)
 	{
+		// 바닥 몇 층은 고정해 거칠게 만든다. 매끄러운 지면 위에서는 밑동이 미끄러져 각이 낮아진다
+		const bool bFixed = iz < Column.FixedLayers;
+		const float J = bFixed ? 0.f : Jitter;
 		for (int32 iy = -Lat; iy <= Lat; ++iy)
 		{
 			for (int32 ix = -Lat; ix <= Lat; ++ix)
@@ -162,13 +167,15 @@ void FSandSpike::SpawnColumn()
 					continue;
 				}
 				Pos.Add(FVector3f(
-					X + Rng.FRandRange(-Jitter, Jitter),
-					Y + Rng.FRandRange(-Jitter, Jitter),
-					R2 + iz * S + Rng.FRandRange(-Jitter, Jitter)));
+					X + Rng.FRandRange(-J, J),
+					Y + Rng.FRandRange(-J, J),
+					R2 + iz * S + Rng.FRandRange(-J, J)));
+				InvMass.Add(bFixed ? 0.f : 1.f);
 			}
 		}
 	}
 
+	WallLiftZ = 0.f;
 	Vel.SetNumZeroed(Pos.Num());
 	PrevPos = Pos;
 }
@@ -435,6 +442,76 @@ void FSandSpike::SolveContactsSP(float StepDt, int32 Iter, int32 MaxIter)
 	}
 }
 
+void FSandSpike::SolveWallsSP(float StepDt)
+{
+	if (!bWallsActive)
+	{
+		return;
+	}
+
+	const float InvH = 1.f / StepDt;
+
+	// 마찰 없는 단방향 제약. 형틀은 물성이 아니라 비계다
+	auto Push = [&](int32 i, const FVector3f& N, float Gap)
+	{
+		const float Wi = InvMass[i];
+		if (Wi <= 0.f)
+		{
+			return;
+		}
+		if (Gap > 0.f && WallLambdaN[i] <= 0.f)
+		{
+			WallLambdaN[i] = 0.f;
+			return;
+		}
+
+		const float ResN = Params.Kv * FVector3f::DotProduct(Vel[i], N) + (Params.Kc * InvH) * Gap;
+		float DLambdaN = -(Params.SorOmega / Wi) * ResN;
+
+		const float OldN = WallLambdaN[i];
+		WallLambdaN[i] = FMath::Max(0.f, WallLambdaN[i] + DLambdaN);
+		DLambdaN = WallLambdaN[i] - OldN;
+
+		Vel[i] += N * (DLambdaN * Wi);
+		Pos[i] += N * (DLambdaN * Wi * StepDt);
+	};
+
+	if (bBoxScene)
+	{
+		const float LX = BoxHalf.X - Params.Radius;
+		const float LY = BoxHalf.Y - Params.Radius;
+		for (int32 i = 0; i < Pos.Num(); ++i)
+		{
+			if (!Tilt.bOpenDownhill)
+			{
+				Push(i, FVector3f( 1.f, 0.f, 0.f), Pos[i].X + LX);
+				Push(i, FVector3f(-1.f, 0.f, 0.f), LX - Pos[i].X);
+			}
+			Push(i, FVector3f(0.f,  1.f, 0.f), Pos[i].Y + LY);
+			Push(i, FVector3f(0.f, -1.f, 0.f), LY - Pos[i].Y);
+		}
+		return;
+	}
+
+	// 원통 — 들어올린 높이 아래는 벽이 없다
+	const float Limit = WallRadius - Params.Radius;
+	for (int32 i = 0; i < Pos.Num(); ++i)
+	{
+		if (Pos[i].Z < WallLiftZ)
+		{
+			continue;
+		}
+		const float Rad2 = Pos[i].X * Pos[i].X + Pos[i].Y * Pos[i].Y;
+		if (Rad2 < UE_KINDA_SMALL_NUMBER)
+		{
+			continue;
+		}
+		const float Rad = FMath::Sqrt(Rad2);
+		const FVector3f N(-Pos[i].X / Rad, -Pos[i].Y / Rad, 0.f);   // 안쪽을 향한다
+		Push(i, N, Limit - Rad);
+	}
+}
+
 void FSandSpike::SolveGroundSP(float StepDt)
 {
 	// 지면은 무한 질량. w_world = 0 이므로 d = w_i
@@ -545,10 +622,15 @@ void FSandSpike::SolveWalls()
 		return;
 	}
 
-	// 형틀은 물성이 아니라 비계다. 마찰 없이 반지름만 묶는다
+	// 형틀은 물성이 아니라 비계다. 마찰 없이 반지름만 묶는다.
+	// 들어올린 높이 아래는 벽이 없다 — 거기서부터 모래가 흘러나온다
 	const float Limit = WallRadius - Params.Radius;
 	for (int32 i = 0; i < Pos.Num(); ++i)
 	{
+		if (InvMass[i] <= 0.f || Pos[i].Z < WallLiftZ)
+		{
+			continue;
+		}
 		const float Rad2 = Pos[i].X * Pos[i].X + Pos[i].Y * Pos[i].Y;
 		if (Rad2 <= Limit * Limit || Rad2 < UE_KINDA_SMALL_NUMBER)
 		{
@@ -711,6 +793,7 @@ void FSandSpike::Step(float Dt)
 		}
 		FMemory::Memzero(GroundLambdaN.GetData(), GroundLambdaN.Num() * sizeof(float));
 		FMemory::Memzero(GroundLambdaT.GetData(), GroundLambdaT.Num() * sizeof(float));
+		FMemory::Memzero(WallLambdaN.GetData(), WallLambdaN.Num() * sizeof(float));
 
 		PredictPositions(SubDt);
 
@@ -727,7 +810,7 @@ void FSandSpike::Step(float Dt)
 			{
 				SolveContactsSP(SubDt, it, Params.Iterations);
 				SolveGroundSP(SubDt);
-				SolveWalls();   // 형틀은 비계다. 위치만 자른다
+				SolveWallsSP(SubDt);
 			}
 			// ★ 속도 역산 없음 — v 는 솔버가 직접 냈다
 		}

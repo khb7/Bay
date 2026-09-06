@@ -60,8 +60,40 @@ struct FTiltRunResult
 	double WallSeconds = 0.0;
 };
 
+/** 원통 들어올리기 결과 (m0-spike.md §3-0-A). */
+struct FConeLiftResult
+{
+	float Friction   = 0.f;
+	int32 Iterations = 0;
+	int32 Particles  = 0;
+	float StepDiameters = 0.f;
+
+	// ★ 선행 조건 — 다지기 후 기둥이 부풀지 않았는가 (실행 #12)
+	float InitialHeight = 0.f;
+	float PackedHeight  = 0.f;
+	bool  bPackStable   = false;
+	float PackFrames    = 0.f;
+
+	int32 Steps        = 0;
+	int32 TimedOutSteps = 0;   // 한 단계 안에 정지 못 한 횟수. 0이 아니면 준정적이 깨진 것
+
+	FAngleStats Angle;         // 프로파일·법선 두 방식이 여기 들어 있다
+	float ConeHeight = 0.f;
+	float ConeRadius = 0.f;
+	double WallSeconds = 0.0;
+};
+
 namespace SpikeBatch
 {
+	/**
+	 * 원통 들어올리기 — θr 측정 (m0-spike.md §3-0-A).
+	 *
+	 * 계단식으로 올리고 매 단계 정지를 기다린다. 연속으로 올리면 "얼마나 천천히"가
+	 * 새 변수가 되고, 경사판에서 그 변수가 11° 차이를 만든 전례가 있다.
+	 */
+	FConeLiftResult RunConeLift(const FSandParams& Params, const FColumnSetup& Column,
+	                            float StepDiameters, int32 MaxFramesPerStep);
+
 	/**
 	 * 경사판 (tilting box) — Al-Hashemi 2018 의 표준 측정법 중 하나.
 	 *

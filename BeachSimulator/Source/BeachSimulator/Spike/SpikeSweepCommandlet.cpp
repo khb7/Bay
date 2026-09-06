@@ -205,6 +205,76 @@ namespace
 		return 0;
 	}
 
+	/** 원통 들어올리기 — θr 측정 (m0-spike.md §3-0-A). */
+	int32 RunConeLift(const FString& Params, const TArray<float>& MuList,
+	                  const TArray<int32>& IterList, const TArray<int32>& SubsList)
+	{
+		int32 Count = 5000, MaxFrames = 900;
+		float Aspect = 2.5f;
+		FParse::Value(*Params, TEXT("particles="), Count);
+		FParse::Value(*Params, TEXT("aspect="), Aspect);
+		FParse::Value(*Params, TEXT("maxframes="), MaxFrames);
+		const TArray<float> StepList = ParseList<float>(Params, TEXT("step="), { 1.0f });
+
+		FColumnSetup C;
+		C.TargetCount = Count;
+		C.AspectRatio = Aspect;
+		C.FixedLayers = FParse::Param(*Params, TEXT("smoothbase")) ? 0 : 1;
+
+		TArray<FSandParams> Configs;
+		TArray<float> Steps;
+		for (float Mu : MuList)
+		for (int32 Subs : SubsList)
+		for (int32 Iters : IterList)
+		for (float St : StepList)
+		{
+			FSandParams P;
+			P.Friction   = Mu;
+			P.Substeps   = Subs;
+			P.Iterations = Iters;
+			Configs.Add(P);
+			Steps.Add(St);
+		}
+
+		TArray<FConeLiftResult> Results;
+		Results.SetNum(Configs.Num());
+		const double T0 = FPlatformTime::Seconds();
+		ParallelFor(Configs.Num(), [&](int32 i)
+		{
+			Results[i] = SpikeBatch::RunConeLift(Configs[i], C, Steps[i], MaxFrames);
+		});
+		const double Elapsed = FPlatformTime::Seconds() - T0;
+
+		UE_LOG(LogSpikeSweep, Display,
+			TEXT("원통 들어올리기 %d 실행 — 입자 %d, H/R=%.1f, 바닥 %s, 벽시계 %.1f초"),
+			Results.Num(), Results.Num() > 0 ? Results[0].Particles : 0, Aspect,
+			C.FixedLayers > 0 ? TEXT("거침") : TEXT("매끄러움"), Elapsed);
+		UE_LOG(LogSpikeSweep, Display,
+			TEXT("   mu ss  it 계단 | 다지기          | 프로파일  법선중앙  차이 | 단계(초과) | 초"));
+
+		for (int32 i = 0; i < Results.Num(); ++i)
+		{
+			const FConeLiftResult& R = Results[i];
+			if (!R.bPackStable)
+			{
+				UE_LOG(LogSpikeSweep, Display,
+					TEXT("%5.2f %2d %3d %4.1f | ★부풂 %.0f→%.0fcm | 측정 안 함 — 다지기가 안 된다     |            | %5.1f"),
+					R.Friction, Configs[i].Substeps, R.Iterations, R.StepDiameters,
+					R.InitialHeight, R.PackedHeight, R.WallSeconds);
+				continue;
+			}
+			const float Diff = FMath::Abs(R.Angle.ProfileDeg - R.Angle.MedianDeg);
+			UE_LOG(LogSpikeSweep, Display,
+				TEXT("%5.2f %2d %3d %4.1f | %.0fcm %4.0f프레임 | %7.1f°  %7.1f°  %4.1f | %4d(%d) | %5.1f%s"),
+				R.Friction, Configs[i].Substeps, R.Iterations, R.StepDiameters,
+				R.PackedHeight, R.PackFrames,
+				R.Angle.ProfileDeg, R.Angle.MedianDeg, Diff,
+				R.Steps, R.TimedOutSteps, R.WallSeconds,
+				(Diff < 3.f && FMath::Abs(R.Angle.ProfileDeg - 34.f) <= 3.f) ? TEXT("  ★통과") : TEXT(""));
+		}
+		return 0;
+	}
+
 	/** 임계 이하에서 붙잡고 있을 때 실제로 기어가는가. */
 	int32 RunCreepTest(const FString& Params)
 	{
@@ -411,6 +481,10 @@ int32 USpikeSweepCommandlet::Main(const FString& Params)
 	if (FParse::Param(*Params, TEXT("tilt")))
 	{
 		return RunTiltSweep(Params, MuList, RateList, IterList, SubsList);
+	}
+	if (FParse::Param(*Params, TEXT("cone")))
+	{
+		return RunConeLift(Params, MuList, IterList, SubsList);
 	}
 
 	// --- 설정 목록 ---

@@ -457,3 +457,73 @@ void SpikeBatch::MeasureCreep(const FSandParams& Params, const FTiltSetup& Setup
 		OutSpeedPerSec.Add(Watch.Num() > 0 ? (float)(SumSpeed / (60.0 * Watch.Num())) : 0.f);
 	}
 }
+
+
+// ---------------------------------------------------------------------------
+
+FConeLiftResult SpikeBatch::RunConeLift(const FSandParams& Params, const FColumnSetup& Column,
+                                        float StepDiameters, int32 MaxFramesPerStep)
+{
+	const double T0 = FPlatformTime::Seconds();
+
+	FConeLiftResult R;
+	R.Friction      = Params.Friction;
+	R.Iterations    = Params.Iterations;
+	R.StepDiameters = StepDiameters;
+
+	FSandSpike Sim;
+	Sim.Init(Params, Column);
+	R.Particles     = Sim.Num();
+	R.InitialHeight = SpikeMeasure::PeakHeight(Sim.GetPositions());
+
+	// --- ① 원통 안에서 다진다. 부풀면 그 뒤는 볼 필요가 없다 (실행 #12) ---
+	while (!Sim.IsSettled() && Sim.FrameIndex() < 3000)
+	{
+		Sim.Step(BatchDt);
+	}
+	R.PackFrames   = (float)Sim.FrameIndex();
+	R.PackedHeight = SpikeMeasure::PeakHeight(Sim.GetPositions());
+	R.bPackStable  = R.PackedHeight <= R.InitialHeight * 1.05f;
+	if (!R.bPackStable)
+	{
+		R.WallSeconds = FPlatformTime::Seconds() - T0;
+		return R;   // 터진 기둥 위에서 각을 재지 않는다
+	}
+
+	// --- ② 계단식으로 들어올리고 매 단계 정지를 기다린다 ---
+	const float Step = StepDiameters * 2.f * Params.Radius;
+	const float Top  = Sim.GetColumn().Height;
+
+	for (float Lift = Step; Lift <= Top + Step; Lift += Step)
+	{
+		Sim.SetWallLift(Lift);
+		++R.Steps;
+
+		int32 f = 0;
+		for (; f < MaxFramesPerStep && !Sim.IsSettled(); ++f)
+		{
+			Sim.Step(BatchDt);
+		}
+		if (f >= MaxFramesPerStep)
+		{
+			++R.TimedOutSteps;   // 준정적이 깨졌다는 신호
+		}
+	}
+
+	// --- ③ 벽을 완전히 뺀 뒤 최종 정지 ---
+	Sim.ReleaseWalls();
+	for (int32 f = 0; f < MaxFramesPerStep * 4 && !Sim.IsSettled(); ++f)
+	{
+		Sim.Step(BatchDt);
+	}
+
+	R.Angle      = SpikeMeasure::AngleOfRepose(Sim.GetPositions(), Params.Radius);
+	R.ConeHeight = SpikeMeasure::PeakHeight(Sim.GetPositions());
+
+	float BinWidth = 0.f;
+	const TArray<float> Profile = SpikeMeasure::RadialProfile(Sim.GetPositions(), Params.Radius, BinWidth);
+	R.ConeRadius = Profile.Num() * BinWidth;
+
+	R.WallSeconds = FPlatformTime::Seconds() - T0;
+	return R;
+}

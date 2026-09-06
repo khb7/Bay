@@ -82,11 +82,19 @@ struct FTiltSetup
 	bool bOpenDownhill = true;
 };
 
-/** 기둥 붕괴 배치 (m0-spike.md §3-0). H/R ≈ 1 — 높으면 관성이 섞여 각이 낮게 깔린다. */
+/**
+ * 원통 배치 (m0-spike.md §3-0-A · §3-0-C).
+ *
+ * AspectRatio 로 두 실험을 겸한다.
+ *   2.5  원통 들어올리기 — 원뿔이 나온다. θr 측정
+ *   1.0  기둥 붕괴 — 안쪽 심이 안 무너져 평평한 꼭대기가 남는다. 3-2 관찰용
+ */
 struct FColumnSetup
 {
 	int32 TargetCount = 5000;
-	float Radius      = 0.f;  // 0이면 TargetCount와 H/R=1에서 역산
+	float AspectRatio = 2.5f;   // H/R
+	int32 FixedLayers = 1;      // 거친 바닥 (Goujon 2003). 0이면 매끄러운 지면
+	float Radius      = 0.f;    // 0이면 TargetCount·AspectRatio 에서 역산
 	float Height      = 0.f;
 };
 
@@ -146,6 +154,15 @@ public:
 	/** 가상 벽 제거 = 붕괴 시작. 터널 실험의 "입자 지우기"와 같은 조작이다. */
 	void ReleaseWalls() { bWallsActive = false; SettledFrames = 0; }
 
+	/**
+	 * 원통을 여기까지 들어올린다 — 벽은 z > Z 인 입자에만 작용한다.
+	 *
+	 * 한순간에 없애면 관성이 섞여 기둥 붕괴가 되고, 그건 종횡비에 의존하는 다른 실험이다.
+	 * 계단식으로 올리고 매 단계 정지시키면 준정적이 정의상 보장된다 (§3-0-A).
+	 */
+	void SetWallLift(float Z) { WallLiftZ = Z; SettledFrames = 0; }
+	float GetWallLift() const { return WallLiftZ; }
+
 	// --- 관측 ---
 	const TArray<FVector3f>& GetPositions() const { return Pos; }
 	int32   Num()          const { return Pos.Num(); }
@@ -184,6 +201,15 @@ private:
 	/** Frâncu 2014 §6 — 임펄스 하나로 v 와 x 를 함께 갱신. 역산이 없다. */
 	void SolveContactsSP(float StepDt, int32 Iter, int32 MaxIter);
 	void SolveGroundSP(float StepDt);
+
+	/**
+	 * 형틀·상자 벽도 SP 규약을 지켜야 한다 — 임펄스 하나로 v 와 x 를 함께.
+	 *
+	 * 위치만 자르면 속도가 낡은 채로 남아 다음 스텝이 다시 벽을 파고들고,
+	 * 그 보정이 v 로 환원되지 않아 에너지가 쌓인다. SP 에서 없앤 고리를 벽만 되살리는 꼴.
+	 * 실측: 18층 원통이 78cm → 164cm 로 부풀었고 반복·서브스텝 어느 쪽으로도 안 잡혔다.
+	 */
+	void SolveWallsSP(float StepDt);
 	void ApplyDeltas();
 	void CommitLambdas();       // 실제 적용 비율로 λ 를 갱신
 	void SolveWalls();          // 형틀(원통) 또는 상자. 마찰 없는 단순 투영
@@ -209,6 +235,7 @@ private:
 	TArray<FSandContact> Contacts;      // 브로드페이즈 산출. 프레임 동안 유지
 	TArray<float> GroundLambdaN;        // 지면도 접촉이다. 무한 질량이라 w = 0
 	TArray<float> GroundLambdaT;
+	TArray<float> WallLambdaN;          // 벽도 마찬가지
 
 	// 정렬 기반 공간 해시 — 균일 격자는 빈 공간이 크고, Niagara Neighbor Grid3D는
 	// 셀당 상한 초과를 조용히 자른다 (decision-log.md). 여기선 계수 정렬로 오버플로가 없다.
@@ -219,6 +246,7 @@ private:
 
 	bool  bWallsActive = true;
 	float WallRadius   = 0.f;      // 원통 형틀 (기둥 붕괴)
+	float WallLiftZ    = 0.f;      // 이 높이 아래는 벽이 없다 (원통 들어올리기)
 	FVector3f BoxHalf  = FVector3f::ZeroVector;   // 상자 반크기 (경사판). 0이면 원통
 	bool  bBoxScene    = false;
 
