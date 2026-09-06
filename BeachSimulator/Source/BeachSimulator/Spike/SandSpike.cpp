@@ -663,6 +663,8 @@ void FSandSpike::ApplyDynamicFriction(float SubDt)
 
 void FSandSpike::UpdateSettleState(float Dt)
 {
+	(void)Dt;   // 판정이 더 이상 dt 에 의존하지 않는다
+
 	double SumSpeed = 0.0;
 	float  MaxSpeed = 0.f;
 	int32  Free = 0;
@@ -680,8 +682,10 @@ void FSandSpike::UpdateSettleState(float Dt)
 	LastAvgSpeed = Free > 0 ? (float)(SumSpeed / Free) : 0.f;
 	LastMaxSpeed = MaxSpeed;
 
-	// §2-2 — 평균 |v| < 0.01 × (r/dt) 가 60프레임 연속. 반경으로 정규화해 해상도에 무관하다
-	const float Threshold = 0.01f * (Params.Radius / Dt);
+	// §2-2 — 평균 |v| < ε·√(g·d) 가 60프레임 연속.
+	// dt 가 들어가지 않으므로 시간 조각을 바꿔도 판정선이 안 움직인다
+	const float Threshold = Params.SettleEpsilon *
+		FMath::Sqrt(FMath::Abs(Params.Gravity) * 2.f * Params.Radius);
 	SettledFrames = (LastAvgSpeed < Threshold) ? SettledFrames + 1 : 0;
 }
 
