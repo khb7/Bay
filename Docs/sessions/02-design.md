@@ -1,7 +1,7 @@
 # 설계 결정 기록
 
 > 2026-09-04 ~ 09-05 설계 세션.
-> [system-design.md](system-design.md)는 **결과**만 담는다. 이 문서는 **거기까지 간 경로** —
+> [system-design.md](../design/system-design.md)는 **결과**만 담는다. 이 문서는 **거기까지 간 경로** —
 > 무엇을 왜 골랐고, 무엇을 기각했고, 도중에 무엇을 뒤집었는가.
 
 ---
@@ -249,11 +249,11 @@
 
 | 문서 | 내용 |
 |---|---|
-| [system-design.md](system-design.md) | 원칙 · 게임 정의 · 아키텍처 · 격자 · 구조물 · 도구 · 렌더링 |
-| [milestones.md](milestones.md) | 구현 순서 M0~M8 · 마일스톤별 검증 기준 |
-| [decision-log.md](decision-log.md) | 이 문서 |
+| [system-design.md](../design/system-design.md) | 원칙 · 게임 정의 · 아키텍처 · 격자 · 구조물 · 도구 · 렌더링 |
+| [milestones.md](../design/milestones.md) | 구현 순서 M0~M8 · 마일스톤별 검증 기준 |
+| [02-design.md](02-design.md) | 이 문서 |
 | [../research/glossary-impl.md](../research/glossary-impl.md) | 구현 용어집 (+ terms/ 개별 문서) |
 
 세션 중 [params.md](../research/params.md)에 파랑 기후 프리셋 5종이 추가되었고,
 papers.md에 G~L절이 확장되었다. **params.md는 아직 갱신이 필요하다** —
-`timeScale` 25×, 격자 1024², 부유물·노출도·풍성 침식 상수.
+`timeScale` **1× 기본(디버그용)**, 격자 1024², 부유물·노출도·풍성 침식 상수.
