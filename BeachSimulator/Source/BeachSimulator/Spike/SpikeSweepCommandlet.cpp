@@ -129,8 +129,11 @@ namespace
 	{
 		int32 Count = 3000;
 		float MaxDeg = 70.f;
+		float HoldSec = 4.f;
 		FParse::Value(*Params, TEXT("particles="), Count);
 		FParse::Value(*Params, TEXT("maxdeg="), MaxDeg);
+		FParse::Value(*Params, TEXT("hold="), HoldSec);
+		const int32 HoldFrames = FMath::Max(30, FMath::RoundToInt(HoldSec * 60.f));
 
 		FTiltSetup Setup;
 		Setup.TargetCount = Count;
@@ -174,12 +177,12 @@ namespace
 		const double T0 = FPlatformTime::Seconds();
 		ParallelFor(Configs.Num(), [&](int32 i)
 		{
-			Results[i] = SpikeBatch::RunTiltStatic(Configs[i], Setup, MaxDeg);
+			Results[i] = SpikeBatch::RunTiltStatic(Configs[i], Setup, MaxDeg, HoldFrames);
 		});
 		const double Elapsed = FPlatformTime::Seconds() - T0;
 
-		UE_LOG(LogSpikeSweep, Display, TEXT("경사판 %d 실행 — 입자 %d, 상한 %.0f°, 벽시계 %.1f초"),
-			Results.Num(), Results.Num() > 0 ? Results[0].Particles : 0, MaxDeg, Elapsed);
+		UE_LOG(LogSpikeSweep, Display, TEXT("경사판 %d 실행 — 입자 %d, 상한 %.0f°, 유지 %.1f초, 벽시계 %.1f초"),
+			Results.Num(), Results.Num() > 0 ? Results[0].Particles : 0, MaxDeg, HoldSec, Elapsed);
 		UE_LOG(LogSpikeSweep, Display, TEXT("   mu  atan(mu) | ss  it   a  | 개시각    오차 | 초"));
 
 		FString Text = SpikeBatch::TiltHeader() + TEXT("\n");
@@ -202,12 +205,42 @@ namespace
 		return 0;
 	}
 
-	/**
-	 * ★ 마찰의 최소 단위 시험 — 거친 바닥 위 입자 하나.
-	 *
-	 * 쿨롱 마찰이면 정확히 atan(μ) 에서 미끄러져야 한다.
-	 * 여기서 안 맞으면 더미·측정·평균은 볼 필요가 없다.
-	 */
+	/** 임계 이하에서 붙잡고 있을 때 실제로 기어가는가. */
+	int32 RunCreepTest(const FString& Params)
+	{
+		float Mu = 0.4f, Deg = 5.f;
+		int32 Iters = 90, Seconds = 16;
+		FParse::Value(*Params, TEXT("mu="), Mu);
+		FParse::Value(*Params, TEXT("angle="), Deg);
+		FParse::Value(*Params, TEXT("iterations="), Iters);
+		FParse::Value(*Params, TEXT("seconds="), Seconds);
+
+		FSandParams P;
+		P.Friction   = Mu;
+		P.Substeps   = 1;
+		P.Iterations = Iters;
+
+		FTiltSetup Setup;
+		Setup.TargetCount   = 3000;
+		Setup.bOpenDownhill = false;
+
+		TArray<float> Slide, Speed;
+		SpikeBatch::MeasureCreep(P, Setup, Deg, Seconds, Slide, Speed);
+
+		const float Trigger = 0.5f * P.Radius;
+		UE_LOG(LogSpikeSweep, Display,
+			TEXT("크리프 계측 — mu=%.2f, %.1f°, 반복 %d.  트리거 = %.3fcm (0.5r)"),
+			Mu, Deg, Iters, Trigger);
+		UE_LOG(LogSpikeSweep, Display, TEXT("  초 | 누적변위(cm) | 그 초의 평균속력(cm/s) | 스텝당(μm)"));
+		for (int32 i = 0; i < Slide.Num(); ++i)
+		{
+			UE_LOG(LogSpikeSweep, Display, TEXT("%4d | %12.4f | %21.4f | %10.1f%s"),
+				i + 1, Slide[i], Speed[i], Speed[i] / 60.f * 10000.f,
+				Slide[i] > Trigger ? TEXT("  ← 트리거 넘음") : TEXT(""));
+		}
+		return 0;
+	}
+
 	/**
 	 * ★ 하중 전달 계측 — λn 의 깊이 프로파일을 ρgh 와 대조한다.
 	 *
@@ -281,6 +314,12 @@ namespace
 		return 0;
 	}
 
+	/**
+	 * ★ 마찰의 최소 단위 시험 — 거친 바닥 위 입자 하나.
+	 *
+	 * 쿨롱 마찰이면 정확히 atan(μ) 에서 미끄러져야 한다.
+	 * 여기서 안 맞으면 더미·측정·평균은 볼 필요가 없다.
+	 */
 	int32 RunFrictionTest()
 	{
 		UE_LOG(LogSpikeSweep, Display, TEXT("단일 입자 마찰 시험 — 거친 바닥 위 입자 1개"));
@@ -336,6 +375,10 @@ USpikeSweepCommandlet::USpikeSweepCommandlet()
 
 int32 USpikeSweepCommandlet::Main(const FString& Params)
 {
+	if (FParse::Param(*Params, TEXT("creeptest")))
+	{
+		return RunCreepTest(Params);
+	}
 	if (FParse::Param(*Params, TEXT("lambdaprofile")))
 	{
 		return RunLambdaProfile(Params);

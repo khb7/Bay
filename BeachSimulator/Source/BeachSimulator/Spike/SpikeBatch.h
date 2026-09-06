@@ -56,6 +56,7 @@ struct FTiltRunResult
 	bool  bOnset      = false;   // false면 상한까지 안 무너진 것
 	float OnsetDeg    = 0.f;     // ★ 사태 개시각 = 정적 안식각
 	float PackFrames  = 0.f;     // 수평에서 다지는 데 걸린 프레임
+	float LastSlide   = 0.f;     // 마지막 시행의 사면 방향 평균 변위 (진단용)
 	double WallSeconds = 0.0;
 };
 
@@ -79,7 +80,17 @@ namespace SpikeBatch
 	 * (속도 판정은 기울기 속도에 11° 휘둘렸고, 변위 판정은 3°에서 걸렸다).
 	 * 각도를 고정하고 묻기 때문에 기울기 속도라는 변수가 없다. 이분 탐색으로 8회면 끝난다.
 	 */
-	FTiltRunResult RunTiltStatic(const FSandParams& Params, const FTiltSetup& Setup, float MaxDeg);
+	FTiltRunResult RunTiltStatic(const FSandParams& Params, const FTiltSetup& Setup, float MaxDeg,
+	                             int32 HoldFrames = 240);
+
+	/**
+	 * ★ 크리프 계측 — 임계 이하 각도에서 붙잡고 시간에 따른 변위와 속도를 본다.
+	 *
+	 * 변위가 시간에 선형으로 쌓이고 속도가 안 죽으면 크리프이고,
+	 * 그러면 "N초 누적 변위" 판정은 사태가 아니라 크리프를 재고 있는 것이다.
+	 */
+	void MeasureCreep(const FSandParams& Params, const FTiltSetup& Setup, float Deg,
+	                  int32 Seconds, TArray<float>& OutSlidePerSec, TArray<float>& OutSpeedPerSec);
 
 	/** 자유 입자가 몇 개 없을 때. 중앙 구역 평균 대신 자유 입자 전체를 본다. */
 	FTiltRunResult RunTiltSingle(const FSandParams& Params, const FTiltSetup& Setup,

@@ -186,15 +186,15 @@ FTiltRunResult SpikeBatch::RunTilt(const FSandParams& Params, const FTiltSetup& 
 
 FString SpikeBatch::TiltHeader()
 {
-	return TEXT("mu,atanMu,rateDegPerSec,particles,onset,onsetDeg,error,packFrames,wallSeconds");
+	return TEXT("mu,atanMu,rateDegPerSec,particles,onset,onsetDeg,error,packFrames,lastSlide,wallSeconds");
 }
 
 FString SpikeBatch::TiltRow(const FTiltRunResult& R)
 {
 	const float AtanMu = FMath::RadiansToDegrees(FMath::Atan(R.Friction));
-	return FString::Printf(TEXT("%.2f,%.1f,%.2f,%d,%d,%.2f,%+.2f,%.0f,%.1f"),
+	return FString::Printf(TEXT("%.2f,%.1f,%.2f,%d,%d,%.2f,%+.2f,%.0f,%.4f,%.1f"),
 		R.Friction, AtanMu, R.RateDegPerSec, R.Particles,
-		R.bOnset ? 1 : 0, R.OnsetDeg, R.OnsetDeg - AtanMu, R.PackFrames, R.WallSeconds);
+		R.bOnset ? 1 : 0, R.OnsetDeg, R.OnsetDeg - AtanMu, R.PackFrames, R.LastSlide, R.WallSeconds);
 }
 
 
@@ -269,7 +269,8 @@ namespace
 	constexpr int32 TiltBisectSteps = 8;    // 70° / 2^8 ≈ 0.3° 해상도
 }
 
-FTiltRunResult SpikeBatch::RunTiltStatic(const FSandParams& Params, const FTiltSetup& Setup, float MaxDeg)
+FTiltRunResult SpikeBatch::RunTiltStatic(const FSandParams& Params, const FTiltSetup& Setup, float MaxDeg,
+                                         int32 HoldFrames)
 {
 	const double T0 = FPlatformTime::Seconds();
 
@@ -303,10 +304,19 @@ FTiltRunResult SpikeBatch::RunTiltStatic(const FSandParams& Params, const FTiltS
 	}
 	R.FreeCount = Watch.Num();
 
-	// 붙잡은 동안 사면 방향으로 반경의 절반 넘게 흐르면 무너진 것
-	const float Trigger = 0.5f * Params.Radius;
-
-	auto IsStableAt = [&](float Deg) -> bool
+	// ★ 판정 = "움직임이 죽어가는가" — 유지 창의 앞 절반과 뒤 절반의 평균 속력 비교.
+	//
+	// Pouliquen 1999 의 θ_start 정의(흐름이 지속되는가)와 같은 성질이고, 임의 상수가 없다.
+	//
+	// 앞서 시도한 둘이 왜 실패했는지 (papers.md §A-R5 의 경고):
+	//   ① 누적 변위 > 0.5r   임계 이하에서도 방향성 크리프가 안 멈춰 유지 시간이 길수록
+	//                        낮은 각에서 걸렸다. 실측 20.1° → 17.6° → 9.2° (유지 1/4/16초)
+	//   ② §2-2 그대로        60프레임 "연속" 조건이 스파이크 한 번에 부러진다.
+	//                        구간 평균은 임계의 1/10인데도 거의 모든 각이 "정지 못 함"이 됐다
+	//
+	// 구간 평균끼리 비교하면 둘 다 피한다 — 크리프는 감쇠하므로 뒤가 작고,
+	// 사태는 유지되거나 가속하므로 뒤가 크다. 변위는 진단용으로만 기록한다.
+	auto IsStableAt = [&](float Deg, float& OutSlide) -> bool
 	{
 		Sim.RestoreState(Packed);
 
@@ -323,27 +333,44 @@ FTiltRunResult SpikeBatch::RunTiltStatic(const FSandParams& Params, const FTiltS
 			StartX.Add(Sim.GetPositions()[i].X);
 		}
 
-		for (int32 f = 0; f < TiltHoldFrames; ++f)
+		// 속도도 변위와 같은 집단(중앙 60%)에서 본다.
+		// 전체 평균을 쓰면 닫힌 상자의 내리막 벽에 눌린 입자들이 섞여 안 죽는다 —
+		// 실측에서 그 때문에 1°에서도 "유지된다"로 분류됐다
+		const int32 Half = FMath::Max(1, HoldFrames / 2);
+		double SumFirst = 0.0, SumSecond = 0.0;
+		for (int32 f = 0; f < HoldFrames; ++f)
 		{
 			Sim.Step(BatchDt);
 
-			double SumSlide = 0.0;
-			for (int32 k = 0; k < Watch.Num(); ++k)
+			double SumSpeed = 0.0;
+			for (int32 i : Watch)
 			{
-				SumSlide += Sim.GetPositions()[Watch[k]].X - StartX[k];
+				SumSpeed += Sim.GetVelocities()[i].Size();
 			}
-			if (Watch.Num() > 0 && SumSlide / Watch.Num() > Trigger)
-			{
-				return false;
-			}
+			const double MeanSpeed = Watch.Num() > 0 ? SumSpeed / Watch.Num() : 0.0;
+
+			if (f < Half) { SumFirst  += MeanSpeed; }
+			else          { SumSecond += MeanSpeed; }
 		}
-		return true;
+		const double MeanFirst  = SumFirst  / Half;
+		const double MeanSecond = SumSecond / FMath::Max(1, HoldFrames - Half);
+		const bool bDying = MeanSecond < MeanFirst;
+
+		double SumSlide = 0.0;
+		for (int32 k = 0; k < Watch.Num(); ++k)
+		{
+			SumSlide += Sim.GetPositions()[Watch[k]].X - StartX[k];
+		}
+		OutSlide = Watch.Num() > 0 ? (float)(SumSlide / Watch.Num()) : 0.f;
+
+		return bDying;
 	};
 
 	// --- 이분 탐색 ---
 	float Lo = 0.f;          // 버티는 것이 확인된 각
 	float Hi = MaxDeg;       // 무너지는 것이 확인된 각
-	if (IsStableAt(MaxDeg))
+	float Slide = 0.f;
+	if (IsStableAt(MaxDeg, Slide))
 	{
 		R.bOnset   = false;
 		R.OnsetDeg = MaxDeg;
@@ -354,7 +381,7 @@ FTiltRunResult SpikeBatch::RunTiltStatic(const FSandParams& Params, const FTiltS
 	for (int32 k = 0; k < TiltBisectSteps; ++k)
 	{
 		const float Mid = 0.5f * (Lo + Hi);
-		if (IsStableAt(Mid))
+		if (IsStableAt(Mid, Slide))
 		{
 			Lo = Mid;
 		}
@@ -364,8 +391,69 @@ FTiltRunResult SpikeBatch::RunTiltStatic(const FSandParams& Params, const FTiltS
 		}
 	}
 
-	R.bOnset   = true;
-	R.OnsetDeg = 0.5f * (Lo + Hi);
+	R.bOnset    = true;
+	R.OnsetDeg  = 0.5f * (Lo + Hi);
+	R.LastSlide = Slide;   // 진단용. 판정에는 쓰지 않는다
 	R.WallSeconds = FPlatformTime::Seconds() - T0;
 	return R;
+}
+
+
+void SpikeBatch::MeasureCreep(const FSandParams& Params, const FTiltSetup& Setup, float Deg,
+                              int32 Seconds, TArray<float>& OutSlidePerSec, TArray<float>& OutSpeedPerSec)
+{
+	FSandSpike Sim;
+	Sim.InitTiltBox(Params, Setup);
+
+	while (!Sim.IsSettled() && Sim.FrameIndex() < 1800)
+	{
+		Sim.Step(BatchDt);
+	}
+
+	const float CenterHalfX = Sim.GetBoxHalf().X * 0.6f;
+	const TArray<float>& W = Sim.GetInvMass();
+	TArray<int32> Watch;
+	for (int32 i = 0; i < W.Num(); ++i)
+	{
+		if (W[i] > 0.f && FMath::Abs(Sim.GetPositions()[i].X) < CenterHalfX)
+		{
+			Watch.Add(i);
+		}
+	}
+
+	// 목표 각도까지 1초 램프 (본 절차와 동일)
+	for (int32 f = 0; f < TiltRampFrames; ++f)
+	{
+		Sim.SetTiltDegrees(Deg * (f + 1) / (float)TiltRampFrames);
+		Sim.Step(BatchDt);
+	}
+
+	TArray<float> StartX;
+	for (int32 i : Watch)
+	{
+		StartX.Add(Sim.GetPositions()[i].X);
+	}
+
+	OutSlidePerSec.Reset();
+	OutSpeedPerSec.Reset();
+	for (int32 sec = 0; sec < Seconds; ++sec)
+	{
+		double SumSpeed = 0.0;
+		for (int32 f = 0; f < 60; ++f)
+		{
+			Sim.Step(BatchDt);
+			for (int32 i : Watch)
+			{
+				SumSpeed += Sim.GetVelocities()[i].Size();
+			}
+		}
+
+		double SumSlide = 0.0;
+		for (int32 k = 0; k < Watch.Num(); ++k)
+		{
+			SumSlide += Sim.GetPositions()[Watch[k]].X - StartX[k];
+		}
+		OutSlidePerSec.Add(Watch.Num() > 0 ? (float)(SumSlide / Watch.Num()) : 0.f);
+		OutSpeedPerSec.Add(Watch.Num() > 0 ? (float)(SumSpeed / (60.0 * Watch.Num())) : 0.f);
+	}
 }
