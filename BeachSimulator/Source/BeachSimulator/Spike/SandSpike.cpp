@@ -149,6 +149,10 @@ void FSandSpike::SpawnColumn()
 	FRandomStream Rng(Params.Seed);
 	const float Jitter = 0.05f * R2;   // 격자 충전의 인공적인 대칭만 깬다
 
+	// 거친 바닥은 퇴적물보다 넓게 깐다 — 좁으면 바깥쪽만 매끄러운 지면 위에 놓인다
+	const float BaseR  = FillR * FMath::Max(1.f, Column.BaseRadiusScale);
+	const int32 BaseLat = FMath::CeilToInt(BaseR / S);
+
 	Pos.Reset();
 	InvMass.Reset();
 	for (int32 iz = 0; iz < FMath::CeilToInt((H - R2) / S); ++iz)
@@ -156,13 +160,15 @@ void FSandSpike::SpawnColumn()
 		// 바닥 몇 층은 고정해 거칠게 만든다. 매끄러운 지면 위에서는 밑동이 미끄러져 각이 낮아진다
 		const bool bFixed = iz < Column.FixedLayers;
 		const float J = bFixed ? 0.f : Jitter;
-		for (int32 iy = -Lat; iy <= Lat; ++iy)
+		const float LimitR = bFixed ? BaseR : FillR;
+		const int32 L      = bFixed ? BaseLat : Lat;
+		for (int32 iy = -L; iy <= L; ++iy)
 		{
-			for (int32 ix = -Lat; ix <= Lat; ++ix)
+			for (int32 ix = -L; ix <= L; ++ix)
 			{
 				const float X = ix * S;
 				const float Y = iy * S;
-				if (X * X + Y * Y > FillR * FillR)
+				if (X * X + Y * Y > LimitR * LimitR)
 				{
 					continue;
 				}

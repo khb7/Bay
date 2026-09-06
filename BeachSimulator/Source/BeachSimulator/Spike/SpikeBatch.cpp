@@ -483,7 +483,8 @@ FConeLiftResult SpikeBatch::RunConeLift(const FSandParams& Params, const FColumn
 	}
 	R.PackFrames   = (float)Sim.FrameIndex();
 	R.PackedHeight = SpikeMeasure::PeakHeight(Sim.GetPositions());
-	R.bPackStable  = R.PackedHeight <= R.InitialHeight * 1.05f;
+	// 부풀지 않았고 + 실제로 멈췄어야 한다. 상한에 걸린 것은 "다졌다"가 아니다
+	R.bPackStable  = (R.PackedHeight <= R.InitialHeight * 1.05f) && Sim.IsSettled();
 	if (!R.bPackStable)
 	{
 		R.WallSeconds = FPlatformTime::Seconds() - T0;

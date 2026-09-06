@@ -220,6 +220,7 @@ namespace
 		C.TargetCount = Count;
 		C.AspectRatio = Aspect;
 		C.FixedLayers = FParse::Param(*Params, TEXT("smoothbase")) ? 0 : 1;
+		FParse::Value(*Params, TEXT("basescale="), C.BaseRadiusScale);
 
 		TArray<FSandParams> Configs;
 		TArray<float> Steps;
@@ -258,9 +259,9 @@ namespace
 			if (!R.bPackStable)
 			{
 				UE_LOG(LogSpikeSweep, Display,
-					TEXT("%5.2f %2d %3d %4.1f | ★부풂 %.0f→%.0fcm | 측정 안 함 — 다지기가 안 된다     |            | %5.1f"),
+					TEXT("%5.2f %2d %3d %4.1f | ★실패 %.0f→%.0fcm %4.0f프레임 | 측정 안 함 — 다지기 미완     | %5.1f"),
 					R.Friction, Configs[i].Substeps, R.Iterations, R.StepDiameters,
-					R.InitialHeight, R.PackedHeight, R.WallSeconds);
+					R.InitialHeight, R.PackedHeight, R.PackFrames, R.WallSeconds);
 				continue;
 			}
 			const float Diff = FMath::Abs(R.Angle.ProfileDeg - R.Angle.MedianDeg);

@@ -94,6 +94,15 @@ struct FColumnSetup
 	int32 TargetCount = 5000;
 	float AspectRatio = 2.5f;   // H/R
 	int32 FixedLayers = 1;      // 거친 바닥 (Goujon 2003). 0이면 매끄러운 지면
+
+	/**
+	 * 거친 바닥을 기둥 반경의 몇 배까지 깔 것인가.
+	 *
+	 * 기둥 밑에만 깔면 퍼진 모래의 바깥쪽이 매끄러운 지면 위에 놓여 **바닥 마찰이 반경에 따라 달라진다.**
+	 * 자락만 완만해져 기울기가 둘인 퇴적물이 되고, 두 측정 방식이 서로 다른 답을 낸다(실측 차이 6~8°).
+	 * 문헌의 rough plane 은 더미보다 넓다.
+	 */
+	float BaseRadiusScale = 2.5f;
 	float Radius      = 0.f;    // 0이면 TargetCount·AspectRatio 에서 역산
 	float Height      = 0.f;
 };
