@@ -23,7 +23,8 @@ void FSandSpike::Init(const FSandParams& InParams, const FColumnSetup& InColumn)
 
 	bBoxScene = false;
 	SpawnColumn();
-	AllocateBuffers();
+	ResizeBuffers();
+	ResetRunState();
 }
 
 void FSandSpike::InitTiltBox(const FSandParams& InParams, const FTiltSetup& InTilt)
@@ -33,7 +34,8 @@ void FSandSpike::InitTiltBox(const FSandParams& InParams, const FTiltSetup& InTi
 
 	bBoxScene = true;
 	SpawnTiltBox();
-	AllocateBuffers();
+	ResizeBuffers();
+	ResetRunState();
 }
 
 void FSandSpike::SaveState(FSandState& Out) const
@@ -61,11 +63,11 @@ void FSandSpike::SetTiltDegrees(float Deg)
 	GravityDir = FVector3f(FMath::Sin(R), 0.f, -FMath::Cos(R));
 }
 
-void FSandSpike::AllocateBuffers()
+void FSandSpike::ResizeBuffers()
 {
 	// 입자 수의 2배 이상인 2의 거듭제곱. 충돌은 거리 검사가 걸러내므로 정확도가 아니라 비용 문제다
 	TableSize = 1;
-	while (TableSize < Pos.Num() * 2)
+	while (TableSize < FMath::Max(1, Pos.Num()) * 2)
 	{
 		TableSize <<= 1;
 	}
@@ -77,7 +79,10 @@ void FSandSpike::AllocateBuffers()
 	GroundLambdaN.SetNumZeroed(Pos.Num());
 	GroundLambdaT.SetNumZeroed(Pos.Num());
 	WallLambdaN.SetNumZeroed(Pos.Num());
+}
 
+void FSandSpike::ResetRunState()
+{
 	bWallsActive  = true;
 	Frame         = 0;
 	Time          = 0.f;
@@ -85,6 +90,71 @@ void FSandSpike::AllocateBuffers()
 	LastMaxSpeed  = 0.f;
 	TiltDeg       = 0.f;
 	GravityDir    = FVector3f(0.f, 0.f, -1.f);
+}
+
+void FSandSpike::InitPour(const FSandParams& InParams, const FPourSetup& InPour)
+{
+	Params = InParams;
+	Pour   = InPour;
+
+	bBoxScene    = false;
+	bWallsActive = false;   // 부어 쌓기에는 형틀이 없다
+	WallRadius   = 0.f;
+
+	SpawnPourBase();
+	ResizeBuffers();
+	ResetRunState();
+	bWallsActive = false;   // ResetRunState 가 켜므로 다시 끈다
+}
+
+void FSandSpike::SpawnPourBase()
+{
+	const float R2 = Params.Radius;
+	const float S  = 2.f * R2;
+
+	// 예상 퇴적 반경에서 역산 — 거친 바닥은 더미보다 넓어야 한다 (#19)
+	float BaseR = Pour.BaseRadius;
+	if (BaseR <= 0.f)
+	{
+		// 부피 = N·(4/3πr³)/충전율,  원뿔 r³ = 3V/(π·tan34°)
+		const float V = Pour.TargetCount * (4.f / 3.f) * UE_PI * R2 * R2 * R2 / 0.64f;
+		const float ConeR = FMath::Pow(3.f * V / (UE_PI * 0.6745f), 1.f / 3.f);
+		BaseR = ConeR * 1.2f;
+	}
+
+	const int32 Lat = FMath::CeilToInt(BaseR / S);
+	Pos.Reset();
+	InvMass.Reset();
+	for (int32 iz = 0; iz < FMath::Max(1, Pour.BaseLayers); ++iz)
+	{
+		for (int32 iy = -Lat; iy <= Lat; ++iy)
+		for (int32 ix = -Lat; ix <= Lat; ++ix)
+		{
+			const float X = ix * S;
+			const float Y = iy * S;
+			if (X * X + Y * Y > BaseR * BaseR)
+			{
+				continue;
+			}
+			Pos.Add(FVector3f(X, Y, R2 + iz * S));
+			InvMass.Add(0.f);   // 전부 고정
+		}
+	}
+
+	Vel.SetNumZeroed(Pos.Num());
+	PrevPos = Pos;
+}
+
+void FSandSpike::AddParticles(const TArray<FVector3f>& NewPos)
+{
+	for (const FVector3f& P : NewPos)
+	{
+		Pos.Add(P);
+		Vel.Add(FVector3f::ZeroVector);
+		PrevPos.Add(P);
+		InvMass.Add(1.f);
+	}
+	ResizeBuffers();
 }
 
 void FSandSpike::SpawnTiltBox()
@@ -224,9 +294,14 @@ void FSandSpike::BuildContacts(float Dt)
 {
 	const float D = 2.f * Params.Radius;
 
-	// 여유 = 2 × (한 프레임에 움직일 수 있는 거리). 반경의 [0.1, 2]배로 묶는다
+	// 여유 = 2 × (한 프레임에 움직일 수 있는 거리).
+	//
+	// 상한을 2r 로 묶어두면 빠른 입자가 여유를 넘어 이동해 **접촉 탐색을 통째로 통과한다** —
+	// 2000 cm/s 면 한 프레임에 33cm 를 가는데 여유는 5cm 였다. 아무것도 안 닿은 채 날아간다.
+	// 서브스텝을 늘려도 접촉 목록은 프레임당 한 번만 만들므로 소용이 없다.
+	// 상한은 비용을 위한 것이므로 넉넉히 두되(8r), 하한만 유지한다.
 	const float Margin = FMath::Clamp(SafetyMultiplier * LastMaxSpeed * Dt,
-		0.1f * Params.Radius, 2.f * Params.Radius);
+		0.1f * Params.Radius, 8.f * Params.Radius);
 	const float Range  = D + Margin;
 	const float Range2 = Range * Range;
 

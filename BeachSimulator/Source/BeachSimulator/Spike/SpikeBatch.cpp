@@ -492,6 +492,9 @@ FConeLiftResult SpikeBatch::RunConeLift(const FSandParams& Params, const FColumn
 	}
 
 	// --- ② 계단식으로 들어올리고 매 단계 정지를 기다린다 ---
+	const TArray<FVector3f> StartPos = Sim.GetPositions();
+	const float MovedThresh2 = FMath::Square(2.f * Params.Radius);
+
 	const float Step = StepDiameters * 2.f * Params.Radius;
 	const float Top  = Sim.GetColumn().Height;
 
@@ -500,15 +503,36 @@ FConeLiftResult SpikeBatch::RunConeLift(const FSandParams& Params, const FColumn
 		Sim.SetWallLift(Lift);
 		++R.Steps;
 
+		FConeLiftStep Log;
+		Log.LiftZ = Lift;
+
 		int32 f = 0;
 		for (; f < MaxFramesPerStep && !Sim.IsSettled(); ++f)
 		{
 			Sim.Step(BatchDt);
+			Log.MaxSpeed = FMath::Max(Log.MaxSpeed, Sim.MaxSpeed());
 		}
-		if (f >= MaxFramesPerStep)
+		Log.SettleFrames = f;
+		Log.bTimedOut    = (f >= MaxFramesPerStep);
+		Log.EndSpeed     = Sim.AvgSpeed();
+		if (Log.bTimedOut)
 		{
 			++R.TimedOutSteps;   // 준정적이 깨졌다는 신호
 		}
+
+		const TArray<FVector3f>& P = Sim.GetPositions();
+		Log.PeakHeight = SpikeMeasure::PeakHeight(P);
+		for (int32 i = 0; i < P.Num(); ++i)
+		{
+			if (FVector3f::DistSquared(P[i], StartPos[i]) > MovedThresh2)
+			{
+				++Log.MovedCount;
+			}
+		}
+		float BinW = 0.f;
+		Log.DepositRadius = SpikeMeasure::RadialProfile(P, Params.Radius, BinW).Num() * BinW;
+
+		R.StepLog.Add(Log);
 	}
 
 	// --- ③ 벽을 완전히 뺀 뒤 최종 정지 ---
@@ -521,9 +545,121 @@ FConeLiftResult SpikeBatch::RunConeLift(const FSandParams& Params, const FColumn
 	R.Angle      = SpikeMeasure::AngleOfRepose(Sim.GetPositions(), Params.Radius);
 	R.ConeHeight = SpikeMeasure::PeakHeight(Sim.GetPositions());
 
-	float BinWidth = 0.f;
-	const TArray<float> Profile = SpikeMeasure::RadialProfile(Sim.GetPositions(), Params.Radius, BinWidth);
-	R.ConeRadius = Profile.Num() * BinWidth;
+	R.FinalProfile = SpikeMeasure::RadialProfile(Sim.GetPositions(), Params.Radius, R.ProfileBinWidth);
+	R.ConeRadius   = R.FinalProfile.Num() * R.ProfileBinWidth;
+
+	R.WallSeconds = FPlatformTime::Seconds() - T0;
+	return R;
+}
+
+
+// ---------------------------------------------------------------------------
+
+FPourResult SpikeBatch::RunPour(const FSandParams& Params, const FPourSetup& Setup, int32 SettleCap)
+{
+	const double T0 = FPlatformTime::Seconds();
+
+	FPourResult R;
+	R.Friction   = Params.Friction;
+	R.Iterations = Params.Iterations;
+	R.DropHeightDiameters = Setup.DropHeightDiameters;
+	R.RatePerFrame = (float)Setup.PerDrop / FMath::Max(1, Setup.IntervalFrames);
+
+	FSandSpike Sim;
+	Sim.InitPour(Params, Setup);
+	R.BaseCount = Sim.Num();
+
+	const float D = 2.f * Params.Radius;
+	FRandomStream Rng(Params.Seed);
+
+	// --- ① 한 알씩 놓는다 ---
+	int32 Poured = 0;
+	int32 Frame  = 0;
+	while (Poured < Setup.TargetCount)
+	{
+		if (Frame % FMath::Max(1, Setup.IntervalFrames) == 0)
+		{
+			// 놓는 높이는 **축 근처 더미의 높이** 기준이다.
+			//
+			// 전체 최고점을 쓰면 튀어 오른 입자 하나가 최고점이 되어 다음 입자가 더 높이서
+			// 떨어지고, 더 세게 충돌해 더 튄다 — 한 번 튀면 스스로 증폭한다(실측 4149 cm/s).
+			const float SpawnR = Setup.SpawnRadiusDiameters * D;
+			const float NearR2 = FMath::Square(SpawnR + 2.f * D);
+			float Apex = 0.f;
+			for (const FVector3f& P : Sim.GetPositions())
+			{
+				if (P.X * P.X + P.Y * P.Y < NearR2)
+				{
+					Apex = FMath::Max(Apex, P.Z);
+				}
+			}
+			const float Z = Apex + Setup.DropHeightDiameters * D;
+
+			// ★ 자리가 비었는지 확인하고 놓는다.
+			//
+			// 겹친 채로 생성하면 솔버가 그 침투를 한 스텝에 해소하려 하고, 그 보정이
+			// 그대로 속도가 되어 날아간다 — 실측 최대속력 4149 cm/s (자유낙하의 24배).
+			const float MinDist2 = FMath::Square(D * 1.05f);
+			const TArray<FVector3f>& Existing = Sim.GetPositions();
+
+			TArray<FVector3f> Batch;
+			for (int32 k = 0; k < Setup.PerDrop && Poured < Setup.TargetCount; ++k)
+			{
+				bool bPlaced = false;
+				for (int32 Try = 0; Try < 16 && !bPlaced; ++Try)
+				{
+					// 원판 위 균일 분포. 한 점이면 격자 정렬이 생긴다
+					const float Ang = Rng.FRandRange(0.f, 2.f * UE_PI);
+					const float Rad = SpawnR * FMath::Sqrt(Rng.FRand());
+					const FVector3f Cand(Rad * FMath::Cos(Ang), Rad * FMath::Sin(Ang), Z);
+
+					bool bClear = true;
+					for (const FVector3f& E : Existing)
+					{
+						if (FVector3f::DistSquared(Cand, E) < MinDist2) { bClear = false; break; }
+					}
+					if (bClear)
+					{
+						for (const FVector3f& B : Batch)
+						{
+							if (FVector3f::DistSquared(Cand, B) < MinDist2) { bClear = false; break; }
+						}
+					}
+					if (bClear)
+					{
+						Batch.Add(Cand);
+						++Poured;
+						bPlaced = true;
+					}
+				}
+				// 16번 시도해도 자리가 없으면 이번 프레임은 건너뛴다. 다음 프레임에 다시
+			}
+			if (Batch.Num() > 0)
+			{
+				Sim.AddParticles(Batch);
+			}
+		}
+
+		Sim.Step(BatchDt);
+		R.MaxSpeedDuringPour = FMath::Max(R.MaxSpeedDuringPour, Sim.MaxSpeed());
+		++Frame;
+	}
+	R.Poured     = Poured;
+	R.PourFrames = (float)Frame;
+
+	// --- ② 다 붓고 정지까지 ---
+	int32 f = 0;
+	for (; f < SettleCap && !Sim.IsSettled(); ++f)
+	{
+		Sim.Step(BatchDt);
+	}
+	R.SettleFrames = (float)f;
+	R.bSettled     = Sim.IsSettled();
+
+	R.Angle      = SpikeMeasure::AngleOfRepose(Sim.GetPositions(), Params.Radius);
+	R.ConeHeight = SpikeMeasure::PeakHeight(Sim.GetPositions());
+	R.FinalProfile = SpikeMeasure::RadialProfile(Sim.GetPositions(), Params.Radius, R.ProfileBinWidth);
+	R.ConeRadius = R.FinalProfile.Num() * R.ProfileBinWidth;
 
 	R.WallSeconds = FPlatformTime::Seconds() - T0;
 	return R;

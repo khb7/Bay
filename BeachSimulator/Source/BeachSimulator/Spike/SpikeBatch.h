@@ -60,6 +60,24 @@ struct FTiltRunResult
 	double WallSeconds = 0.0;
 };
 
+/**
+ * 계단 하나의 기록.
+ *
+ * 계단식의 전제는 "매 단계 완전히 멈춘다"이고, 그게 깨지면 연속 상승과 같아진다.
+ * 어느 계단이 왜 안 멈췄는지는 총계로는 알 수 없어서 단계별로 남긴다.
+ */
+struct FConeLiftStep
+{
+	float LiftZ         = 0.f;   // 이 단계에서 벽을 올린 높이
+	int32 SettleFrames  = 0;     // 정지까지 걸린 프레임 (상한이면 초과)
+	bool  bTimedOut     = false;
+	float MaxSpeed      = 0.f;   // 그 단계에서 가장 빨랐던 순간 — 사태의 크기
+	float EndSpeed      = 0.f;   // 끝 시점 평균 — 임계에 얼마나 가까웠나
+	float PeakHeight    = 0.f;
+	float DepositRadius = 0.f;
+	int32 MovedCount    = 0;     // 초기 위치에서 2r 넘게 움직인 누적 수
+};
+
 /** 원통 들어올리기 결과 (m0-spike.md §3-0-A). */
 struct FConeLiftResult
 {
@@ -76,6 +94,11 @@ struct FConeLiftResult
 
 	int32 Steps        = 0;
 	int32 TimedOutSteps = 0;   // 한 단계 안에 정지 못 한 횟수. 0이 아니면 준정적이 깨진 것
+	TArray<FConeLiftStep> StepLog;
+
+	// 최종 단면 — 반경 구간별 최고점. 두 측정이 어긋날 때 모양을 직접 본다
+	TArray<float> FinalProfile;
+	float ProfileBinWidth = 0.f;
 
 	FAngleStats Angle;         // 프로파일·법선 두 방식이 여기 들어 있다
 	float ConeHeight = 0.f;
@@ -83,8 +106,40 @@ struct FConeLiftResult
 	double WallSeconds = 0.0;
 };
 
+/** 부어 쌓기 결과 (m0-spike.md §3-0-A). */
+struct FPourResult
+{
+	float Friction   = 0.f;
+	int32 Iterations = 0;
+	int32 Poured     = 0;      // 실제로 놓인 입자 수
+	int32 BaseCount  = 0;      // 고정 바닥
+	float DropHeightDiameters = 0.f;
+	float RatePerFrame = 0.f;
+
+	bool  bSettled   = false;  // 다 붓고 정지했는가
+	float PourFrames = 0.f;
+	float SettleFrames = 0.f;
+
+	FAngleStats Angle;
+	float ConeHeight = 0.f;
+	float ConeRadius = 0.f;
+	float MaxSpeedDuringPour = 0.f;   // 준정적이면 작아야 한다
+
+	TArray<float> FinalProfile;
+	float ProfileBinWidth = 0.f;
+	double WallSeconds = 0.0;
+};
+
 namespace SpikeBatch
 {
+	/**
+	 * 부어 쌓기 — θr 측정 (m0-spike.md §3-0-A).
+	 *
+	 * 더미를 한 알씩 키운다. 불안정 상태가 존재한 적이 없으므로 준정적이 저절로 성립한다.
+	 * 남는 축은 낙하 높이와 공급 속도 둘뿐이고, 둘 다 무관성 검사로 확인한다.
+	 */
+	FPourResult RunPour(const FSandParams& Params, const FPourSetup& Setup, int32 SettleCap);
+
 	/**
 	 * 원통 들어올리기 — θr 측정 (m0-spike.md §3-0-A).
 	 *

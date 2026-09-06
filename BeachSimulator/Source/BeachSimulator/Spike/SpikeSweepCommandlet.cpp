@@ -205,6 +205,91 @@ namespace
 		return 0;
 	}
 
+	/** 부어 쌓기 — θr 측정 (m0-spike.md §3-0-A). */
+	int32 RunPourSweep(const FString& Params, const TArray<float>& MuList,
+	                   const TArray<int32>& IterList, const TArray<int32>& SubsList)
+	{
+		int32 Count = 4000, SettleCap = 3000;
+		float Drop = 3.f;
+		FParse::Value(*Params, TEXT("particles="), Count);
+		FParse::Value(*Params, TEXT("drop="), Drop);
+		FParse::Value(*Params, TEXT("settlecap="), SettleCap);
+		const TArray<int32> RateList = ParseList<int32>(Params, TEXT("perdrop="), { 2 });
+		const TArray<float> DropList = ParseList<float>(Params, TEXT("drop="), { Drop });
+
+		TArray<FSandParams> Cfgs;
+		TArray<FPourSetup>  Setups;
+		for (float Mu : MuList)
+		for (int32 Subs : SubsList)
+		for (int32 Iters : IterList)
+		for (float Dr : DropList)
+		for (int32 Per : RateList)
+		{
+			// 낙하 충격 속도 √(2gh) 로 한 서브스텝 이동이 지름의 0.2배를 넘으면
+			// 입자가 한 스텝에 깊이 박히고, 그 침투를 해소하는 보정이 속도가 되어 튕긴다.
+			// 반복이 아니라 dt 로 고쳐야 하는 병이다 (papers.md C4)
+			FSandParams P;
+			P.Friction   = Mu;
+			P.Substeps   = Subs;
+			P.Iterations = Iters;
+			Cfgs.Add(P);
+
+			FPourSetup S;
+			S.TargetCount          = Count;
+			S.DropHeightDiameters  = Dr;
+			S.PerDrop              = Per;
+			Setups.Add(S);
+		}
+
+		TArray<FPourResult> Results;
+		Results.SetNum(Cfgs.Num());
+		const double T0 = FPlatformTime::Seconds();
+		ParallelFor(Cfgs.Num(), [&](int32 i)
+		{
+			Results[i] = SpikeBatch::RunPour(Cfgs[i], Setups[i], SettleCap);
+		});
+		const double Elapsed = FPlatformTime::Seconds() - T0;
+
+		UE_LOG(LogSpikeSweep, Display,
+			TEXT("부어 쌓기 %d 실행 — 목표 %d개, 낙하 %.1f지름, 바닥 %d개, 벽시계 %.1f초"),
+			Results.Num(), Count, Drop, Results.Num() > 0 ? Results[0].BaseCount : 0, Elapsed);
+		UE_LOG(LogSpikeSweep, Display,
+			TEXT("   mu ss  it 낙하 속도 | 정지 | 프로파일  법선중앙  차이 | 원뿔 h/r      | 붓는중 최대 | 초"));
+
+		for (int32 i = 0; i < Results.Num(); ++i)
+		{
+			const FPourResult& R = Results[i];
+			const float Diff = FMath::Abs(R.Angle.ProfileDeg - R.Angle.MedianDeg);
+			UE_LOG(LogSpikeSweep, Display,
+				TEXT("%5.2f %2d %3d %4.1f %4.2f | %4s | %7.1f°  %7.1f°  %4.1f | %5.1f/%5.1fcm | %9.1f | %5.1f%s"),
+				R.Friction, Cfgs[i].Substeps, R.Iterations, R.DropHeightDiameters, R.RatePerFrame,
+				R.bSettled ? TEXT("○") : TEXT("★미완"),
+				R.Angle.ProfileDeg, R.Angle.MedianDeg, Diff,
+				R.ConeHeight, R.ConeRadius, R.MaxSpeedDuringPour, R.WallSeconds,
+				(R.bSettled && Diff < 3.f && FMath::Abs(R.Angle.ProfileDeg - 34.f) <= 3.f)
+					? TEXT("  ★통과") : TEXT(""));
+		}
+
+		if (Results.Num() == 1)
+		{
+			const FPourResult& R = Results[0];
+			UE_LOG(LogSpikeSweep, Display, TEXT(""));
+			UE_LOG(LogSpikeSweep, Display, TEXT("최종 단면 —  반경(cm)  최고점(cm)  구간기울기(°)"));
+			for (int32 b = 0; b < R.FinalProfile.Num(); ++b)
+			{
+				float LocalDeg = 0.f;
+				if (b + 1 < R.FinalProfile.Num() && R.FinalProfile[b] >= 0.f && R.FinalProfile[b + 1] >= 0.f)
+				{
+					LocalDeg = FMath::RadiansToDegrees(
+						FMath::Atan((R.FinalProfile[b] - R.FinalProfile[b + 1]) / R.ProfileBinWidth));
+				}
+				UE_LOG(LogSpikeSweep, Display, TEXT("            %8.1f %11.1f %14.1f"),
+					R.ProfileBinWidth * (b + 0.5f), R.FinalProfile[b], LocalDeg);
+			}
+		}
+		return 0;
+	}
+
 	/** 원통 들어올리기 — θr 측정 (m0-spike.md §3-0-A). */
 	int32 RunConeLift(const FString& Params, const TArray<float>& MuList,
 	                  const TArray<int32>& IterList, const TArray<int32>& SubsList)
@@ -273,6 +358,37 @@ namespace
 				R.Steps, R.TimedOutSteps, R.WallSeconds,
 				(Diff < 3.f && FMath::Abs(R.Angle.ProfileDeg - 34.f) <= 3.f) ? TEXT("  ★통과") : TEXT(""));
 		}
+		// --- 단일 실행이면 계단별 기록과 최종 단면을 찍는다 ---
+		if (Results.Num() == 1 && Results[0].bPackStable)
+		{
+			const FConeLiftResult& R = Results[0];
+			UE_LOG(LogSpikeSweep, Display, TEXT(""));
+			UE_LOG(LogSpikeSweep, Display,
+				TEXT("계단 | 높이(cm) | 정지프레임 | 최대속력 | 끝속력  | 최고점 | 퇴적반경 | 이동입자"));
+			for (int32 k = 0; k < R.StepLog.Num(); ++k)
+			{
+				const FConeLiftStep& L = R.StepLog[k];
+				UE_LOG(LogSpikeSweep, Display,
+					TEXT("%4d | %8.1f | %10d%s | %8.1f | %7.3f | %6.1f | %8.1f | %8d"),
+					k + 1, L.LiftZ, L.SettleFrames, L.bTimedOut ? TEXT("★") : TEXT(" "),
+					L.MaxSpeed, L.EndSpeed, L.PeakHeight, L.DepositRadius, L.MovedCount);
+			}
+
+			UE_LOG(LogSpikeSweep, Display, TEXT(""));
+			UE_LOG(LogSpikeSweep, Display, TEXT("최종 단면 —  반경(cm)  최고점(cm)  구간기울기(°)"));
+			for (int32 b = 0; b < R.FinalProfile.Num(); ++b)
+			{
+				float LocalDeg = 0.f;
+				if (b + 1 < R.FinalProfile.Num() && R.FinalProfile[b] >= 0.f && R.FinalProfile[b + 1] >= 0.f)
+				{
+					LocalDeg = FMath::RadiansToDegrees(
+						FMath::Atan((R.FinalProfile[b] - R.FinalProfile[b + 1]) / R.ProfileBinWidth));
+				}
+				UE_LOG(LogSpikeSweep, Display, TEXT("            %8.1f %11.1f %14.1f"),
+					R.ProfileBinWidth * (b + 0.5f), R.FinalProfile[b], LocalDeg);
+			}
+		}
+
 		return 0;
 	}
 
@@ -486,6 +602,10 @@ int32 USpikeSweepCommandlet::Main(const FString& Params)
 	if (FParse::Param(*Params, TEXT("cone")))
 	{
 		return RunConeLift(Params, MuList, IterList, SubsList);
+	}
+	if (FParse::Param(*Params, TEXT("pour")))
+	{
+		return RunPourSweep(Params, MuList, IterList, SubsList);
 	}
 
 	// --- 설정 목록 ---

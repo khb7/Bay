@@ -107,6 +107,32 @@ struct FColumnSetup
 	float Height      = 0.f;
 };
 
+/**
+ * 부어 쌓기 배치 (m0-spike.md §3-0-A) — fixed funnel.
+ *
+ * 원통 들어올리기는 **높은 기둥이라는 불안정 상태를 먼저 만들고** 지지를 뺀다.
+ * 밑동이 풀리는 순간 위 전체가 지지를 잃어 한 번에 무너진다(실측: 최대속력 650 cm/s,
+ * 이동 입자 322 → 1599, 중심이 꺼진 둔덕). 계단을 잘게 나눠도 임계 노출량에서 똑같이 간다.
+ *
+ * 부어 쌓기는 더미를 한 알씩 키운다 — **불안정 상태가 존재한 적이 없다.**
+ * 입자 하나의 추가는 언제나 작은 교란이라 준정적이 저절로 성립하고,
+ * 계단·유지 시간·상한 같은 임의 상수가 통째로 사라진다.
+ */
+struct FPourSetup
+{
+	int32 TargetCount = 4000;
+	int32 BaseLayers  = 1;      // 거친 바닥 (Goujon 2003)
+	float BaseRadius  = 0.f;    // 0이면 예상 퇴적 반경 × 1.2 로 역산
+
+	/** 현재 더미 꼭대기 위 몇 지름에서 놓는가. 낮을수록 충격이 작다 */
+	float DropHeightDiameters = 3.f;
+	/** 놓는 지점의 산포 반경. 좁으면 자리가 없어 공급이 막힌다 */
+	float SpawnRadiusDiameters = 2.5f;
+
+	int32 PerDrop        = 2;   // 한 번에 몇 개
+	int32 IntervalFrames = 2;   // 몇 프레임마다
+};
+
 /** 스냅샷 — 같은 다진 상태에서 여러 각도를 시험하기 위해. */
 struct FSandState
 {
@@ -149,6 +175,12 @@ class FSandSpike
 public:
 	void Init(const FSandParams& InParams, const FColumnSetup& InColumn);
 	void InitTiltBox(const FSandParams& InParams, const FTiltSetup& InTilt);
+
+	/** 거친 바닥만 깔고 시작한다. 입자는 AddParticles 로 쌓아 올린다. */
+	void InitPour(const FSandParams& InParams, const FPourSetup& InPour);
+
+	/** 실행 중 입자를 더한다. 버퍼가 따라서 늘어난다. */
+	void AddParticles(const TArray<FVector3f>& NewPos);
 
 	/** 중력을 기울인다. 상자를 돌리는 대신 상자 좌표계에서 중력을 돌린다 (같은 것). */
 	void SetTiltDegrees(float Deg);
@@ -196,7 +228,9 @@ public:
 private:
 	void SpawnColumn();
 	void SpawnTiltBox();
-	void AllocateBuffers();
+	void SpawnPourBase();
+	void ResizeBuffers();   // 입자 수가 바뀔 때마다
+	void ResetRunState();
 
 	/** ★ 프레임당 1회. 반경에 여유를 둬서 서브스텝 동안 새 접촉이 생겨도 놓치지 않는다. */
 	void BuildContacts(float Dt);
@@ -230,6 +264,7 @@ private:
 	FSandParams  Params;
 	FColumnSetup Column;
 	FTiltSetup   Tilt;
+	FPourSetup   Pour;
 
 	TArray<FVector3f> Pos;      // 현재 위치
 	TArray<FVector3f> Vel;
