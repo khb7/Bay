@@ -27,4 +27,4 @@ s=0.5, 반복 20번 → 0.999999   사실상 강체
 
 ---
 
-**관련 문서** — [PBD (Position Based Dynamics)](pbd.md) · [XPBD](xpbd.md) · [컴플라이언스 (compliance)](compliance.md)
+**관련 문서** — [PBD (Position Based Dynamics)](pbd.md) · [XPBD](xpbd.md) · [라그랑주 승수 (Lagrange multiplier, λ)](lagrange-multiplier.md) · [컴플라이언스 (compliance)](compliance.md)

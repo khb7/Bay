@@ -11,4 +11,4 @@
 
 ---
 
-**관련 문서** — [Gauss-Seidel / Jacobi / SOR ★](gauss-seidel-jacobi-sor.md) · [PBD (Position Based Dynamics)](pbd.md) · [shape matching](shape-matching.md) · [★ 그래프 컬러링 — 현대적 답](graph-coloring.md) · [공간 해시 (spatial hash) — 정렬 기반, 이 프로젝트의 선택](spatial-hash.md) · [반복 (iteration) / 완화 (relaxation)](iteration-relaxation.md) · [안식각 (angle of repose)](angle-of-repose.md) · [점착력 (cohesion, c)](cohesion.md)
+**관련 문서** — [FEM 메시 (유한요소 메시)](fem.md) · [Gauss-Seidel / Jacobi / SOR ★](gauss-seidel-jacobi-sor.md) · [PBD (Position Based Dynamics)](pbd.md) · [Simulation Stages (Niagara)](simulation-stages.md) · [shape matching](shape-matching.md) · [★ MPM의 입자 ≠ 모래알](mpm-particle-vs-grain.md) · [★ 그래프 컬러링 — 현대적 답](graph-coloring.md) · [공간 해시 (spatial hash) — 정렬 기반, 이 프로젝트의 선택](spatial-hash.md) · [라그랑주 승수 (Lagrange multiplier, λ)](lagrange-multiplier.md) · [반복 (iteration) / 완화 (relaxation)](iteration-relaxation.md) · [시간 적분 (time integration) — 적분기의 종류](time-integration.md) · [안식각 (angle of repose)](angle-of-repose.md) · [점착력 (cohesion, c)](cohesion.md)

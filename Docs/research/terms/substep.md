@@ -6,4 +6,4 @@
 
 ---
 
-**관련 문서** — [CFL 조건 (Courant–Friedrichs–Lewy)](cfl-condition.md)
+**관련 문서** — [CFL 조건 (Courant–Friedrichs–Lewy)](cfl-condition.md) · [시간 적분 (time integration) — 적분기의 종류](time-integration.md)

@@ -45,7 +45,7 @@ Unity Terrain / UE Landscape가 바로 이것.
 | 표현 | 데이터 | 오버행 | 비용 | 예 |
 |---|---|---|---|---|
 | **하이트필드** | 2D 스칼라 | ✗ | 매우 쌈 | Unity Terrain, UE Landscape |
-| 레이어드 하이트필드 | 2D × N층 | 제한적 | 쌈 | 지질 층 (Šťava 2008) |
+| [레이어드 하이트필드](layered-heightfield.md) | 2D × N층 | 제한적 | 쌈 | 지질 층 (Šťava 2008) |
 | 복셀 / [SDF](sdf.md) | 3D 스칼라 | ✓ | 비쌈 (해상도³) | Minecraft, Dual Contouring |
 | 입자 | 위치 리스트 | ✓ | 중간 | [PBD](pbd.md), [MPM](mpm.md) |
 | 메시 | 정점+면 | ✓ | [변형](strain.md)이 어려움 | 일반 3D 모델 |
@@ -66,4 +66,4 @@ Unity Terrain / UE Landscape가 바로 이것.
 
 ---
 
-**관련 문서** — [MPM (Material Point Method)](mpm.md) · [MPM 계보](mpm-lineage.md) · [PBD (Position Based Dynamics)](pbd.md) · [Render Target / SRV / UAV](render-target-srv-uav.md) · [SDF (Signed Distance Field)](sdf.md) · [Virtual Heightfield Mesh (VHM)](virtual-heightfield-mesh.md) · [WPO (World Position Offset)](wpo.md) · [가상 파이프 (virtual pipes)](virtual-pipes.md) · [변형 (strain, ε)](strain.md) · [열침식 (thermal erosion)](thermal-erosion.md) · [우리 프로젝트에서 강성은 거의 안 중요하다](stiffness-in-our-project.md) · [항복면 (yield surface) ★](yield-surface.md)
+**관련 문서** — [MPM (Material Point Method)](mpm.md) · [MPM 계보](mpm-lineage.md) · [PBD (Position Based Dynamics)](pbd.md) · [Render Target / SRV / UAV](render-target-srv-uav.md) · [SDF (Signed Distance Field)](sdf.md) · [Virtual Heightfield Mesh (VHM)](virtual-heightfield-mesh.md) · [WPO (World Position Offset)](wpo.md) · [가상 파이프 (virtual pipes)](virtual-pipes.md) · [레이어드 하이트필드 (layered heightfield)](layered-heightfield.md) · [변형 (strain, ε)](strain.md) · [순차 파단 (progressive failure)](progressive-failure.md) · [열침식 (thermal erosion)](thermal-erosion.md) · [우리 프로젝트에서 강성은 거의 안 중요하다](stiffness-in-our-project.md) · [항복면 (yield surface) ★](yield-surface.md)

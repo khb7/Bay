@@ -7,4 +7,4 @@
 
 ---
 
-**관련 문서** — [GPU 리드백 (`FRHIGPUBufferReadback`)](gpu-readback.md)
+**관련 문서** — [GPU 리드백 (`FRHIGPUBufferReadback`)](gpu-readback.md) · [워밍 스타트 (warm starting)](warm-starting.md)

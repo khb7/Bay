@@ -9,4 +9,4 @@
 
 ---
 
-**관련 문서** — [서브스텝 (substep)](substep.md)
+**관련 문서** — [서브스텝 (substep)](substep.md) · [시간 적분 (time integration) — 적분기의 종류](time-integration.md)

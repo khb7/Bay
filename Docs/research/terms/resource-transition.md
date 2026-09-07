@@ -16,4 +16,4 @@
 
 ---
 
-**관련 문서** — [배리어 (barrier)](barrier.md)
+**관련 문서** — [Render Target / SRV / UAV](render-target-srv-uav.md) · [배리어 (barrier)](barrier.md)

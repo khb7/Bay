@@ -10,6 +10,51 @@
 | 압축 (compression) | 누르는 힘. 마른 모래도 잘 버팀 |
 | 전단 (shear) | 미끄러뜨리는 힘 |
 
+## 왜 숫자 하나가 아니라 3×3 행렬인가
+
+**같은 점이라도 어느 방향의 면을 보느냐에 따라 답이 다르기 때문이다.**
+
+```
+   같은 모래 한 덩이
+
+   ─── 수평면으로 자르면    위 흙의 무게가 누른다        → 크다
+   │   연직면으로 자르면    옆에서 미는 것만 있다        → 작다
+```
+
+그래서 **"면의 방향" 3 × "힘의 방향" 3 = 9개**가 필요하고, 대칭성으로 독립 성분은 6개다.
+`σ_ij` = **j 방향 법선을 가진 면에 걸리는 i 방향 힘**.
+
+## 미시에서 응력이 나오는 곳 — 면을 가로지르는 접촉
+
+입자 시뮬에는 "응력"이라는 변수가 없다. **접촉력만 있다.** 둘을 잇는 것이 다음 관계다.
+
+```
+        ┄┄┄┄┄┄┄┄┄┄┄┄┄┄  가상 단면
+   ●━━━●   ●     ●━━━●        ━ 가 면을 가로지르는 접촉
+     ●   ●━━━●     ●          이것들만 힘을 전달한다
+        ┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+
+        1
+σ_ij = ───  Σ   ℓ_i · f_j        Love-Weber
+        V   접촉
+```
+
+`f` 접촉력, `ℓ` 두 입자 중심을 잇는 벡터, `V` 부피.
+**정적 평형에서는 근사가 아니라 항등식**이다 — 응력의 정의를 그대로 센 것.
+
+→ 여기서 전단강도가 어떻게 나오는지는 [구조 이방성 / 조직](anisotropy-fabric.md).
+
+## 두 조각으로 본다 — 크기와 모양
+
+```
+p = (σ₁+σ₂+σ₃)/3     평균 압력. 얼마나 세게 눌리나        ← 체적
+q = 나머지            얼마나 찌그러뜨리나                  ← 편차
+```
+
+**모래는 `q/p` 가 한계를 넘으면 항복한다** — 절대 크기가 아니라 **비율**이 문제다.
+깊은 곳의 모래가 안 무너지는 이유(`p`가 크니 같은 `q`도 안전)가 여기서 나온다.
+→ [편차 / 체적 분해](deviatoric-volumetric.md) · [항복면](yield-surface.md)
+
 ---
 
-**관련 문서** — [SVD (특이값 분해) ★](svd.md) · [구성 모델 (constitutive model)](constitutive-model.md) · [등방성 (isotropy) ★](isotropy.md) · [리턴 매핑 (return mapping)](return-mapping.md) · [편차 / 체적 분해](deviatoric-volumetric.md) · [항복면 (yield surface) ★](yield-surface.md)
+**관련 문서** — [FEM 메시 (유한요소 메시)](fem.md) · [SVD (특이값 분해) ★](svd.md) · [구성 모델 (constitutive model)](constitutive-model.md) · [구조 이방성 / 조직 (fabric anisotropy) ★](anisotropy-fabric.md) · [등방성 (isotropy) ★](isotropy.md) · [리턴 매핑 (return mapping)](return-mapping.md) · [편차 / 체적 분해](deviatoric-volumetric.md) · [항복면 (yield surface) ★](yield-surface.md)

@@ -56,9 +56,13 @@
 > 바람이 만드는 **리플**은 방향성이 있지만 그건 **기하학적 패턴**이지 재료의 이방성이 아니다.
 > 지형이 방향성을 갖는 것과 재료가 방향성을 갖는 것은 다르다.
 
+> ★ **여기까지는 재료의 물성 얘기다.** 같은 단어를 쓰지만 층위가 다른
+> [구조 이방성 / 조직 (fabric anisotropy)](anisotropy-fabric.md) — "지금 접촉이 어느 방향으로 쏠려 있나" — 은 별도 문서.
+> 전단강도가 거기서 나오므로 입자 계층에서는 무시할 수 없다.
+
 > **우리 프로젝트는 전부 등방성 가정.** 덕분에 6차원이 3차원이 되고, [SVD](svd.md)로 회전을 버릴 수 있고,
 > 원뿔 하나로 재료를 표현할 수 있다. **지금까지의 단순화 상당 부분이 이 가정 위에 서 있다.**
 
 ---
 
-**관련 문서** — [SVD (특이값 분해) ★](svd.md) · [★ 강성 (stiffness) — 강도·경도·인성과 구분할 것](stiffness.md) · [응력 (stress, σ)](stress.md) · [항복면 (yield surface) ★](yield-surface.md)
+**관련 문서** — [SVD (특이값 분해) ★](svd.md) · [★ 강성 (stiffness) — 강도·경도·인성과 구분할 것](stiffness.md) · [구조 이방성 / 조직 (fabric anisotropy) ★](anisotropy-fabric.md) · [응력 (stress, σ)](stress.md) · [항복면 (yield surface) ★](yield-surface.md)

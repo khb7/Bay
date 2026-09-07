@@ -9,6 +9,7 @@
 **[1. 역학 기초](#1-역학-기초)**  
 [항력 (drag)](terms/drag.md) · [변형 (strain, ε)](terms/strain.md) · [응력 (stress, σ)](terms/stress.md) · [편차 / 체적 분해](terms/deviatoric-volumetric.md) ·
 [Hencky 변형 (로그 변형)](terms/hencky-strain.md) · [연속체 (continuum)](terms/continuum.md) · [등방성 (isotropy) ★](terms/isotropy.md) ·
+[구조 이방성 / 조직 (fabric anisotropy) ★](terms/anisotropy-fabric.md) ·
 [구성 모델 (constitutive model)](terms/constitutive-model.md)
 
 **[2. 소성과 항복](#2-소성과-항복)**  
@@ -17,6 +18,7 @@
 [⚠ 점착력 vs 접착력 — 용어 정리](terms/cohesion-vs-adhesion.md) · [점착력 (cohesion, c)](terms/cohesion.md) · [경화 (hardening)](terms/hardening.md) ·
 [★ 팽창 / 다져짐 (dilation / compaction)](terms/dilation-compaction.md) · [Reynolds 팽창 (Reynolds dilatancy)](terms/reynolds-dilatancy.md) ·
 [팽창을 시뮬레이션이 읽어야 하는 이유](terms/why-simulate-dilation.md) · [★ 다지기 vs 밟기 — 방향이 반대다](terms/tamping-vs-stomping.md) · [임계상태 (critical state)](terms/critical-state.md) ·
+[순차 파단 (progressive failure)](terms/progressive-failure.md) ·
 [열침식 (thermal erosion)](terms/thermal-erosion.md)
 
 **[3. 다공성 매질 / 물의 이동](#3-다공성-매질--물의-이동)**  
@@ -46,9 +48,9 @@
 [MPM 계보](terms/mpm-lineage.md) · [PIC / FLIP / APIC](terms/pic-flip-apic.md) · [SVD (특이값 분해) ★](terms/svd.md) · [극분해 (polar decomposition)](terms/polar-decomposition.md) ·
 [SVD의 다른 용도](terms/svd-other-uses.md) · [변형 그래디언트 F](terms/deformation-gradient.md) · [PBD (Position Based Dynamics)](terms/pbd.md) ·
 [XPBD](terms/xpbd.md) · [shape matching](terms/shape-matching.md) · [Gauss-Seidel / Jacobi / SOR ★](terms/gauss-seidel-jacobi-sor.md) ·
-[★ 그래프 컬러링 — 현대적 답](terms/graph-coloring.md) · [★ 강성 (stiffness) — 강도·경도·인성과 구분할 것](terms/stiffness.md) · [stiff (수치적으로 뻣뻣하다)](terms/stiff.md) ·
+[★ 그래프 컬러링 — 현대적 답](terms/graph-coloring.md) · [★ 강성 (stiffness) — 강도·경도·인성과 구분할 것](terms/stiffness.md) · [stiff (수치적으로 뻣뻣하다)](terms/stiff.md) · [크리프 (creep)](terms/creep.md) ·
 [PBD의 강성 문제와 compliance](terms/pbd-stiffness-compliance.md) · [우리 프로젝트에서 강성은 거의 안 중요하다](terms/stiffness-in-our-project.md) ·
-[명시적 / 암시적 (explicit / implicit)](terms/explicit-implicit.md) · [대칭 선형계](terms/symmetric-linear-system.md) · [약압축성 (weakly compressible) / 상태방정식](terms/weakly-compressible.md) ·
+[명시적 / 암시적 (explicit / implicit)](terms/explicit-implicit.md) · [시간 적분 (time integration)](terms/time-integration.md) · [대칭 선형계](terms/symmetric-linear-system.md) · [약압축성 (weakly compressible) / 상태방정식](terms/weakly-compressible.md) ·
 [하이트필드 (heightfield) ★](terms/heightfield.md) · [가상 파이프 (virtual pipes)](terms/virtual-pipes.md) · [반라그랑주 이류 (semi-Lagrangian advection)](terms/semi-lagrangian-advection.md) ·
 [자유표면 (free surface)](terms/free-surface.md) · [현상론적 (phenomenological)](terms/phenomenological.md) · [슬러리 (slurry) / 이류 (mudflow)](terms/slurry-mudflow.md)
 
@@ -58,7 +60,7 @@
 [풍파 (wind sea) vs 너울 (swell) ★](terms/wind-sea-vs-swell.md) · [분산 정렬 (dispersive sorting)](terms/dispersive-sorting.md) ·
 [천수 변형 (shoaling)](terms/shoaling.md) · [굴절 (refraction)](terms/refraction.md) · [수심 제한 쇄파 ★](terms/depth-limited-breaking.md) ·
 [Iribarren 수 (surf similarity parameter, ξ)](terms/iribarren-number.md) · [처오름 (runup, R) ★](terms/runup.md) · [처오름 상승 (wave setup)](terms/wave-setup.md) ·
-[파군 (wave group / set)](terms/wave-group.md) · [장주기파 (infragravity wave)](terms/infragravity-wave.md) · [Shields 파라미터](terms/shields-parameter.md)
+[파군 (wave group / set)](terms/wave-group.md) · [스펙트럼 대역 (spectral band)](terms/spectral-band.md) · [장주기파 (infragravity wave)](terms/infragravity-wave.md) · [Shields 파라미터](terms/shields-parameter.md)
 
 **[8. 모래알 자체](#8-모래알-자체)**  
 [왜 석영인가](terms/why-quartz.md) · [구성 성분](terms/sand-composition.md) · [중광물 줄무늬 (placer)](terms/placer.md) · [시뮬레이션에 들어가는 물성 4가지](terms/sand-properties.md) ·
@@ -77,6 +79,7 @@
 | **[Hencky 변형 (로그 변형)](terms/hencky-strain.md)** | `ε = ln(늘어난 비율)`. |
 | **[연속체 (continuum)](terms/continuum.md)** | 알갱이를 하나씩 세지 않고 공간에 퍼진 밀도·속도 장(field) 으로 취급하는 관점. |
 | **[등방성 (isotropy) ★](terms/isotropy.md)** | *방향에 따라 성질이 달라지지 않음. |
+| **[구조 이방성 / 조직 (fabric anisotropy) ★](terms/anisotropy-fabric.md)** | 지금 이 순간 접촉이 어느 방향으로 쏠려 있는가. 물성이 아니라 상태. 전단강도가 여기서 나온다. |
 | **[구성 모델 (constitutive model)](terms/constitutive-model.md)** | "이만큼 변형시키면 내부에 이만큼 응력이 생긴다"는 관계식. |
 
 ## 2. 소성과 항복
@@ -96,6 +99,7 @@
 | **[Reynolds 팽창 (Reynolds dilatancy)](terms/reynolds-dilatancy.md)** | *촘촘히 맞물린 모래를 옆으로 밀면 부피가 늘어난다. |
 | **[팽창을 시뮬레이션이 읽어야 하는 이유](terms/why-simulate-dilation.md)** | *(a) 팽창하면 약해진다 — 알갱이가 제대로 안 닿아 힘을 전달 못 함. |
 | **[★ 다지기 vs 밟기 — 방향이 반대다](terms/tamping-vs-stomping.md)** | *둘 다 힘을 주는데 왜 반대인가 → 시작 상태가 조밀한가 느슨한가. |
+| **[순차 파단 (progressive failure)](terms/progressive-failure.md)** | 결합이 동시에 끊어지지 않고, 하나 끊어질 때마다 하중이 이웃으로 넘어가 차례로 끊어지는 것. 덩어리 붕괴의 정체. |
 | **[임계상태 (critical state)](terms/critical-state.md)** | 촘촘한 모래를 계속 밀면 → 팽창해서 느슨해짐 느슨한 모래를 계속 밀면 → 수축해서 촘촘해짐 양쪽 다 같은 밀도로 수렴한다 = 임계상태 |
 | **[열침식 (thermal erosion)](terms/thermal-erosion.md)** | 하이트필드에서의 안식각. |
 
@@ -157,6 +161,7 @@
 | 용어 | |
 |---|---|
 | **[라그랑주 vs 오일러 (MPM의 전제)](terms/lagrangian-vs-eulerian.md)** | 재료를 따라다니느냐(라그랑주) 고정 격자에서 지켜보느냐(오일러). MPM은 둘을 섞은 것. |
+| **[FEM 메시 (유한요소 메시)](terms/fem.md)** | 물체를 사면체로 쪼개 꼭짓점을 미지수로 푸는 것. 메시가 재료에 붙어 있어 크게 흐르면 뒤틀려 터진다 — MPM·PBD가 둘 다 "이게 아닌 것"으로 자기를 설명한다. |
 | **[MPM (Material Point Method)](terms/mpm.md)** | *재료 정보는 입자가 들고 다니고, 계산은 격자에서 한다. |
 | **[★ MPM의 입자 ≠ 모래알](terms/mpm-particle-vs-grain.md)** | 가장 헷갈리는 지점. "입자를 쓰는데 왜 연속체냐?" |
 | **[MPM 계보](terms/mpm-lineage.md)** | *입문 교재: Jiang, Schroeder, Teran, Stomakhin, Selle (2016), "The Material Point Method… |
@@ -170,11 +175,15 @@
 | **[shape matching](terms/shape-matching.md)** | 입자 덩어리를 원래 형태로 되돌리는 제약. |
 | **[Gauss-Seidel / Jacobi / SOR ★](terms/gauss-seidel-jacobi-sor.md)** | 제약이 여러 개인데 서로 얽혀 있어 한 번에 다 만족시킬 수 없다 → 반복해서 오차를 줄인다. |
 | **[★ 그래프 컬러링 — 현대적 답](terms/graph-coloring.md)** | *아이디어: 서로 영향을 안 주는 것끼리 묶으면 동시에 처리해도 된다. |
+| **[워밍 스타트 (warm starting)](terms/warm-starting.md)** | 직전 프레임의 λ를 초기값으로 쓴다. 수렴을 빠르게 하는 게 아니라 수렴한 상태를 프레임 간에 보존하는 것. |
+| **[질량 스케일링 (mass scaling)](terms/mass-scaling.md)** | 솔버 안에서만 유효 질량을 손대 나쁜 질량비를 완화. 교정 실험을 오염시키므로 순서가 중요하다. |
 | **[★ 강성 (stiffness) — 강도·경도·인성과 구분할 것](terms/stiffness.md)** | Unity Spring Joint의 `spring`, 천 시뮬의 `stiffness` 슬라이더. |
 | **[stiff (수치적으로 뻣뻣하다)](terms/stiff.md)** | 힘이 너무 강해 타임스텝을 작게 안 하면 발산하는 상태. |
+| **[크리프 (creep)](terms/creep.md)** | 부서지지 않는 하중인데도 시간이 지나며 변형이 쌓이는 것. 물리 크리프는 잦아들고 수치 크리프는 일정하다 — 그게 판별법이다. |
 | **[PBD의 강성 문제와 compliance](terms/pbd-stiffness-compliance.md)** | PBD는 `k`를 아예 안 쓴다. |
 | **[우리 프로젝트에서 강성은 거의 안 중요하다](terms/stiffness-in-our-project.md)** | 모래는 탄성 구간이 극히 좁다. |
 | **[명시적 / 암시적 (explicit / implicit)](terms/explicit-implicit.md)** | 명시적: 현재 상태로 힘 계산 → 다음 상태. |
+| **[시간 적분 (time integration) — 적분기의 종류](terms/time-integration.md)** | 가속도에서 위치까지 dt씩 끊어 메우는 방법. 전진/준암시적 오일러 · Verlet · RK4 · 후진 오일러. 게임 표준은 준암시적 오일러. |
 | **[대칭 선형계](terms/symmetric-linear-system.md)** | `Ax = b`에서 A가 대칭인 경우. |
 | **[약압축성 (weakly compressible) / 상태방정식](terms/weakly-compressible.md)** | 물이 아주 조금은 압축되게 허용. |
 | **[하이트필드 (heightfield) ★](terms/heightfield.md)** | *2D 격자의 각 칸이 높이값 하나만 들고 있는 지형 표현. |
@@ -202,6 +211,7 @@
 | **[처오름 (runup, R) ★](terms/runup.md)** | 파도가 부서진 뒤 물이 해변을 올라오는 높이. |
 | **[처오름 상승 (wave setup)](terms/wave-setup.md)** | 부서진 파도가 물을 해안으로 밀어붙여 평균 수위 자체를 올리는 것. |
 | **[파군 (wave group / set)](terms/wave-group.md)** | 주파수가 약간 다른 파도들이 겹쳐 생기는 맥놀이. |
+| **[스펙트럼 대역 (spectral band)](terms/spectral-band.md)** | 연속 스펙트럼 S(f)를 사인파 N개로 쪼갠 조각. 대역 하나의 넓이 S·df가 사인파 하나의 에너지가 된다. |
 | **[장주기파 (infragravity wave)](terms/infragravity-wave.md)** | 20~200초의 아주 긴 파동. |
 | **[Shields 파라미터](terms/shields-parameter.md)** | 알갱이가 움직이기 시작하는 기준. |
 

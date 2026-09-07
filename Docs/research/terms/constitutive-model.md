@@ -7,4 +7,4 @@
 
 ---
 
-**관련 문서** — [유변학 (rheology)](rheology.md) · [응력 (stress, σ)](stress.md)
+**관련 문서** — [FEM 메시 (유한요소 메시)](fem.md) · [★ MPM의 입자 ≠ 모래알](mpm-particle-vs-grain.md) · [유변학 (rheology)](rheology.md) · [응력 (stress, σ)](stress.md)

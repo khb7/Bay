@@ -2,7 +2,7 @@
 
 > 용어 하나에 문서 하나. 주제별로 보려면 [../glossary.md](../glossary.md) · [../glossary-impl.md](../glossary-impl.md).
 
-총 **151개**.
+총 **167개**.
 
 | 용어 | 구분 | 소속 |
 |---|---|---|
@@ -10,9 +10,11 @@
 | [1단계 (등속 건조기, constant-rate period)](drying-stage-1.md) | 물리 | 4. 증발 / 건조 |
 | [2단계 (감속 건조기, falling-rate period)](drying-stage-2.md) | 물리 | 4. 증발 / 건조 |
 | [CFL 조건 (Courant–Friedrichs–Lewy)](cfl-condition.md) | 구현 | 2. GPU 실행 모델 |
+| [Custom HLSL 노드 (Niagara)](custom-hlsl.md) | 구현 | 2. GPU 실행 모델 |
 | [Darcy의 법칙](darcy-law.md) | 물리 | 3. 다공성 매질 / 물의 이동 |
 | [Drucker-Prager](drucker-prager.md) | 물리 | 2. 소성과 항복 |
 | [Dupuit 가정](dupuit-assumption.md) | 물리 | 5. 해변 |
+| [FEM 메시 (유한요소 메시)](fem.md) | 물리 | 6. 수치해석 / 시뮬레이션 기법 |
 | [GPU 리드백 (`FRHIGPUBufferReadback`)](gpu-readback.md) | 구현 | 2. GPU 실행 모델 |
 | [Gauss-Seidel / Jacobi / SOR ★](gauss-seidel-jacobi-sor.md) | 물리 | 6. 수치해석 / 시뮬레이션 기법 |
 | [Hazen 관계 / 투수계수와 입도](hazen-relation.md) | 물리 | 5. 해변 |
@@ -35,6 +37,7 @@
 | [SVD의 다른 용도](svd-other-uses.md) | 물리 | 6. 수치해석 / 시뮬레이션 기법 |
 | [Shields 파라미터](shields-parameter.md) | 물리 | 7. 파도 |
 | [Simulation Stages (Niagara)](simulation-stages.md) | 구현 | 2. GPU 실행 모델 |
+| [Vertex Factory](vertex-factory.md) | 구현 | 5. 표현과 렌더링 |
 | [Virtual Heightfield Mesh (VHM)](virtual-heightfield-mesh.md) | 구현 | 5. 표현과 렌더링 |
 | [WPO (World Position Offset)](wpo.md) | 구현 | 5. 표현과 렌더링 |
 | [XPBD](xpbd.md) | 물리 | 6. 수치해석 / 시뮬레이션 기법 |
@@ -62,6 +65,7 @@
 | [⚠ 압력을 명시적으로 모델링하지 않는 이유 (설계 결정)](why-no-explicit-pressure.md) | 물리 | 5. 해변 |
 | [⚠ 점착력 vs 접착력 — 용어 정리](cohesion-vs-adhesion.md) | 물리 | 2. 소성과 항복 |
 | [가상 파이프 (virtual pipes)](virtual-pipes.md) | 물리 | 6. 수치해석 / 시뮬레이션 기법 |
+| [간접 드로우 (DrawIndirect)](draw-indirect.md) | 구현 | 5. 표현과 렌더링 |
 | [건조 전선 (drying front)](drying-front.md) | 물리 | 4. 증발 / 건조 |
 | [결정론 (determinism)](determinism.md) | 구현 | 6. 자원 관리 |
 | [경계 조건 (boundary condition)](boundary-condition.md) | 구현 | 3. 격자 시뮬레이션 |
@@ -71,6 +75,7 @@
 | [공극률 φ (porosity) ★](porosity.md) | 물리 | 3. 다공성 매질 / 물의 이동 |
 | [구성 모델 (constitutive model)](constitutive-model.md) | 물리 | 1. 역학 기초 |
 | [구성 성분](sand-composition.md) | 물리 | 8. 모래알 자체 |
+| [구조 이방성 / 조직 (fabric anisotropy) ★](anisotropy-fabric.md) | 물리 | 1. 역학 기초 |
 | [굴절 (refraction)](refraction.md) | 물리 | 7. 파도 |
 | [극분해 (polar decomposition)](polar-decomposition.md) | 물리 | 6. 수치해석 / 시뮬레이션 기법 |
 | [깊이 버퍼 픽킹 (depth picking)](depth-picking.md) | 구현 | 5. 표현과 렌더링 |
@@ -81,6 +86,9 @@
 | [등방성 (isotropy) ★](isotropy.md) | 물리 | 1. 역학 기초 |
 | [디스패치 (dispatch)](dispatch.md) | 구현 | 2. GPU 실행 모델 |
 | [라그랑주 vs 오일러 (MPM의 전제)](lagrangian-vs-eulerian.md) | 물리 | 6. 수치해석 / 시뮬레이션 기법 |
+| [라그랑주 승수 (Lagrange multiplier, λ)](lagrange-multiplier.md) | 구현 | 4. 입자 시뮬레이션 |
+| [레이어드 하이트필드 (layered heightfield)](layered-heightfield.md) | 구현 | 3. 격자 시뮬레이션 |
+| [렌더 스레드 / SceneProxy / MeshBatch](render-thread-proxy.md) | 구현 | 5. 표현과 렌더링 |
 | [리턴 매핑 (return mapping)](return-mapping.md) | 구현 | 4. 입자 시뮬레이션 |
 | [마찰각 (friction angle)](friction-angle.md) | 물리 | 2. 소성과 항복 |
 | [명시적 / 암시적 (explicit / implicit)](explicit-implicit.md) | 물리 | 6. 수치해석 / 시뮬레이션 기법 |
@@ -100,8 +108,11 @@
 | [소성 = 클램프 ★](plasticity-as-clamp.md) | 물리 | 2. 소성과 항복 |
 | [수력 침식 (hydraulic erosion)](hydraulic-erosion.md) | 구현 | 3. 격자 시뮬레이션 |
 | [수심 제한 쇄파 ★](depth-limited-breaking.md) | 물리 | 7. 파도 |
+| [순차 파단 (progressive failure)](progressive-failure.md) | 물리 | 2. 소성과 항복 |
 | [스탬프 (stamp)](stamp.md) | 구현 | 6. 자원 관리 |
+| [스펙트럼 대역 (spectral band) — 연속 스펙트럼을 사인파 N개로](spectral-band.md) | 물리 | 7. 파도 |
 | [슬러리 (slurry) / 이류 (mudflow)](slurry-mudflow.md) | 물리 | 6. 수치해석 / 시뮬레이션 기법 |
+| [시간 적분 (time integration) — 적분기의 종류](time-integration.md) | 물리 | 6. 수치해석 / 시뮬레이션 기법 |
 | [시뮬레이션에 들어가는 물성 4가지](sand-properties.md) | 물리 | 8. 모래알 자체 |
 | [안식각 (angle of repose)](angle-of-repose.md) | 물리 | 2. 소성과 항복 |
 | [약압축성 (weakly compressible) / 상태방정식](weakly-compressible.md) | 물리 | 6. 수치해석 / 시뮬레이션 기법 |
@@ -112,6 +123,8 @@
 | [완전발달해상 (fully developed sea)](fully-developed-sea.md) | 물리 | 7. 파도 |
 | [왜 석영인가](why-quartz.md) | 물리 | 8. 모래알 자체 |
 | [우리 프로젝트에서 강성은 거의 안 중요하다](stiffness-in-our-project.md) | 물리 | 6. 수치해석 / 시뮬레이션 기법 |
+| [워밍 스타트 (warm starting)](warm-starting.md) | 물리 | 6. 수치해석 / 시뮬레이션 기법 |
+| [유변학 (rheology)](rheology.md) | 물리 | 3. 다공성 매질 / 물의 이동 |
 | [유의파고 (significant wave height, H_s)](significant-wave-height.md) | 물리 | 7. 파도 |
 | [유효 포화도 Se / 흡입력 / 투수계수](effective-saturation.md) | 물리 | 4. 증발 / 건조 |
 | [응력 (stress, σ)](stress.md) | 물리 | 1. 역학 기초 |
@@ -126,6 +139,7 @@
 | [중광물 줄무늬 (placer)](placer.md) | 물리 | 8. 모래알 자체 |
 | [지연 (latency)](latency.md) | 구현 | 2. GPU 실행 모델 |
 | [지하수면 (water table)](water-table.md) | 물리 | 5. 해변 |
+| [질량 스케일링 (mass scaling)](mass-scaling.md) | 물리 | 6. 수치해석 / 시뮬레이션 기법 |
 | [채널 패킹 (channel packing)](channel-packing.md) | 구현 | 2. GPU 실행 모델 |
 | [처오름 (runup, R) ★](runup.md) | 물리 | 7. 파도 |
 | [처오름 상승 (wave setup)](wave-setup.md) | 물리 | 7. 파도 |
@@ -136,6 +150,8 @@
 | [침투력 / 유효 중량 (seepage force / effective weight)](seepage-force.md) | 물리 | 5. 해변 |
 | [컴퓨트 셰이더 (compute shader)](compute-shader.md) | 구현 | 2. GPU 실행 모델 |
 | [컴플라이언스 (compliance)](compliance.md) | 구현 | 4. 입자 시뮬레이션 |
+| [쿨롱 마찰 (Coulomb friction)](coulomb-friction.md) | 구현 | 4. 입자 시뮬레이션 |
+| [크리프 (creep)](creep.md) | 물리 | 6. 수치해석 / 시뮬레이션 기법 |
 | [탄성 / 소성 / 탄소성](elastic-plastic.md) | 물리 | 2. 소성과 항복 |
 | [투과율 k (permeability)](permeability.md) | 물리 | 3. 다공성 매질 / 물의 이동 |
 | [특성 길이 L_C (characteristic length)](characteristic-length.md) | 물리 | 4. 증발 / 건조 |

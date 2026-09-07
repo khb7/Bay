@@ -48,4 +48,4 @@ Unity Spring Joint의 `spring`, 천 시뮬의 `stiffness` 슬라이더.
 
 ---
 
-**관련 문서** — [MPM (Material Point Method)](mpm.md) · [PBD (Position Based Dynamics)](pbd.md) · [XPBD](xpbd.md) · [stiff (수치적으로 뻣뻣하다)](stiff.md) · [등방성 (isotropy) ★](isotropy.md) · [변형 (strain, ε)](strain.md) · [안식각 (angle of repose)](angle-of-repose.md) · [우리 프로젝트에서 강성은 거의 안 중요하다](stiffness-in-our-project.md) · [점착력 (cohesion, c)](cohesion.md) · [컴플라이언스 (compliance)](compliance.md) · [항복면 (yield surface) ★](yield-surface.md)
+**관련 문서** — [MPM (Material Point Method)](mpm.md) · [PBD (Position Based Dynamics)](pbd.md) · [XPBD](xpbd.md) · [stiff (수치적으로 뻣뻣하다)](stiff.md) · [등방성 (isotropy) ★](isotropy.md) · [라그랑주 승수 (Lagrange multiplier, λ)](lagrange-multiplier.md) · [변형 (strain, ε)](strain.md) · [안식각 (angle of repose)](angle-of-repose.md) · [우리 프로젝트에서 강성은 거의 안 중요하다](stiffness-in-our-project.md) · [점착력 (cohesion, c)](cohesion.md) · [컴플라이언스 (compliance)](compliance.md) · [쿨롱 마찰 (Coulomb friction)](coulomb-friction.md) · [항복면 (yield surface) ★](yield-surface.md)

@@ -74,4 +74,4 @@
 
 ---
 
-**관련 문서** — [Reynolds 팽창 (Reynolds dilatancy)](reynolds-dilatancy.md) · [모세관 다리 (capillary bridge)](capillary-bridge.md)
+**관련 문서** — [Reynolds 팽창 (Reynolds dilatancy)](reynolds-dilatancy.md) · [구조 이방성 / 조직 (fabric anisotropy) ★](anisotropy-fabric.md) · [모세관 다리 (capillary bridge)](capillary-bridge.md)

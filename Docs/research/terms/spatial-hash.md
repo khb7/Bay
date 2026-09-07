@@ -40,4 +40,4 @@ for (uint j = cellStart[key]; j < cellEnd[key]; j++) { ... }
 
 ---
 
-**관련 문서** — [Neighbor Grid3D (Niagara) — 균일 격자](neighbor-grid3d.md) · [예산 (budget)](budget.md) · [제약 (constraint)](constraint.md)
+**관련 문서** — [Neighbor Grid3D (Niagara) — 균일 격자](neighbor-grid3d.md) · [예산 (budget)](budget.md) · [워밍 스타트 (warm starting)](warm-starting.md) · [제약 (constraint)](constraint.md)

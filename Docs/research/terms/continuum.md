@@ -18,4 +18,4 @@
 
 ---
 
-**관련 문서** — [★ MPM의 입자 ≠ 모래알](mpm-particle-vs-grain.md) · [리턴 매핑 (return mapping)](return-mapping.md) · [소성 = 클램프 ★](plasticity-as-clamp.md) · [열침식 (thermal erosion)](thermal-erosion.md)
+**관련 문서** — [★ MPM의 입자 ≠ 모래알](mpm-particle-vs-grain.md) · [리턴 매핑 (return mapping)](return-mapping.md) · [소성 = 클램프 ★](plasticity-as-clamp.md) · [열침식 (thermal erosion)](thermal-erosion.md) · [쿨롱 마찰 (Coulomb friction)](coulomb-friction.md)

@@ -24,4 +24,4 @@ talusAngle = lerp(34°, 90°, wetness);   // 젖으면 더 가파른 각을 버�
 
 ---
 
-**관련 문서** — [Simulation Stages (Niagara)](simulation-stages.md) · [리턴 매핑 (return mapping)](return-mapping.md) · [안식각 (angle of repose)](angle-of-repose.md) · [연속체 (continuum)](continuum.md) · [점착력 (cohesion, c)](cohesion.md) · [포화도 (saturation)](saturation.md) · [하이트필드 (heightfield) ★](heightfield.md) · [항복면 (yield surface) ★](yield-surface.md)
+**관련 문서** — [Simulation Stages (Niagara)](simulation-stages.md) · [레이어드 하이트필드 (layered heightfield)](layered-heightfield.md) · [리턴 매핑 (return mapping)](return-mapping.md) · [안식각 (angle of repose)](angle-of-repose.md) · [연속체 (continuum)](continuum.md) · [점착력 (cohesion, c)](cohesion.md) · [포화도 (saturation)](saturation.md) · [하이트필드 (heightfield) ★](heightfield.md) · [항복면 (yield surface) ★](yield-surface.md)

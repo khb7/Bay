@@ -64,6 +64,14 @@ Gauss가 1823년 편지에 쓴 것을 Seidel이 1874년 출판.
 
 GPU는 Jacobi + 위 두 보정을 쓴다.
 
+느린 수렴을 반복 횟수로만 사지 않는 우회로가 셋 있다.
+
+| 방법 | 무엇을 하나 |
+|---|---|
+| [워밍 스타트](warm-starting.md) | 수렴한 상태를 프레임 간에 보존 — 반복 몇 회를 되돌려 받는다 |
+| [질량 스케일링](mass-scaling.md) | 질량비가 만드는 나쁜 조건수를 완화 |
+| 모멘텀 항 (Frâncu 2014) | 직전 반복의 보정량을 더해 heavy-ball 가속. 단순 SOR 튜닝보다 낫다 |
+
 ---
 
-**관련 문서** — [제약 (constraint)](constraint.md)
+**관련 문서** — [Simulation Stages (Niagara)](simulation-stages.md) · [순차 파단 (progressive failure)](progressive-failure.md) · [워밍 스타트 (warm starting)](warm-starting.md) · [제약 (constraint)](constraint.md) · [질량 스케일링 (mass scaling)](mass-scaling.md)

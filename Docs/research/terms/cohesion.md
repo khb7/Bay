@@ -48,6 +48,52 @@ c ∝ χ·ψ = P_entry · Se^(1−1/λ)      모래는 λ≈2~5 → 지수 양�
 공극 크기 분포와 메니스커스 병합 통계까지 모델링해야 하는 작업이라
 **그래픽스에서 아무도 안 한다.** Tampubolon 2017조차 "[현상론적](phenomenological.md)"이라 인정하고 넘어간다.
 
+## 얼마나 큰 값인가 — 그리고 `F`·`σ_t` 와 무엇이 다른가
+
+혼동하기 쉬운 셋이 있다. **단위가 곧 구분선이다.**
+
+| | 단위 | 무엇 | 누구의 성질 |
+|---|---|---|---|
+| `F` | **N** (힘) | 결합 **하나**가 당기는 힘 | 알갱이 두 개 사이 |
+| `σ_t` | **Pa** | 똑바로 잡아 뜯는 데 필요한 응력 | 재료 전체 |
+| **`c`** | **Pa** | **미끄러지지 않게 붙잡는 힘** | 재료 전체 |
+
+```
+ F [N]  ──Rumpf──▶  σ_t [Pa]  ──Mohr-Coulomb──▶  c [Pa]
+ 2.5 N              1.5 kPa                      ≈ 1.4 kPa
+```
+
+마지막 환산은 `σ_t = 2c·cosφ/(1+sinφ)`. **`φ = 34°` 면 계수가 1.06 이라 `σ_t ≈ c`** —
+자릿수로는 같게 봐도 된다. ([papers.md B-S2](../papers.md) 의 2.5 N 이 첫 화살표)
+
+> ⚠ **코드의 `cohesion` 변수는 이 `c` 가 아니다.** `α = 1/cohesion` 은 [컴플라이언스](compliance.md)라
+> 물리 단위가 없다. 문헌은 전부 Pa 로 말하므로 **환산율을 실측해야** 둘을 비교할 수 있다
+> (M0 3-3). 문서에서 `c[Pa]` 라고 쓰는 것은 그 구분을 위해서다.
+
+### 체감
+
+```
+ 1.5 kPa = 1500 N/m² = 0.15 N/cm²
+         = 손가락(1cm²)으로 15g 무게만큼 누르면 부서진다
+```
+
+| | |
+|---|---|
+| **젖은 모래 `c`** | **1~3 kPa** |
+| 대기압 | 101 kPa (**70배**) |
+| 자동차 타이어 | 220 kPa |
+| 콘크리트 압축강도 | 30,000 kPa |
+
+**젖은 모래는 그 정도로 약하다.** 형태로 환산하면 더 와닿는다.
+
+```
+ H_c = (4c/γ)·tan(45° + φ/2)          수직 절토 한계 높이
+     = (4×1500 / 15,700) × 1.88  ≈  72 cm       c = 1.5 kPa, φ = 34°
+```
+
+**`c = 1.5 kPa` 는 "수직 벽이 72cm 까지 선다"와 같은 말**이고,
+거꾸로 **무너지는 높이를 재면 `c` 가 나온다** — 그게 M0 3-3 의 원리다.
+
 ## 우리 선택: 하이브리드
 | | 어떻게 | 왜 |
 |---|---|---|
@@ -64,4 +110,4 @@ float cohesion = cohesionMax(grainSize) * cohesionCurve.Evaluate(W);
 
 ---
 
-**관련 문서** — [Hjulström 곡선](hjulstrom-curve.md) · [XPBD](xpbd.md) · [★ 강성 (stiffness) — 강도·경도·인성과 구분할 것](stiffness.md) · [⚠ 압력을 명시적으로 모델링하지 않는 이유 (설계 결정)](why-no-explicit-pressure.md) · [⚠ 점착력 vs 접착력 — 용어 정리](cohesion-vs-adhesion.md) · [리턴 매핑 (return mapping)](return-mapping.md) · [열침식 (thermal erosion)](thermal-erosion.md) · [우리 프로젝트에서 강성은 거의 안 중요하다](stiffness-in-our-project.md) · [제약 (constraint)](constraint.md) · [포화도 (saturation)](saturation.md) · [현상론적 (phenomenological)](phenomenological.md)
+**관련 문서** — [Hjulström 곡선](hjulstrom-curve.md) · [XPBD](xpbd.md) · [★ MPM의 입자 ≠ 모래알](mpm-particle-vs-grain.md) · [★ 강성 (stiffness) — 강도·경도·인성과 구분할 것](stiffness.md) · [⚠ 압력을 명시적으로 모델링하지 않는 이유 (설계 결정)](why-no-explicit-pressure.md) · [⚠ 점착력 vs 접착력 — 용어 정리](cohesion-vs-adhesion.md) · [라그랑주 승수 (Lagrange multiplier, λ)](lagrange-multiplier.md) · [리턴 매핑 (return mapping)](return-mapping.md) · [열침식 (thermal erosion)](thermal-erosion.md) · [우리 프로젝트에서 강성은 거의 안 중요하다](stiffness-in-our-project.md) · [제약 (constraint)](constraint.md) · [컴플라이언스 (compliance)](compliance.md) · [크리프 (creep)](creep.md) · [포화도 (saturation)](saturation.md) · [현상론적 (phenomenological)](phenomenological.md)

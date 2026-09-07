@@ -16,4 +16,4 @@
 
 ---
 
-**관련 문서** — [⚠ 점착력 vs 접착력 — 용어 정리](cohesion-vs-adhesion.md) · [리턴 매핑 (return mapping)](return-mapping.md) · [유변학 (rheology)](rheology.md) · [항복면 (yield surface) ★](yield-surface.md)
+**관련 문서** — [⚠ 점착력 vs 접착력 — 용어 정리](cohesion-vs-adhesion.md) · [구조 이방성 / 조직 (fabric anisotropy) ★](anisotropy-fabric.md) · [리턴 매핑 (return mapping)](return-mapping.md) · [유변학 (rheology)](rheology.md) · [쿨롱 마찰 (Coulomb friction)](coulomb-friction.md) · [항복면 (yield surface) ★](yield-surface.md)

@@ -17,19 +17,19 @@
 
 **[2. GPU 실행 모델](#2-gpu-실행-모델)**  
 [컴퓨트 셰이더 (compute shader)](terms/compute-shader.md) · [디스패치 (dispatch)](terms/dispatch.md) · [패스 (pass)](terms/pass.md) ·
-[Simulation Stages (Niagara)](terms/simulation-stages.md) · [핑퐁 (ping-pong)](terms/ping-pong.md) · [Render Target / SRV / UAV](terms/render-target-srv-uav.md) ·
+[Simulation Stages (Niagara)](terms/simulation-stages.md) · [Custom HLSL 노드 (Niagara)](terms/custom-hlsl.md) · [핑퐁 (ping-pong)](terms/ping-pong.md) · [Render Target / SRV / UAV](terms/render-target-srv-uav.md) ·
 [채널 패킹 (channel packing)](terms/channel-packing.md) · [uniform / 상수 버퍼](terms/uniform-buffer.md) · [CFL 조건 (Courant–Friedrichs–Lewy)](terms/cfl-condition.md) ·
 [서브스텝 (substep)](terms/substep.md) · [파이프라인 스톨 (pipeline stall)](terms/pipeline-stall.md) · [동기 / 비동기 (sync / async)](terms/sync-async.md) ·
 [지연 (latency)](terms/latency.md) · [배리어 (barrier)](terms/barrier.md) · [자원 상태 전이 (resource transition)](terms/resource-transition.md) ·
 [RDG (Render Dependency Graph)](terms/rdg.md) · [GPU 리드백 (`FRHIGPUBufferReadback`)](terms/gpu-readback.md)
 
 **[3. 격자 시뮬레이션](#3-격자-시뮬레이션)**  
-[하이트필드 (heightfield)](terms/heightfield.md) · [가상 파이프 (virtual pipes)](terms/virtual-pipes.md) · [반라그랑주 이류 (semi-Lagrangian advection)](terms/semi-lagrangian-advection.md) ·
+[하이트필드 (heightfield)](terms/heightfield.md) · [레이어드 하이트필드 (layered heightfield)](terms/layered-heightfield.md) · [가상 파이프 (virtual pipes)](terms/virtual-pipes.md) · [반라그랑주 이류 (semi-Lagrangian advection)](terms/semi-lagrangian-advection.md) ·
 [열침식 (thermal erosion)](terms/thermal-erosion.md) · [수력 침식 (hydraulic erosion)](terms/hydraulic-erosion.md) · [경계 조건 (boundary condition)](terms/boundary-condition.md)
 
 **[4. 입자 시뮬레이션](#4-입자-시뮬레이션)**  
-[PBD (Position Based Dynamics)](terms/pbd.md) · [XPBD (eXtended PBD)](terms/xpbd.md) · [제약 (constraint)](terms/constraint.md) ·
-[컴플라이언스 (compliance)](terms/compliance.md) · [반복 (iteration) / 완화 (relaxation)](terms/iteration-relaxation.md) · [Jacobi vs Gauss-Seidel](terms/gauss-seidel-jacobi-sor.md) ·
+[PBD (Position Based Dynamics)](terms/pbd.md) · [XPBD (eXtended PBD)](terms/xpbd.md) · [제약 (constraint)](terms/constraint.md) · [쿨롱 마찰 (Coulomb friction)](terms/coulomb-friction.md) ·
+[컴플라이언스 (compliance)](terms/compliance.md) · [라그랑주 승수 (Lagrange multiplier, λ)](terms/lagrange-multiplier.md) · [반복 (iteration) / 완화 (relaxation)](terms/iteration-relaxation.md) · [Jacobi vs Gauss-Seidel](terms/gauss-seidel-jacobi-sor.md) ·
 [이웃 탐색 (neighbor search)](terms/neighbor-search.md) · [Neighbor Grid3D (Niagara) — 균일 격자](terms/neighbor-grid3d.md) ·
 [공간 해시 (spatial hash) — 정렬 기반, 이 프로젝트의 선택](terms/spatial-hash.md) · [radix sort](terms/radix-sort.md) · [prefix sum (scan)](terms/prefix-sum.md) ·
 [리턴 매핑 (return mapping)](terms/return-mapping.md)
@@ -78,6 +78,7 @@
 | **[디스패치 (dispatch)](terms/dispatch.md)** | 컴퓨트 셰이더를 실행시키는 호출. |
 | **[패스 (pass)](terms/pass.md)** | 한 스텝을 이루는 계산 단계 하나. |
 | **[Simulation Stages (Niagara)](terms/simulation-stages.md)** | Niagara의 `Particle Update` 하나를 임의 개수의 커스텀 단계로 쪼개는 기능. |
+| **[Custom HLSL 노드 (Niagara)](terms/custom-hlsl.md)** | 그래프 안에 HLSL을 직접 써넣는 노드. 코드가 `.uasset` 바이너리에 살아 diff가 안 되므로 `.ush`로 빼는 게 낫다. |
 | **[핑퐁 (ping-pong)](terms/ping-pong.md)** | 텍스처 두 장을 번갈아 쓰는 기법. |
 | **[Render Target / SRV / UAV](terms/render-target-srv-uav.md)** | `UTextureRenderTarget2D`는 GPU가 쓸 수 있는 텍스처. |
 | **[채널 패킹 (channel packing)](terms/channel-packing.md)** | RGBA 4채널 텍스처 한 장에 서로 다른 물리량 4개를 욱여넣는 것. |
@@ -97,6 +98,7 @@
 | 용어 | |
 |---|---|
 | **[하이트필드 (heightfield)](terms/heightfield.md)** | *2D 격자의 각 칸이 높이값 하나만 들고 있는 지형 표현. |
+| **[레이어드 하이트필드 (layered heightfield)](terms/layered-heightfield.md)** | 컬럼마다 높이 하나 대신 구간 리스트를 저장해 오버행을 값싸게 표현. 다만 붕괴는 여전히 컬럼 간 질량 이동이다. |
 | **[가상 파이프 (virtual pipes)](terms/virtual-pipes.md)** | 인접한 두 셀이 파이프로 연결됐다고 보는 하이트필드 물 흐름 모델. |
 | **[반라그랑주 이류 (semi-Lagrangian advection)](terms/semi-lagrangian-advection.md)** | `s_new(x) = s_old(x − v·dt)` — 속도를 거슬러 올라가 값을 가져옴. |
 | **[열침식 (thermal erosion)](terms/thermal-erosion.md)** | 하이트필드에서의 안식각. |
@@ -110,7 +112,9 @@
 | **[PBD (Position Based Dynamics)](terms/pbd.md)** | 힘을 계산하지 않고 위치를 직접 옮겨 제약을 만족시킨다. |
 | **[XPBD (eXtended PBD)](terms/xpbd.md)** | PBD의 개량. 강성을 물리 단위로 지정 가능. |
 | **[제약 (constraint)](terms/constraint.md)** | 입자들이 지켜야 할 조건. |
+| **[쿨롱 마찰 (Coulomb friction)](terms/coulomb-friction.md)** | 마찰력의 한계가 수직항력에 비례한다. 등호가 아니라 부등호라 클램프로 구현된다. |
 | **[컴플라이언스 (compliance)](terms/compliance.md)** | 강성의 역수 `α = 1/k`. |
+| **[라그랑주 승수 (Lagrange multiplier, λ)](terms/lagrange-multiplier.md)** | 제약을 지키게 하려면 얼마나 세게 밀어야 하는가 — 그 세기. 곧 제약력이라 마찰·파단 판정에 읽어 쓴다. |
 | **[반복 (iteration) / 완화 (relaxation)](terms/iteration-relaxation.md)** | 제약을 한 번 풀면 다른 제약이 깨지므로 여러 번 반복해 수렴시킨다. |
 | **[Jacobi vs Gauss-Seidel](terms/gauss-seidel-jacobi-sor.md)** | 제약이 여러 개인데 서로 얽혀 있어 한 번에 다 만족시킬 수 없다 → 반복해서 오차를 줄인다. |
 | **[이웃 탐색 (neighbor search)](terms/neighbor-search.md)** | 모든 입자 쌍을 검사하면 O(N²) — 20만 개면 400억 쌍이라 불가능하다. |

@@ -90,4 +90,4 @@ PCIe를 통과하는 전송이라 대역폭이 아깝다. **512² RGBA32F 전체
 
 ---
 
-**관련 문서** — [sleep / wake](sleep-wake.md) · [간접 드로우 (DrawIndirect)](draw-indirect.md) · [깊이 버퍼 픽킹 (depth picking)](depth-picking.md) · [동기 / 비동기 (sync / async)](sync-async.md) · [지연 (latency)](latency.md) · [파이프라인 스톨 (pipeline stall)](pipeline-stall.md) · [패스 (pass)](pass.md) · [헬퍼 클래스 / UE5 접두사](helper-class.md)
+**관련 문서** — [sleep / wake](sleep-wake.md) · [간접 드로우 (DrawIndirect)](draw-indirect.md) · [깊이 버퍼 픽킹 (depth picking)](depth-picking.md) · [동기 / 비동기 (sync / async)](sync-async.md) · [지연 (latency)](latency.md) · [컴퓨트 셰이더 (compute shader)](compute-shader.md) · [파이프라인 스톨 (pipeline stall)](pipeline-stall.md) · [패스 (pass)](pass.md) · [헬퍼 클래스 / UE5 접두사](helper-class.md)

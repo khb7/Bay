@@ -7,4 +7,4 @@
 
 ---
 
-**관련 문서** — [Marching Cubes / Surface Nets](marching-cubes.md) · [표면 재구성 (surface reconstruction)](surface-reconstruction.md) · [하이트필드 (heightfield) ★](heightfield.md)
+**관련 문서** — [Marching Cubes / Surface Nets](marching-cubes.md) · [레이어드 하이트필드 (layered heightfield)](layered-heightfield.md) · [표면 재구성 (surface reconstruction)](surface-reconstruction.md) · [하이트필드 (heightfield) ★](heightfield.md)

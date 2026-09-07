@@ -17,7 +17,7 @@
 | [glossary-impl.md](glossary-impl.md) | 구현 용어집 색인 — UE5 / GPU / 시뮬레이션 기법 |
 | [terms/](terms/) | **용어 하나당 문서 하나** (156개). 위 두 색인에서 링크된다 |
 | **[params.md](params.md)** | **파라미터 전체 목록 + 프리셋 4축(모래·파랑·조석·지형) + 날씨** |
-| **[조사 일지](../sessions/01-research.md)** | **어떻게 여기까지 왔나. 전환점과 ★정정 이력.** 세션 기록은 [sessions/](../sessions/) 로 모았다 |
+| **[조사 일지](../sessions/26.09.04-research.md)** | **어떻게 여기까지 왔나. 전환점과 ★정정 이력.** 세션 기록은 [sessions/](../sessions/) 로 모았다 |
 
 ### 새로 읽은 것을 어디에 쓰나 — 규칙 셋
 

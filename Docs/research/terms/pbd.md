@@ -34,4 +34,4 @@ x = p;
 
 ---
 
-**관련 문서** — [MPM 계보](mpm-lineage.md) · [PBD의 강성 문제와 compliance](pbd-stiffness-compliance.md) · [XPBD](xpbd.md) · [shape matching](shape-matching.md) · [★ 강성 (stiffness) — 강도·경도·인성과 구분할 것](stiffness.md) · [⚠ 점착력 vs 접착력 — 용어 정리](cohesion-vs-adhesion.md) · [극분해 (polar decomposition)](polar-decomposition.md) · [제약 (constraint)](constraint.md) · [하이트필드 (heightfield) ★](heightfield.md)
+**관련 문서** — [FEM 메시 (유한요소 메시)](fem.md) · [MPM 계보](mpm-lineage.md) · [PBD의 강성 문제와 compliance](pbd-stiffness-compliance.md) · [XPBD](xpbd.md) · [shape matching](shape-matching.md) · [★ 강성 (stiffness) — 강도·경도·인성과 구분할 것](stiffness.md) · [⚠ 점착력 vs 접착력 — 용어 정리](cohesion-vs-adhesion.md) · [극분해 (polar decomposition)](polar-decomposition.md) · [라그랑주 승수 (Lagrange multiplier, λ)](lagrange-multiplier.md) · [시간 적분 (time integration) — 적분기의 종류](time-integration.md) · [제약 (constraint)](constraint.md) · [쿨롱 마찰 (Coulomb friction)](coulomb-friction.md) · [하이트필드 (heightfield) ★](heightfield.md)

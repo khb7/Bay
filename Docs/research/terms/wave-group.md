@@ -7,4 +7,4 @@
 
 ---
 
-**관련 문서** — [장주기파 (infragravity wave)](infragravity-wave.md)
+**관련 문서** — [jitter](jitter.md) · [장주기파 (infragravity wave)](infragravity-wave.md)

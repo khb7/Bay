@@ -26,4 +26,4 @@ Niagara에 없는 것이고, 입자 계층을 커스텀 컴퓨트로 뺀 주된 
 
 ---
 
-**관련 문서** — [렌더 스레드 / SceneProxy / MeshBatch](render-thread-proxy.md) · [배리어 (barrier)](barrier.md) · [패스 (pass)](pass.md)
+**관련 문서** — [Custom HLSL 노드 (Niagara)](custom-hlsl.md) · [Render Target / SRV / UAV](render-target-srv-uav.md) · [렌더 스레드 / SceneProxy / MeshBatch](render-thread-proxy.md) · [배리어 (barrier)](barrier.md) · [패스 (pass)](pass.md)

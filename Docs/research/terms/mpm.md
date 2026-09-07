@@ -16,7 +16,7 @@
 
 **핵심: 격자는 계산용 임시 작업대다.** 진짜 상태는 전부 입자가 들고 있다.
 > **격자 = 계산기, 입자 = 노트.** 매번 켜서 계산하고, 노트에 적고, 끈다.
-> → **격자가 뒤틀릴 일이 없다.** FEM 메시 뒤틀림 문제가 통째로 사라진다.
+> → **격자가 뒤틀릴 일이 없다.** [FEM 메시](fem.md) 뒤틀림 문제가 통째로 사라진다.
 
 | 원래 문제 | MPM의 해결 |
 |---|---|
@@ -29,4 +29,4 @@
 
 ---
 
-**관련 문서** — [MPM 계보](mpm-lineage.md) · [SVD (특이값 분해) ★](svd.md) · [★ 강성 (stiffness) — 강도·경도·인성과 구분할 것](stiffness.md) · [⚠ 압력을 명시적으로 모델링하지 않는 이유 (설계 결정)](why-no-explicit-pressure.md) · [리턴 매핑 (return mapping)](return-mapping.md) · [이웃 탐색 (neighbor search)](neighbor-search.md) · [하이트필드 (heightfield) ★](heightfield.md)
+**관련 문서** — [FEM 메시 (유한요소 메시)](fem.md) · [MPM 계보](mpm-lineage.md) · [SVD (특이값 분해) ★](svd.md) · [★ 강성 (stiffness) — 강도·경도·인성과 구분할 것](stiffness.md) · [⚠ 압력을 명시적으로 모델링하지 않는 이유 (설계 결정)](why-no-explicit-pressure.md) · [리턴 매핑 (return mapping)](return-mapping.md) · [이웃 탐색 (neighbor search)](neighbor-search.md) · [쿨롱 마찰 (Coulomb friction)](coulomb-friction.md) · [하이트필드 (heightfield) ★](heightfield.md)
