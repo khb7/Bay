@@ -123,6 +123,8 @@ void FSandSpike::SpawnPourBase()
 	}
 
 	const int32 Lat = FMath::CeilToInt(BaseR / S);
+	FRandomStream Rng(Params.Seed ^ 0x9E3779B9u);
+	const float J = Pour.BaseJitter * R2;
 	Pos.Reset();
 	InvMass.Reset();
 	for (int32 iz = 0; iz < FMath::Max(1, Pour.BaseLayers); ++iz)
@@ -136,7 +138,7 @@ void FSandSpike::SpawnPourBase()
 			{
 				continue;
 			}
-			Pos.Add(FVector3f(X, Y, R2 + iz * S));
+			Pos.Add(FVector3f(X + Rng.FRandRange(-J, J), Y + Rng.FRandRange(-J, J), R2 + iz * S + Rng.FRandRange(-J, J)));
 			InvMass.Add(0.f);   // 전부 고정
 		}
 	}
@@ -169,7 +171,8 @@ void FSandSpike::SpawnTiltBox()
 	BoxHalf = FVector3f(Side * S * 0.5f, Side * S * 0.5f, 0.f);
 
 	FRandomStream Rng(Params.Seed);
-	const float Jitter = 0.05f * R2;
+	const float Jitter = Tilt.FreeJitter * R2;
+	const float BaseJ  = Tilt.BaseJitter * R2;
 
 	// 고정층(거친 바닥)을 먼저 넣어 인덱스 앞쪽에 모은다
 	Pos.Reset();
@@ -182,7 +185,7 @@ void FSandSpike::SpawnTiltBox()
 		{
 			const float X = (ix - (Side - 1) * 0.5f) * S;
 			const float Y = (iy - (Side - 1) * 0.5f) * S;
-			const float J = bFixed ? 0.f : Jitter;   // 바닥은 흔들지 않는다
+			const float J = bFixed ? BaseJ : Jitter;   // 격자 바닥은 거칠기가 아니라 템플릿이다 (#25)
 			Pos.Add(FVector3f(
 				X + Rng.FRandRange(-J, J),
 				Y + Rng.FRandRange(-J, J),
@@ -307,6 +310,20 @@ void FSandSpike::BuildContacts(float Dt)
 
 	BuildHash(Range);
 
+	// 워밍 스타트 — 목록을 다시 만들기 전에 살아 있는 λ 를 입자쌍 키로 보관한다
+	WarmLambda.Reset();
+	if (Params.WarmStart > 0.f && Params.bSequentialPositions)
+	{
+		for (const FSandContact& C : Contacts)
+		{
+			if (C.LambdaN > 0.f)
+			{
+				const uint64 Key = ((uint64)FMath::Min(C.I, C.J) << 32) | (uint64)FMath::Max(C.I, C.J);
+				WarmLambda.Add(Key, TPair<float, FVector3f>(C.LambdaN, C.LambdaTan));
+			}
+		}
+	}
+
 	Contacts.Reset();
 
 	int32 Keys[27];
@@ -342,7 +359,17 @@ void FSandSpike::BuildContacts(float Dt)
 				}
 				if (FVector3f::DistSquared(Pos[i], Pos[j]) < Range2)
 				{
-					Contacts.Add({ i, j, 0.f, 0.f });
+					FSandContact NewC{ i, j, 0.f, 0.f };
+					if (WarmLambda.Num() > 0)
+					{
+						const uint64 Key = ((uint64)FMath::Min(i, j) << 32) | (uint64)FMath::Max(i, j);
+						if (const TPair<float, FVector3f>* W = WarmLambda.Find(Key))
+						{
+							NewC.LambdaN   = W->Key;
+							NewC.LambdaTan = W->Value;
+						}
+					}
+					Contacts.Add(NewC);
 				}
 			}
 		}
@@ -899,14 +926,55 @@ void FSandSpike::Step(float Dt)
 		// 미끄러질 때만 쌓여서, 서브스텝·반복을 늘릴수록 예산 μ·λn 만 부풀었다
 		// (실측: ss 5→20 에서 15.2° → 무한, 반복 1→16 에서 8° → 무한).
 		// 스텝 하나를 범위로 잡고 그 안에서 반복을 돌리면 양쪽이 같은 횟수로 쌓인다.
-		for (FSandContact& C : Contacts)
+		const bool bWarm = Params.WarmStart > 0.f && Params.bSequentialPositions;
+		if (bWarm)
 		{
-			C.LambdaN = 0.f;
-			C.LambdaT = 0.f;
+			// 직전 λ 를 속도 임펄스로 먼저 적용한다. 위치는 아래 PredictPositions 가 v·h 로 옮기므로
+			// 정지 접촉이면 중력 이동과 상쇄되어 드리프트가 거의 0 — 반복은 잔차만 고친다.
+			for (FSandContact& C : Contacts)
+			{
+				C.LambdaN   *= Params.WarmStart;
+				C.LambdaTan *= Params.WarmStart;
+				C.LambdaT = 0.f;
+				if (C.LambdaN <= 0.f) { C.LambdaN = 0.f; C.LambdaTan = FVector3f::ZeroVector; continue; }
+				const FVector3f Diff = Pos[C.I] - Pos[C.J];
+				const float Dist = Diff.Size();
+				if (Dist < UE_KINDA_SMALL_NUMBER) { C.LambdaN = 0.f; C.LambdaTan = FVector3f::ZeroVector; continue; }
+				// ★ 닿아 있는 쌍만 워밍한다. 살짝 떨어진 쌍의 λn 은 잔차(Kc/h·gap)가 작아 반복 안에 안 풀리고
+				// 거리를 둔 반발 버팀대로 남는다 — 마찰과 무관한 전단 강도. 실측: μ=0 에서도 39~45° (#23)
+				if (Dist > 2.f * Params.Radius + Params.WarmGapTol * Params.Radius) { C.LambdaN = 0.f; C.LambdaTan = FVector3f::ZeroVector; continue; }
+				const FVector3f N = Diff / Dist;
+				// 접선은 월드 벡터로 들고 있었다. 두 입자의 배치가 바뀌면 옛 접선에 법선 성분이 생기므로
+				// 현재 접평면에 재투영하고, 원뿔도 지금의 λn 으로 다시 자른다
+				FVector3f Tan = Params.bWarmTangent ? (C.LambdaTan - N * FVector3f::DotProduct(C.LambdaTan, N)) : FVector3f::ZeroVector;
+				const float MaxTan = Params.Friction * C.LambdaN;
+				const float TanLen = Tan.Size();
+				if (TanLen > MaxTan) { Tan = (TanLen > UE_KINDA_SMALL_NUMBER) ? Tan * (MaxTan / TanLen) : FVector3f::ZeroVector; }
+				C.LambdaTan = Tan;
+				const FVector3f Impulse = N * C.LambdaN + Tan;
+				Vel[C.I] += Impulse * InvMass[C.I];
+				Vel[C.J] -= Impulse * InvMass[C.J];
+			}
+			for (int32 i = 0; i < Pos.Num(); ++i)
+			{
+				GroundLambdaN[i] = (Pos[i].Z <= Params.Radius) ? FMath::Max(0.f, GroundLambdaN[i] * Params.WarmStart) : 0.f;
+				Vel[i].Z += GroundLambdaN[i] * InvMass[i];
+			}
+			FMemory::Memzero(GroundLambdaT.GetData(), GroundLambdaT.Num() * sizeof(float));
+			FMemory::Memzero(WallLambdaN.GetData(), WallLambdaN.Num() * sizeof(float));
 		}
-		FMemory::Memzero(GroundLambdaN.GetData(), GroundLambdaN.Num() * sizeof(float));
-		FMemory::Memzero(GroundLambdaT.GetData(), GroundLambdaT.Num() * sizeof(float));
-		FMemory::Memzero(WallLambdaN.GetData(), WallLambdaN.Num() * sizeof(float));
+		else
+		{
+			for (FSandContact& C : Contacts)
+			{
+				C.LambdaN = 0.f;
+				C.LambdaT = 0.f;
+				C.LambdaTan = FVector3f::ZeroVector;
+			}
+			FMemory::Memzero(GroundLambdaN.GetData(), GroundLambdaN.Num() * sizeof(float));
+			FMemory::Memzero(GroundLambdaT.GetData(), GroundLambdaT.Num() * sizeof(float));
+			FMemory::Memzero(WallLambdaN.GetData(), WallLambdaN.Num() * sizeof(float));
+		}
 
 		PredictPositions(SubDt);
 
@@ -914,7 +982,6 @@ void FSandSpike::Step(float Dt)
 		{
 			for (FSandContact& C : Contacts)
 			{
-				C.LambdaTan      = FVector3f::ZeroVector;
 				C.PrevDLambdaN   = 0.f;
 				C.PrevDLambdaTan = FVector3f::ZeroVector;
 			}

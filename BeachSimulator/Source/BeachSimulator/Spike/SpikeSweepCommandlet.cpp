@@ -138,12 +138,18 @@ namespace
 		FTiltSetup Setup;
 		Setup.TargetCount = Count;
 		Setup.bOpenDownhill = !FParse::Param(*Params, TEXT("closed"));
+		FParse::Value(*Params, TEXT("basejitter="), Setup.BaseJitter);
+		FParse::Value(*Params, TEXT("jitter="), Setup.FreeJitter);
 
 		const bool bGS = FParse::Param(*Params, TEXT("gs"));
 		const bool bNoPosFric = FParse::Param(*Params, TEXT("noposfric"));
 		const bool bLegacy = FParse::Param(*Params, TEXT("legacy"));   // SP 이전 경로
 
 		float Mb = 0.6f, Omega = 0.5f, Kv = 0.1f;
+		float TWarm = 0.f, TWarmTol = 0.f; int32 TWarmTan = 1;
+		FParse::Value(*Params, TEXT("warm="), TWarm);
+		FParse::Value(*Params, TEXT("warmtol="), TWarmTol);
+		FParse::Value(*Params, TEXT("warmtan="), TWarmTan);
 		FParse::Value(*Params, TEXT("mb="), Mb);
 		FParse::Value(*Params, TEXT("omega="), Omega);
 		FParse::Value(*Params, TEXT("kv="), Kv);
@@ -168,6 +174,9 @@ namespace
 			P.MomentumB    = Mb;
 			P.SorOmega     = Omega;
 			P.Kv           = Kv;
+			P.WarmStart    = TWarm;
+			P.WarmGapTol   = TWarmTol;
+			P.bWarmTangent = TWarmTan != 0;
 			Configs.Add(P);
 			Rates.Add(Rate);
 		}
@@ -214,6 +223,16 @@ namespace
 		FParse::Value(*Params, TEXT("particles="), Count);
 		FParse::Value(*Params, TEXT("drop="), Drop);
 		FParse::Value(*Params, TEXT("settlecap="), SettleCap);
+		int32 Hold = 0;
+		FParse::Value(*Params, TEXT("hold="), Hold);
+		float Warm = 0.f;
+		FParse::Value(*Params, TEXT("warm="), Warm);
+		int32 WarmTan = 1;
+		FParse::Value(*Params, TEXT("warmtan="), WarmTan);
+		float WarmTol = 0.f;
+		FParse::Value(*Params, TEXT("warmtol="), WarmTol);
+		const TArray<float> KvList = ParseList<float>(Params, TEXT("kv="), { 0.1f });
+		const TArray<float> JitterList = ParseList<float>(Params, TEXT("basejitter="), { 0.f });
 		float EventFactor = 0.f; int32 EventStop = 0, TraceFrame = -1, TraceIdx = -1;
 		FParse::Value(*Params, TEXT("event="), EventFactor);
 		FParse::Value(*Params, TEXT("eventstop="), EventStop);
@@ -226,10 +245,12 @@ namespace
 		TArray<FSandParams> Cfgs;
 		TArray<FPourSetup>  Setups;
 		for (float Mu : MuList)
+		for (float KvV : KvList)
 		for (int32 Subs : SubsList)
 		for (int32 Iters : IterList)
 		for (float Dr : DropList)
 		for (float Sr : SpawnList)
+		for (float Bj : JitterList)
 		for (int32 Per : RateList)
 		{
 			// 낙하 충격 속도 √(2gh) 로 한 서브스텝 이동이 지름의 0.2배를 넘으면
@@ -239,6 +260,10 @@ namespace
 			P.Friction   = Mu;
 			P.Substeps   = Subs;
 			P.Iterations = Iters;
+			P.WarmStart  = Warm;
+			P.bWarmTangent = WarmTan != 0;
+			P.WarmGapTol = WarmTol;
+			P.Kv         = KvV;
 			Cfgs.Add(P);
 
 			FPourSetup S;
@@ -246,10 +271,12 @@ namespace
 			S.DropHeightDiameters  = Dr;
 			S.PerDrop              = Per;
 			S.SpawnRadiusDiameters = Sr;
+			S.BaseJitter           = Bj;
 			S.EventSpeedFactor     = EventFactor;
 			S.EventStopCount       = EventStop;
 			S.DebugTraceFrame      = TraceFrame;
 			S.DebugTraceIndex      = TraceIdx;
+			S.HoldFrames           = Hold;
 			Setups.Add(S);
 		}
 
@@ -266,20 +293,25 @@ namespace
 			TEXT("부어 쌓기 %d 실행 — 목표 %d개, 낙하 %.1f지름, 바닥 %d개, 벽시계 %.1f초"),
 			Results.Num(), Count, Drop, Results.Num() > 0 ? Results[0].BaseCount : 0, Elapsed);
 		UE_LOG(LogSpikeSweep, Display,
-			TEXT("   mu ss  it 낙하 속도 | 정지 | 프로파일  법선중앙  차이 | 원뿔 h/r      | 붓는중 최대 | 초"));
+			TEXT("   mu ss  it 낙하 산포 속도 | 정지 | 프로파일  법선중앙  차이 | 원뿔 h/r      | 붓는중 최대 | 초"));
 
 		for (int32 i = 0; i < Results.Num(); ++i)
 		{
 			const FPourResult& R = Results[i];
 			const float Diff = FMath::Abs(R.Angle.ProfileDeg - R.Angle.MedianDeg);
 			UE_LOG(LogSpikeSweep, Display,
-				TEXT("%5.2f %2d %3d %4.2f sr%3.1f %4.2f | %4s | %7.1f°  %7.1f°  %4.1f | %5.1f/%5.1fcm | %9.1f | %5.1f%s"),
-				R.Friction, Cfgs[i].Substeps, R.Iterations, R.DropHeightDiameters, Setups[i].SpawnRadiusDiameters, R.RatePerFrame,
+				TEXT("%5.2f kv%3.1f %2d %3d %4.2f sr%3.1f bj%3.1f %4.2f | %4s | %7.1f°  %7.1f°  %4.1f | %5.1f/%5.1fcm | %9.1f | %5.1f%s"),
+				R.Friction, Cfgs[i].Kv, Cfgs[i].Substeps, R.Iterations, R.DropHeightDiameters, Setups[i].SpawnRadiusDiameters, Setups[i].BaseJitter, R.RatePerFrame,
 				R.bSettled ? TEXT("○") : TEXT("★미완"),
 				R.Angle.ProfileDeg, R.Angle.MedianDeg, Diff,
 				R.ConeHeight, R.ConeRadius, R.MaxSpeedDuringPour, R.WallSeconds,
 				(R.bSettled && Diff < 3.f && FMath::Abs(R.Angle.ProfileDeg - 34.f) <= 3.f)
 					? TEXT("  ★통과") : TEXT(""));
+			if (Hold > 0)
+			{
+				UE_LOG(LogSpikeSweep, Display, TEXT("      유지 %d프레임 후: 프로파일 %5.1f° 법선중앙 %5.1f°  높이 %5.1f→%5.1f  크리프 평균|v| %.4f cm/s  바닥하중/무게 %.2f"),
+					Hold, R.AngleAfterHold.ProfileDeg, R.AngleAfterHold.MedianDeg, R.ConeHeight, R.ConeHeightAfterHold, R.CreepAvgSpeed, R.BaseLoadRatio);
+			}
 		}
 
 		if (FParse::Param(*Params, TEXT("dumppos")))
@@ -294,7 +326,7 @@ namespace
 				{
 					Text += FString::Printf(TEXT("%.4f,%.4f,%.4f,%d\n"), R.FinalPos[k].X, R.FinalPos[k].Y, R.FinalPos[k].Z, R.FinalInvMass[k] <= 0.f ? 1 : 0);
 				}
-				const FString Path = Dir / FString::Printf(TEXT("pour_mu%.2f_ss%d_it%d_drop%.2f_sr%.1f.csv"), R.Friction, Cfgs[i].Substeps, R.Iterations, R.DropHeightDiameters, Setups[i].SpawnRadiusDiameters);
+				const FString Path = Dir / FString::Printf(TEXT("pour_mu%.2f_ss%d_it%d_drop%.2f_sr%.1f_bj%.1f.csv"), R.Friction, Cfgs[i].Substeps, R.Iterations, R.DropHeightDiameters, Setups[i].SpawnRadiusDiameters, Setups[i].BaseJitter);
 				FFileHelper::SaveStringToFile(Text, *Path);
 				UE_LOG(LogSpikeSweep, Display, TEXT("위치 저장: %s"), *Path);
 			}

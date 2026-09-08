@@ -585,8 +585,16 @@ FPourResult SpikeBatch::RunPour(const FSandParams& Params, const FPourSetup& Set
 	// --- ① 한 알씩 놓는다 ---
 	int32 Poured = 0;
 	int32 Frame  = 0;
+	int32 LastPlacedFrame = 0;
 	while (Poured < Setup.TargetCount)
 	{
+		// 정체 상한 — 낙하 높이가 낮고 산포가 좁으면 1.05D 여유를 영원히 못 찾는다 (#23: 무한 루프)
+		if (Frame - LastPlacedFrame > 600)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("부어 쌓기 정체: %d프레임 동안 자리를 못 찾음 (놓은 %d/%d, 낙하 %.2fd 산포 %.1fd)"),
+				Frame - LastPlacedFrame, Poured, Setup.TargetCount, Setup.DropHeightDiameters, Setup.SpawnRadiusDiameters);
+			break;
+		}
 		if (Frame % FMath::Max(1, Setup.IntervalFrames) == 0)
 		{
 			// 놓는 높이는 **축 근처 더미의 높이** 기준이다.
@@ -655,6 +663,7 @@ FPourResult SpikeBatch::RunPour(const FSandParams& Params, const FPourSetup& Set
 			{
 				Sim.AddParticles(Batch);
 				for (int32 k = 0; k < Batch.Num(); ++k) { SpawnFrame.Add(Frame); }
+				LastPlacedFrame = Frame;
 			}
 		}
 
@@ -704,6 +713,37 @@ FPourResult SpikeBatch::RunPour(const FSandParams& Params, const FPourSetup& Set
 	R.ConeHeight = SpikeMeasure::PeakHeight(Sim.GetPositions());
 	R.FinalProfile = SpikeMeasure::RadialProfile(Sim.GetPositions(), Params.Radius, R.ProfileBinWidth);
 	R.ConeRadius = R.FinalProfile.Num() * R.ProfileBinWidth;
+
+	// --- ③ 유지 — 정지 판정 뒤에도 퍼지는가 (크리프) ---
+	if (Setup.HoldFrames > 0)
+	{
+		double SumAvg = 0.0;
+		for (int32 h = 0; h < Setup.HoldFrames; ++h)
+		{
+			Sim.Step(BatchDt);
+			SumAvg += Sim.AvgSpeed();
+		}
+		R.CreepAvgSpeed = (float)(SumAvg / Setup.HoldFrames);
+		{
+			// 하중 검산 — 고정 바닥과 지면이 받는 수직 임펄스가 자유 입자 무게와 맞는가
+			const TArray<FVector3f>& P = Sim.GetPositions();
+			const TArray<float>& W = Sim.GetInvMass();
+			double SumZ = 0.0; int32 NFree = 0;
+			for (const FSandContact& C : Sim.GetContacts())
+			{
+				const bool bFi = W[C.I] <= 0.f, bFj = W[C.J] <= 0.f;
+				if (bFi == bFj || C.LambdaN <= 0.f) { continue; }
+				const FVector3f N = (P[C.I] - P[C.J]).GetSafeNormal();   // I 쪽을 향함
+				SumZ += C.LambdaN * FMath::Abs(N.Z);
+			}
+			for (int32 i = 0; i < W.Num(); ++i) { if (W[i] > 0.f) { ++NFree; } }
+			const float SubDt = BatchDt / FMath::Max(1, Params.Substeps);
+			R.BaseLoadRatio = NFree > 0 ? (float)(SumZ / (NFree * FMath::Abs(Params.Gravity) * SubDt)) : 0.f;
+		}
+		R.AngleAfterHold = SpikeMeasure::AngleOfRepose(Sim.GetPositions(), Params.Radius);
+		R.ConeHeightAfterHold = SpikeMeasure::PeakHeight(Sim.GetPositions());
+	}
+
 	R.FinalPos     = Sim.GetPositions();
 	R.FinalInvMass = Sim.GetInvMass();
 

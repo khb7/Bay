@@ -44,6 +44,16 @@ struct FSandParams
 	float  MomentumA = 0.f;   // 0이면 모멘텀 없음 (기본은 꺼둔다 — 단계적으로 켠다)
 	float  MomentumB = 0.6f;
 	/**
+	 * 워밍 스타트 (Catto 2005 · terms/warm-starting.md). 0 = 매 서브스텝 λ=0 에서 시작.
+	 * 직전 서브스텝(프레임 경계에선 같은 입자쌍)의 λ 에 이 배율을 곱해 **속도 임펄스로 먼저 적용**하고 거기서 반복한다.
+	 * 정지 더미의 답은 스텝이 바뀌어도 거의 같으므로, 미수렴 잔차(= 크리프)가 매 스텝 처음부터 쌓이는 것을 막는다 (#23).
+	 */
+	float  WarmStart = 0.f;
+	/** 접선 λ 도 워밍하는가. 현재 접평면에 재투영하고 μ·λn 으로 다시 자른 뒤 적용한다 */
+	bool   bWarmTangent = true;
+	/** 워밍을 유지하는 최대 gap (반경 배수). 정지 접촉의 gap 요동(±0.01cm)은 넘기고, 떨어진 쌍의 버팀대는 끊는다 */
+	float  WarmGapTol = 0.f;
+	/**
 	 * 정지 판정 임계 — |v| < ε·√(g·d) (m0-spike.md §2-2).
 	 *
 	 * 이전에는 0.01·(r/dt) 였다. 반경으로는 정규화됐지만 dt 가 식에 남아 있어서,
@@ -72,6 +82,9 @@ struct FTiltSetup
 	int32 TargetCount = 3000;
 	int32 Layers      = 6;      // 두께. 얇으면 바닥 영향이, 두꺼우면 벽 영향이 커진다
 	int32 FixedLayers = 1;      // 바닥 거칠기
+	/** 바닥·자유 입자 격자 흔들림 (반경 배수). 0.05 격자는 결정 템플릿이 된다 (#25) */
+	float BaseJitter  = 0.f;
+	float FreeJitter  = 0.05f;
 
 	/**
 	 * 사면 방향(X)을 열어둘 것인가.
@@ -123,6 +136,8 @@ struct FPourSetup
 	int32 TargetCount = 4000;
 	int32 BaseLayers  = 1;      // 거친 바닥 (Goujon 2003)
 	float BaseRadius  = 0.f;    // 0이면 예상 퇴적 반경 × 1.2 로 역산
+	/** 바닥 격자 흔들림 (반경 배수). 0 이면 간격 D 정사각 격자 — 단분산 구가 그 홈을 템플릿으로 FCC 결정을 키운다 (#23: CN 10, 충전 0.70) */
+	float BaseJitter  = 0.f;
 
 	/** 현재 더미 꼭대기 위 몇 지름에서 놓는가. 낮을수록 충격이 작다 */
 	float DropHeightDiameters = 3.f;
@@ -140,6 +155,8 @@ struct FPourSetup
 	/** 이 프레임·입자의 반복별 상태를 찍는다 (-1 = 꺼짐) */
 	int32 DebugTraceFrame  = -1;
 	int32 DebugTraceIndex  = -1;
+	/** 정지 판정 후 이만큼 더 돌리고 다시 잰다 — 크리프 검사 (0 = 안 함) */
+	int32 HoldFrames       = 0;
 };
 
 /** 스냅샷 — 같은 다진 상태에서 여러 각도를 시험하기 위해. */
@@ -292,6 +309,7 @@ private:
 	TArray<float>     DeltaScale;   // 입자별 ω/접촉수. 장부를 맞추는 데 쓴다
 
 	TArray<FSandContact> Contacts;      // 브로드페이즈 산출. 프레임 동안 유지
+	TMap<uint64, TPair<float, FVector3f>> WarmLambda;   // 프레임 경계용 — 입자쌍 키 → (λn, λtan)
 	TArray<float> GroundLambdaN;        // 지면도 접촉이다. 무한 질량이라 w = 0
 	TArray<float> GroundLambdaT;
 	TArray<float> WallLambdaN;          // 벽도 마찬가지

@@ -125,6 +125,13 @@ struct FPourResult
 	float ConeRadius = 0.f;
 	float MaxSpeedDuringPour = 0.f;   // 준정적이면 작아야 한다
 
+	// 유지 후 재측정 (HoldFrames > 0)
+	FAngleStats AngleAfterHold;
+	float ConeHeightAfterHold = 0.f;
+	float CreepAvgSpeed = 0.f;        // 유지 구간 평균 |v| 의 평균
+	/** 바닥(고정 입자·지면)이 받는 수직 임펄스 합 / 자유 입자 총 무게 임펄스. 1 이 정답 — λn 인플레이션 계기 */
+	float BaseLoadRatio = 0.f;
+
 	TArray<float> FinalProfile;
 	float ProfileBinWidth = 0.f;
 	double WallSeconds = 0.0;
