@@ -83,7 +83,7 @@ struct FTiltSetup
 };
 
 /**
- * 원통 배치 (m0-spike.md §3-0-A · §3-0-C).
+ * 원통 배치 (m0-spike.md §3-0-D 기각 · §3-0-C).
  *
  * AspectRatio 로 두 실험을 겸한다.
  *   2.5  원통 들어올리기 — 원뿔이 나온다. θr 측정
@@ -199,7 +199,7 @@ public:
 	 * 원통을 여기까지 들어올린다 — 벽은 z > Z 인 입자에만 작용한다.
 	 *
 	 * 한순간에 없애면 관성이 섞여 기둥 붕괴가 되고, 그건 종횡비에 의존하는 다른 실험이다.
-	 * 계단식으로 올리고 매 단계 정지시키면 준정적이 정의상 보장된다 (§3-0-A).
+	 * 계단식으로 올리고 매 단계 정지시키면 준정적이 보장된다고 봤으나 틀렸다 — 밑동이 풀리면 전체가 간다 (§3-0-D, #20 기각. 대조용으로 남긴다).
 	 */
 	void SetWallLift(float Z) { WallLiftZ = Z; SettledFrames = 0; }
 	float GetWallLift() const { return WallLiftZ; }

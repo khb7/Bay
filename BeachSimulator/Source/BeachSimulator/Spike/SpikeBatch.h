@@ -78,7 +78,7 @@ struct FConeLiftStep
 	int32 MovedCount    = 0;     // 초기 위치에서 2r 넘게 움직인 누적 수
 };
 
-/** 원통 들어올리기 결과 (m0-spike.md §3-0-A). */
+/** 원통 들어올리기 결과 (m0-spike.md §3-0-D — 기각, 대조용). */
 struct FConeLiftResult
 {
 	float Friction   = 0.f;
@@ -141,7 +141,7 @@ namespace SpikeBatch
 	FPourResult RunPour(const FSandParams& Params, const FPourSetup& Setup, int32 SettleCap);
 
 	/**
-	 * 원통 들어올리기 — θr 측정 (m0-spike.md §3-0-A).
+	 * 원통 들어올리기 — θr 측정 (m0-spike.md §3-0-D — #20 기각, 대조용).
 	 *
 	 * 계단식으로 올리고 매 단계 정지를 기다린다. 연속으로 올리면 "얼마나 천천히"가
 	 * 새 변수가 되고, 경사판에서 그 변수가 11° 차이를 만든 전례가 있다.

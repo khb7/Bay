@@ -290,7 +290,7 @@ namespace
 		return 0;
 	}
 
-	/** 원통 들어올리기 — θr 측정 (m0-spike.md §3-0-A). */
+	/** 원통 들어올리기 — θr 측정 (m0-spike.md §3-0-D — #20 기각, 대조용). */
 	int32 RunConeLift(const FString& Params, const TArray<float>& MuList,
 	                  const TArray<int32>& IterList, const TArray<int32>& SubsList)
 	{
