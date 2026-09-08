@@ -131,6 +131,15 @@ struct FPourSetup
 
 	int32 PerDrop        = 2;   // 한 번에 몇 개
 	int32 IntervalFrames = 2;   // 몇 프레임마다
+
+	// --- 진단 (#22 최대속력 사건) ---
+	/** 0 이면 꺼짐. 붓는 중 최대속력이 충돌 속도 √(2gh) 의 이 배수를 넘는 프레임을 찍는다 */
+	float EventSpeedFactor = 0.f;
+	/** 사건을 이만큼 찍으면 붓기를 멈춘다 (0 = 끝까지) */
+	int32 EventStopCount   = 0;
+	/** 이 프레임·입자의 반복별 상태를 찍는다 (-1 = 꺼짐) */
+	int32 DebugTraceFrame  = -1;
+	int32 DebugTraceIndex  = -1;
 };
 
 /** 스냅샷 — 같은 다진 상태에서 여러 각도를 시험하기 위해. */
@@ -221,6 +230,12 @@ public:
 
 	/** 정지 판정 (m0-spike.md §2-2) — 넷이 공유하는 단일 정의. */
 	bool    IsSettled()    const { return SettledFrames >= SettleFramesRequired; }
+
+	/** 진단 — 이 프레임에서 이 입자의 반복별 상태를 로그로 찍는다 (-1 = 꺼짐) */
+	int32 DebugTraceFrame = -1;
+	int32 DebugTraceIndex = -1;
+	int32 ContactCountOf(int32 i) const;
+	FString DescribeParticle(int32 i) const;
 
 	const FSandParams&  GetParams() const { return Params; }
 	const FColumnSetup& GetColumn() const { return Column; }

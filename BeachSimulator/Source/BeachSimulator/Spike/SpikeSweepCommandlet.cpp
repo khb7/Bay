@@ -214,8 +214,14 @@ namespace
 		FParse::Value(*Params, TEXT("particles="), Count);
 		FParse::Value(*Params, TEXT("drop="), Drop);
 		FParse::Value(*Params, TEXT("settlecap="), SettleCap);
+		float EventFactor = 0.f; int32 EventStop = 0, TraceFrame = -1, TraceIdx = -1;
+		FParse::Value(*Params, TEXT("event="), EventFactor);
+		FParse::Value(*Params, TEXT("eventstop="), EventStop);
+		FParse::Value(*Params, TEXT("traceframe="), TraceFrame);
+		FParse::Value(*Params, TEXT("traceidx="), TraceIdx);
 		const TArray<int32> RateList = ParseList<int32>(Params, TEXT("perdrop="), { 2 });
 		const TArray<float> DropList = ParseList<float>(Params, TEXT("drop="), { Drop });
+		const TArray<float> SpawnList = ParseList<float>(Params, TEXT("spawnr="), { 2.5f });
 
 		TArray<FSandParams> Cfgs;
 		TArray<FPourSetup>  Setups;
@@ -223,6 +229,7 @@ namespace
 		for (int32 Subs : SubsList)
 		for (int32 Iters : IterList)
 		for (float Dr : DropList)
+		for (float Sr : SpawnList)
 		for (int32 Per : RateList)
 		{
 			// 낙하 충격 속도 √(2gh) 로 한 서브스텝 이동이 지름의 0.2배를 넘으면
@@ -238,6 +245,11 @@ namespace
 			S.TargetCount          = Count;
 			S.DropHeightDiameters  = Dr;
 			S.PerDrop              = Per;
+			S.SpawnRadiusDiameters = Sr;
+			S.EventSpeedFactor     = EventFactor;
+			S.EventStopCount       = EventStop;
+			S.DebugTraceFrame      = TraceFrame;
+			S.DebugTraceIndex      = TraceIdx;
 			Setups.Add(S);
 		}
 
@@ -261,13 +273,31 @@ namespace
 			const FPourResult& R = Results[i];
 			const float Diff = FMath::Abs(R.Angle.ProfileDeg - R.Angle.MedianDeg);
 			UE_LOG(LogSpikeSweep, Display,
-				TEXT("%5.2f %2d %3d %4.1f %4.2f | %4s | %7.1f°  %7.1f°  %4.1f | %5.1f/%5.1fcm | %9.1f | %5.1f%s"),
-				R.Friction, Cfgs[i].Substeps, R.Iterations, R.DropHeightDiameters, R.RatePerFrame,
+				TEXT("%5.2f %2d %3d %4.2f sr%3.1f %4.2f | %4s | %7.1f°  %7.1f°  %4.1f | %5.1f/%5.1fcm | %9.1f | %5.1f%s"),
+				R.Friction, Cfgs[i].Substeps, R.Iterations, R.DropHeightDiameters, Setups[i].SpawnRadiusDiameters, R.RatePerFrame,
 				R.bSettled ? TEXT("○") : TEXT("★미완"),
 				R.Angle.ProfileDeg, R.Angle.MedianDeg, Diff,
 				R.ConeHeight, R.ConeRadius, R.MaxSpeedDuringPour, R.WallSeconds,
 				(R.bSettled && Diff < 3.f && FMath::Abs(R.Angle.ProfileDeg - 34.f) <= 3.f)
 					? TEXT("  ★통과") : TEXT(""));
+		}
+
+		if (FParse::Param(*Params, TEXT("dumppos")))
+		{
+			const FString Dir = FPaths::ProjectSavedDir() / TEXT("SpikeRuns");
+			IFileManager::Get().MakeDirectory(*Dir, true);
+			for (int32 i = 0; i < Results.Num(); ++i)
+			{
+				const FPourResult& R = Results[i];
+				FString Text = TEXT("x,y,z,fixed\n");
+				for (int32 k = 0; k < R.FinalPos.Num(); ++k)
+				{
+					Text += FString::Printf(TEXT("%.4f,%.4f,%.4f,%d\n"), R.FinalPos[k].X, R.FinalPos[k].Y, R.FinalPos[k].Z, R.FinalInvMass[k] <= 0.f ? 1 : 0);
+				}
+				const FString Path = Dir / FString::Printf(TEXT("pour_mu%.2f_ss%d_it%d_drop%.2f_sr%.1f.csv"), R.Friction, Cfgs[i].Substeps, R.Iterations, R.DropHeightDiameters, Setups[i].SpawnRadiusDiameters);
+				FFileHelper::SaveStringToFile(Text, *Path);
+				UE_LOG(LogSpikeSweep, Display, TEXT("위치 저장: %s"), *Path);
+			}
 		}
 
 		if (Results.Num() == 1)

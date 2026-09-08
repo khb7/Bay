@@ -128,6 +128,10 @@ struct FPourResult
 	TArray<float> FinalProfile;
 	float ProfileBinWidth = 0.f;
 	double WallSeconds = 0.0;
+
+	/** 최종 위치 (오프라인 분석용). 고정 바닥은 InvMass 0 */
+	TArray<FVector3f> FinalPos;
+	TArray<float>     FinalInvMass;
 };
 
 namespace SpikeBatch

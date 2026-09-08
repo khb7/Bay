@@ -568,6 +568,16 @@ FPourResult SpikeBatch::RunPour(const FSandParams& Params, const FPourSetup& Set
 	FSandSpike Sim;
 	Sim.InitPour(Params, Setup);
 	R.BaseCount = Sim.Num();
+	Sim.DebugTraceFrame = Setup.DebugTraceFrame;
+	Sim.DebugTraceIndex = Setup.DebugTraceIndex;
+
+	// 진단 — 입자별 생성 프레임 (바닥은 -1)
+	TArray<int32> SpawnFrame;
+	SpawnFrame.Init(-1, Sim.Num());
+	const float ImpactSpeed = FMath::Sqrt(2.f * FMath::Abs(Params.Gravity) * Setup.DropHeightDiameters * 2.f * Params.Radius);
+	const float EventThreshold = Setup.EventSpeedFactor > 0.f ? Setup.EventSpeedFactor * ImpactSpeed : FLT_MAX;
+	int32 EventCount = 0;
+	float EventRecord = 0.f;
 
 	const float D = 2.f * Params.Radius;
 	FRandomStream Rng(Params.Seed);
@@ -583,12 +593,19 @@ FPourResult SpikeBatch::RunPour(const FSandParams& Params, const FPourSetup& Set
 			//
 			// 전체 최고점을 쓰면 튀어 오른 입자 하나가 최고점이 되어 다음 입자가 더 높이서
 			// 떨어지고, 더 세게 충돌해 더 튄다 — 한 번 튀면 스스로 증폭한다(실측 4149 cm/s).
+			//
+			// ★ 그리고 **정지한 입자만** 센다. 공중에 있는 입자(방금 놓은 것)를 포함하면
+			// 2프레임 뒤 0.5cm 떨어진 그 입자 위 1지름에 다음 것이 놓여, 놓을 때마다
+			// 4.5cm 씩 올라가는 사슬이 된다 — 실측: 677개에 높이 244cm, 자유낙하 33프레임(#23).
 			const float SpawnR = Setup.SpawnRadiusDiameters * D;
 			const float NearR2 = FMath::Square(SpawnR + 2.f * D);
+			const float RestSpeed = 0.1f * FMath::Sqrt(FMath::Abs(Params.Gravity) * D);   // ≈ 7 cm/s
+			const TArray<FVector3f>& Vs = Sim.GetVelocities();
 			float Apex = 0.f;
-			for (const FVector3f& P : Sim.GetPositions())
+			for (int32 i = 0; i < Sim.Num(); ++i)
 			{
-				if (P.X * P.X + P.Y * P.Y < NearR2)
+				const FVector3f& P = Sim.GetPositions()[i];
+				if (P.X * P.X + P.Y * P.Y < NearR2 && Vs[i].Size() < RestSpeed)
 				{
 					Apex = FMath::Max(Apex, P.Z);
 				}
@@ -637,11 +654,38 @@ FPourResult SpikeBatch::RunPour(const FSandParams& Params, const FPourSetup& Set
 			if (Batch.Num() > 0)
 			{
 				Sim.AddParticles(Batch);
+				for (int32 k = 0; k < Batch.Num(); ++k) { SpawnFrame.Add(Frame); }
 			}
 		}
 
 		Sim.Step(BatchDt);
 		R.MaxSpeedDuringPour = FMath::Max(R.MaxSpeedDuringPour, Sim.MaxSpeed());
+
+		// 진단 — 임계를 넘는 새 기록이 나올 때마다 그 입자를 찍는다
+		if (Sim.MaxSpeed() > EventThreshold && Sim.MaxSpeed() > EventRecord * 1.2f)
+		{
+			EventRecord = Sim.MaxSpeed();
+			const TArray<FVector3f>& V = Sim.GetVelocities();
+			int32 Best = -1; float BestS = 0.f;
+			for (int32 i = 0; i < V.Num(); ++i)
+			{
+				const float S = V[i].Size();
+				if (S > BestS) { BestS = S; Best = i; }
+			}
+			if (Best >= 0)
+			{
+				UE_LOG(LogTemp, Display, TEXT("[event %d] 프레임 %d  |v| %.1f (충돌 %.0f 의 %.1f배)  나이 %d프레임  입자수 %d  %s"),
+					EventCount, Frame, BestS, ImpactSpeed, BestS / ImpactSpeed,
+					SpawnFrame.IsValidIndex(Best) && SpawnFrame[Best] >= 0 ? Frame - SpawnFrame[Best] : -1,
+					Sim.Num(), *Sim.DescribeParticle(Best));
+			}
+			++EventCount;
+			if (Setup.EventStopCount > 0 && EventCount >= Setup.EventStopCount)
+			{
+				++Frame;
+				break;
+			}
+		}
 		++Frame;
 	}
 	R.Poured     = Poured;
@@ -660,6 +704,8 @@ FPourResult SpikeBatch::RunPour(const FSandParams& Params, const FPourSetup& Set
 	R.ConeHeight = SpikeMeasure::PeakHeight(Sim.GetPositions());
 	R.FinalProfile = SpikeMeasure::RadialProfile(Sim.GetPositions(), Params.Radius, R.ProfileBinWidth);
 	R.ConeRadius = R.FinalProfile.Num() * R.ProfileBinWidth;
+	R.FinalPos     = Sim.GetPositions();
+	R.FinalInvMass = Sim.GetInvMass();
 
 	R.WallSeconds = FPlatformTime::Seconds() - T0;
 	return R;

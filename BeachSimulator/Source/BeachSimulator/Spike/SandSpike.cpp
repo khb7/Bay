@@ -824,6 +824,38 @@ void FSandSpike::ApplyDynamicFriction(float SubDt)
 	}
 }
 
+int32 FSandSpike::ContactCountOf(int32 i) const
+{
+	int32 N = 0;
+	for (const FSandContact& C : Contacts)
+	{
+		if (C.I == i || C.J == i) { ++N; }
+	}
+	return N;
+}
+
+FString FSandSpike::DescribeParticle(int32 i) const
+{
+	const float D = 2.f * Params.Radius;
+	FString S = FString::Printf(TEXT("#%d p(%.2f %.2f %.2f) prev(%.2f %.2f %.2f) v(%.1f %.1f %.1f) |v| %.1f gλ %.3f 접촉:"),
+		i, Pos[i].X, Pos[i].Y, Pos[i].Z, PrevPos[i].X, PrevPos[i].Y, PrevPos[i].Z,
+		Vel[i].X, Vel[i].Y, Vel[i].Z, Vel[i].Size(), GroundLambdaN.IsValidIndex(i) ? GroundLambdaN[i] : 0.f);
+	int32 Shown = 0;
+	for (const FSandContact& C : Contacts)
+	{
+		if (C.I != i && C.J != i) { continue; }
+		const int32 j = (C.I == i) ? C.J : C.I;
+		const float Gap = (Pos[i] - Pos[j]).Size() - D;
+		if (Shown < 12)
+		{
+			S += FString::Printf(TEXT(" [%d%s gap %.2f λn %.2f λt %.2f |vj| %.1f]"), j, InvMass[j] <= 0.f ? TEXT("고정") : TEXT(""), Gap, C.LambdaN, C.LambdaTan.Size(), Vel[j].Size());
+		}
+		++Shown;
+	}
+	S += FString::Printf(TEXT(" (총 %d)"), Shown);
+	return S;
+}
+
 void FSandSpike::UpdateSettleState(float Dt)
 {
 	(void)Dt;   // 판정이 더 이상 dt 에 의존하지 않는다
@@ -887,11 +919,26 @@ void FSandSpike::Step(float Dt)
 				C.PrevDLambdaTan = FVector3f::ZeroVector;
 			}
 
+			const bool bTrace = (Frame == DebugTraceFrame && DebugTraceIndex >= 0 && DebugTraceIndex < Pos.Num());
+			if (bTrace)
+			{
+				UE_LOG(LogTemp, Display, TEXT("[trace] f%d ss%d 예측 후  %s"), Frame, s, *DescribeParticle(DebugTraceIndex));
+			}
 			for (int32 it = 0; it < Params.Iterations; ++it)
 			{
 				SolveContactsSP(SubDt, it, Params.Iterations);
 				SolveGroundSP(SubDt);
 				SolveWallsSP(SubDt);
+				if (bTrace)
+				{
+					const int32 k = DebugTraceIndex;
+					UE_LOG(LogTemp, Display, TEXT("[trace] f%d ss%d it%3d  |v| %9.2f  v(%8.2f %8.2f %8.2f)  z %7.3f  gλ %8.3f"),
+						Frame, s, it, Vel[k].Size(), Vel[k].X, Vel[k].Y, Vel[k].Z, Pos[k].Z, GroundLambdaN[k]);
+				}
+			}
+			if (bTrace)
+			{
+				UE_LOG(LogTemp, Display, TEXT("[trace] f%d ss%d 반복 후  %s"), Frame, s, *DescribeParticle(DebugTraceIndex));
 			}
 			// ★ 속도 역산 없음 — v 는 솔버가 직접 냈다
 		}
