@@ -555,7 +555,7 @@ FConeLiftResult SpikeBatch::RunConeLift(const FSandParams& Params, const FColumn
 
 // ---------------------------------------------------------------------------
 
-FCutFaceResult SpikeBatch::RunCutFace(const FSandParams& Params, int32 Layers, int32 SidePerLayer, int32 SettleCap, int32 HoldFrames)
+FCutFaceResult SpikeBatch::RunCutFace(const FSandParams& Params, int32 Layers, int32 SidePerLayer, int32 SettleCap, int32 HoldFrames, bool bOpen)
 {
 	const double T0 = FPlatformTime::Seconds();
 	FCutFaceResult R;
@@ -602,7 +602,7 @@ FCutFaceResult SpikeBatch::RunCutFace(const FSandParams& Params, int32 Layers, i
 	Sim.SetWGlobal(Params.WGlobal);
 	R.BondsMade = Sim.FormBonds();
 	R.SlotOverflow = Sim.BondOverflow();
-	Sim.OpenFaceXPlus();
+	if (bOpen) { Sim.OpenFaceXPlus(); }   // 대조: 안 열고 같은 시간을 돌려 상자 자체가 부푸는지 본다
 
 	int32 h = 0;
 	for (; h < HoldFrames && !(h > 120 && Sim.IsSettled()); ++h) { Sim.Step(BatchDt); }
@@ -621,6 +621,27 @@ FCutFaceResult SpikeBatch::RunCutFace(const FSandParams& Params, int32 Layers, i
 		if (bMoved) { ++MovedAll; }
 		if (Before[i].X > LX - 2.f * D) { ++R.FaceCount; if (bMoved) { ++MovedFace; } }
 		R.MaxRunout = FMath::Max(R.MaxRunout, P1[i].X - LX);
+	}
+	// 후퇴 프로파일 — 띠별로 남아 있는 면의 위치. 이동비는 표피 탈락과 활동면을 못 가르지만 후퇴 깊이는 가른다
+	{
+		const int32 Bands = FMath::Max(1, FMath::CeilToInt(R.HeightBefore / D));
+		TArray<TArray<float>> Xs;
+		Xs.SetNum(Bands);
+		for (int32 i = 0; i < P1.Num(); ++i)
+		{
+			if (W[i] <= 0.f) { continue; }
+			const int32 b = FMath::Clamp((int32)((P1[i].Z - BaseTop) / D), 0, Bands - 1);
+			Xs[b].Add(P1[i].X);
+		}
+		R.RetreatByBand.SetNumZeroed(Bands);
+		for (int32 b = 0; b < Bands; ++b)
+		{
+			if (Xs[b].Num() == 0) { R.RetreatByBand[b] = R.HeightBefore; continue; }
+			Xs[b].Sort();
+			R.RetreatByBand[b] = LX - Xs[b][FMath::Clamp((int32)(Xs[b].Num() * 0.95f), 0, Xs[b].Num() - 1)];
+		}
+		const int32 TopBand = FMath::Max(0, Bands - 2);   // 표면 1D 는 표피라 뺀다
+		R.TopRetreat = R.RetreatByBand[TopBand];
 	}
 	R.FaceMovedFrac = R.FaceCount > 0 ? (float)MovedFace / R.FaceCount : 0.f;
 	R.AllMovedFrac  = R.FreeCount > 0 ? (float)MovedAll / R.FreeCount : 0.f;

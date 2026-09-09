@@ -76,6 +76,12 @@ struct FSandParams
 	/** 붙는 거리 / d_rest — V*≈0.001 의 파단 거리 (B2) */
 	float  BondFormStretch = 1.05f;
 	int32  BondSlots       = 12;
+	/**
+	 * 힘이 최대에 닿는 변형률 (d_rest 배수). 결합 힘은 여기까지 선형으로 오르고 그 뒤 **고원**(λ 클램프)이다.
+	 * 모세관 다리는 닿자마자 거의 최대 힘을 내고 파단까지 유지한다(Willett 2000) — 파단 거리까지 선형으로 오르는
+	 * 스프링(#27 첫 구현)은 블록을 젤리로 만들었다: 절토면이 5~13cm 부풀고 H_c 가 강도에 안 반응했다.
+	 */
+	float  BondStiffStrain = 0.02f;
 	/** cohesion(W) 제어점 4개 — 구간 선형 (§2-4). B1 절벽 · Scheel 2008 고원 */
 	float  WDry = 0.05f, WOptStart = 0.15f, WOptEnd = 0.70f, WSat = 0.90f;
 	uint32 Seed       = 1337;    // 초기 배치 jitter 전용

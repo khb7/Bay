@@ -582,7 +582,7 @@ namespace
 		P.WarmStart = Warm;
 		P.WarmGapTol = 0.02f;
 
-		UE_LOG(LogSpikeSweep, Display, TEXT("결합 단위 검사 — W=%.2f  BondStrength %.1f  BreakStretch %.2f  워밍 %.1f"), W, P.BondStrength, P.BreakStretch, Warm);
+		UE_LOG(LogSpikeSweep, Display, TEXT("결합 단위 검사 — W=%.2f  BondStrength %.1f  BreakStretch %.2f  StiffStrain %.3f  워밍 %.1f"), W, P.BondStrength, P.BreakStretch, P.BondStiffStrain, Warm);
 		UE_LOG(LogSpikeSweep, Display, TEXT("   사슬 | 생성 살아있음 끊김 | 기대 늘어남  실측(위) | 아래 낙하 | 정지 | 판정"));
 		for (int32 N : { 1, 2, 3 })
 		{
@@ -607,8 +607,10 @@ namespace
 	/** 절토 높이 스윕 — 점착의 자 c[Pa] (m0-spike.md §3-3-B) */
 	int32 RunCutSweep(const FString& Params)
 	{
-		float W = 0.15f, Strength = 1.5f, Stretch = 1.3f, Mu = 0.15f;
+		float W = 0.15f, Strength = 1.5f, Stretch = 1.3f, Mu = 0.15f, Form = 1.05f;
 		int32 Side = 12, SettleCap = 3000, Hold = 1800;
+		FParse::Value(*Params, TEXT("form="), Form);
+		const bool bOpen = !FParse::Param(*Params, TEXT("noopen"));
 		FParse::Value(*Params, TEXT("w="), W);
 		FParse::Value(*Params, TEXT("strength="), Strength);
 		FParse::Value(*Params, TEXT("stretch="), Stretch);
@@ -625,10 +627,11 @@ namespace
 		P.WarmGapTol = 0.02f;
 		P.BondStrength = Strength;
 		P.BreakStretch = Stretch;
+		P.BondFormStretch = Form;
 
 		TArray<FCutFaceResult> Results;
 		Results.SetNum(LayerList.Num());
-		ParallelFor(LayerList.Num(), [&](int32 i) { Results[i] = SpikeBatch::RunCutFace(P, LayerList[i], Side, SettleCap, Hold); });
+		ParallelFor(LayerList.Num(), [&](int32 i) { Results[i] = SpikeBatch::RunCutFace(P, LayerList[i], Side, SettleCap, Hold, bOpen); });
 
 		// 단위 환산 — 질량 1 = 지름 5cm 석영구 0.1734 kg (2650 kg/m³ × 65.45 cm³). 힘 단위 1 = 1.734e-3 N. c[힘/cm²] × 17.34 = Pa
 		const float ForceToN = 0.1734f * 0.01f;
@@ -636,21 +639,25 @@ namespace
 		const float Phi = FMath::DegreesToRadians(34.f);
 		const float TanTerm = FMath::Tan(UE_PI / 4.f + Phi / 2.f);
 
-		UE_LOG(LogSpikeSweep, Display, TEXT("절토 스윕 — W %.2f  BondStrength %.1f  BreakStretch %.2f  μ %.2f  한 변 %d입자"), W, Strength, Stretch, Mu, Side);
-		UE_LOG(LogSpikeSweep, Display, TEXT("   층 | 입자 | 높이 전→후 | 결합 생성/끊김/넘침 | 면 이동비 전체 | 런아웃 | γ_sim | 이 높이가 H_c 라면 c | 다짐/정지 | 초"));
+		UE_LOG(LogSpikeSweep, Display, TEXT("절토 스윕 — W %.2f  BondStrength %.1f  BreakStretch %.2f  Form %.2f  μ %.2f  한 변 %d입자%s"), W, Strength, Stretch, Form, Mu, Side, bOpen ? TEXT("") : TEXT("  [벽 안 엶 — 대조]"));
+		UE_LOG(LogSpikeSweep, Display, TEXT("   층 | 입자 | 높이 전→후 | 결합 생성/끊김/넘침 | 면 이동비 전체 | 상단 후퇴 | 런아웃 | γ_sim | 이 높이가 H_c 라면 c | 다짐/정지 | 초"));
 		float Hc = -1.f, GammaAtHc = 0.f;
 		for (const FCutFaceResult& R : Results)
 		{
 			// Terzaghi 파괴는 블록을 관통하는 활동면이라 전체 이동비로 본다. 면 띠의 이동은 벽에 기대 있던 바깥 열이
 			// 떨어지는 표피 효과가 섞여(6층에서 면 25% · 전체 4%) 3-1 의 5% 기준으론 못 가른다 — 따로 적는다
-			const bool bCollapsed = R.AllMovedFrac > 0.15f;
+			// 상단 띠가 2D 이상 물러나면 면이 무너진 것. 표피 탈락은 1D 안이고, 마른 사면은 H/tan34 만큼 물러난다
+			const bool bCollapsed = R.TopRetreat > 2.f * 2.f * P.Radius;
 			const float CsimIfHc = R.HeightBefore * R.GammaSim / (4.f * TanTerm);
 			if (bCollapsed && Hc < 0.f) { Hc = R.HeightBefore; GammaAtHc = R.GammaSim; }
-			UE_LOG(LogSpikeSweep, Display, TEXT("   %2d | %4d | %5.1f→%5.1fcm | %5d / %5d / %4d | %5.1f%%  %5.1f%% | %6.1fcm | %5.2f | %7.0f Pa | %s/%s | %5.1f %s"),
+			UE_LOG(LogSpikeSweep, Display, TEXT("   %2d | %4d | %5.1f→%5.1fcm | %5d / %5d / %4d | %5.1f%%  %5.1f%% | %6.1fcm | %6.1fcm | %5.2f | %7.0f Pa | %s/%s | %5.1f %s"),
 				R.Layers, R.FreeCount, R.HeightBefore, R.HeightAfter, R.BondsMade, R.BondsBroken, R.SlotOverflow,
-				R.FaceMovedFrac * 100.f, R.AllMovedFrac * 100.f, R.MaxRunout, R.GammaSim, CsimIfHc * CsimToPa,
+				R.FaceMovedFrac * 100.f, R.AllMovedFrac * 100.f, R.TopRetreat, R.MaxRunout, R.GammaSim, CsimIfHc * CsimToPa,
 				R.bSettledBefore ? TEXT("○") : TEXT("✗"), R.bSettledAfter ? TEXT("○") : TEXT("✗"), R.WallSeconds,
 				bCollapsed ? TEXT("★붕괴") : (R.FaceMovedFrac > 0.05f ? TEXT("섬 (표피 탈락)") : TEXT("섬")));
+			FString Prof;
+			for (float Rt : R.RetreatByBand) { Prof += FString::Printf(TEXT(" %5.1f"), Rt); }
+			UE_LOG(LogSpikeSweep, Display, TEXT("         후퇴(cm) 아래→위:%s"), *Prof);
 		}
 		if (Hc > 0.f)
 		{

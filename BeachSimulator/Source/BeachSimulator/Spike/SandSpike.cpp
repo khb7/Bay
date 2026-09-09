@@ -178,9 +178,9 @@ float FSandSpike::BondCompliance() const
 {
 	const float Coh = CohesionOfW(Params.WGlobal);
 	if (Coh <= 0.f) { return 0.f; }
-	// 파단 순간(늘어남 = (BreakStretch−1)·d)의 스프링 힘이 정확히 BondStrength·m·g 가 되는 강성. m = 1
+	// 변형률 BondStiffStrain 에서 힘이 BondStrength·m·g 에 닿는 강성. 그 위는 SolveBondsSP 의 λ 클램프가 고원을 만든다. m = 1
 	const float D = 2.f * Params.Radius;
-	const float K = Params.BondStrength * FMath::Abs(Params.Gravity) / FMath::Max((Params.BreakStretch - 1.f) * D, UE_KINDA_SMALL_NUMBER);
+	const float K = Params.BondStrength * FMath::Abs(Params.Gravity) / FMath::Max(Params.BondStiffStrain * D, UE_KINDA_SMALL_NUMBER);
 	return 1.f / (K * Coh);
 }
 
@@ -240,6 +240,8 @@ void FSandSpike::SolveBondsSP(float StepDt)
 		return;   // cohesion(W) = 0 — BreakBonds 가 목록을 비운다
 	}
 	const float AlphaTilde = Alpha / (StepDt * StepDt);
+	// 고원 — 힘 ≤ BondStrength·m·g·cohesion(W). λ 는 위치형 승수라 힘 = λ/h²
+	const float LambdaMax = Params.BondStrength * FMath::Abs(Params.Gravity) * CohesionOfW(Params.WGlobal) * StepDt * StepDt;
 
 	for (FSandBond& B : Bonds)
 	{
@@ -260,7 +262,7 @@ void FSandSpike::SolveBondsSP(float StepDt)
 		const float C = Dist - B.RestLen;
 
 		float DLambda = -(C + AlphaTilde * B.Lambda) / (WSum + AlphaTilde);
-		const float NewLambda = FMath::Min(0.f, B.Lambda + DLambda);   // 인장만
+		const float NewLambda = FMath::Clamp(B.Lambda + DLambda, -LambdaMax, 0.f);   // 인장만 · 고원
 		DLambda = NewLambda - B.Lambda;
 		B.Lambda = NewLambda;
 		if (DLambda == 0.f)

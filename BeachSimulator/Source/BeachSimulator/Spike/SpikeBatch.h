@@ -168,6 +168,9 @@ struct FCutFaceResult
 	float FaceMovedFrac = 0.f;    // 그중 변위 > D 비율 — 3-1 판정과 같은 자
 	float AllMovedFrac = 0.f;
 	float MaxRunout = 0.f;        // 벽선 밖으로 나간 최대 거리 (cm)
+	/** 절토면 후퇴 — 높이 띠(5cm)별 95백분위 X 가 벽선에서 얼마나 물러났나. 마른 사면은 위로 갈수록 H/tan34 만큼, 서 있는 절토면은 0~1D */
+	TArray<float> RetreatByBand;
+	float TopRetreat = 0.f;       // 맨 위 띠(표면 1D 제외)의 후퇴
 	float GammaSim = 0.f;         // 무게/부피 (시뮬 단위: 질량1·cm)
 	bool  bSettledBefore = false;
 	bool  bSettledAfter = false;
@@ -177,7 +180,7 @@ struct FCutFaceResult
 namespace SpikeBatch
 {
 	/** 닫힌 상자에 Layers 층을 채워 다지고 → FormBonds → +X 벽 제거 → HoldFrames 뒤 절토면이 남았는가 */
-	FCutFaceResult RunCutFace(const FSandParams& Params, int32 Layers, int32 SidePerLayer, int32 SettleCap, int32 HoldFrames);
+	FCutFaceResult RunCutFace(const FSandParams& Params, int32 Layers, int32 SidePerLayer, int32 SettleCap, int32 HoldFrames, bool bOpen = true);
 
 	/** 고정 입자 아래 N 개를 세로로 결합해 매단다. N=1 은 mgα 만큼 늘어나 서야 하고, N≥2 는 위 결합이 BondStrength 를 넘어 끊어져야 한다 */
 	FBondTestResult RunBondChain(const FSandParams& Params, int32 Chain, int32 Frames);

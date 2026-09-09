@@ -771,6 +771,13 @@ d = 5cm  →  40 ~ 80 cm  >  터널 지름 30cm
 | Satake (1982) | 조직 텐서(fabric tensor) 개념 | [terms/anisotropy-fabric.md](terms/anisotropy-fabric.md) |
 | **Rothenburg & Bathurst (1989)**, Géotechnique 39 | **SFF 관계의 원전** (2D) | 〃 |
 | Ouadfel & Rothenburg (2001), Mechanics of Materials 33 | 3D 확장. `q/p = (2/5)Σa` 의 `2/5` | 〃 |
+| **Roessler, Richter, Katterfeld, Will (2019)**, "…part I: Solving the problem of ambiguous parameter combinations", Powder Technology 343 | **교정 모호성의 원전.** 실험 하나로는 파라미터 조합이 안 정해진다 | [terms/dem-calibration.md](terms/dem-calibration.md) |
+| **Roessler & Katterfeld (2018)**, Powder Technology 330 | 업스케일 입자에서 **전단 상자가 크기 불변 + 빠르다.** B-S6 에도 있다 | 〃 |
+| **Wensrich & Katterfeld (2012)**, "Rolling friction as a technique for modelling particle shape in DEM", Powder Technology | 구름 마찰 = 모양의 대역. **A-R3 의 "회전 없음은 문헌 밖"에 부분적 답** | 〃 |
+| Coetzee & Scheffler (2023), Processes 11(1), 5 | 점착 재료 교정은 아직 미성숙 — B-S3 을 문헌 쪽에서 확인 | 〃 |
+| Roessler & Katterfeld (2019), Particuology | **젖은 모래** 교정 절차. 원통 인상 + 인상 속도 축 | 〃 |
+| **Richter et al. (2022)**, "Shear lid motion in DEM shear calibration…", Powder Technology | 전단 뚜껑의 수직 자유도가 내부마찰각을 바꾼다 | [terms/shear-box.md](terms/shear-box.md) |
+| ASTM D3080 / D6528 | 전단 상자-입경 비 표준 (`W/d ≥ 10`). DEM REV 는 `> 12.5` + 3,000 입자 | 〃 |
 
 **③이 판정의 핵심이다.**
 

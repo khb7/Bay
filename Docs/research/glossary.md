@@ -92,6 +92,7 @@
 | **[Drucker-Prager](terms/drucker-prager.md)** | 모래·흙 같은 마찰 재료용 항복면. |
 | **[마찰각 (friction angle)](terms/friction-angle.md)** | 원뿔의 기울기를 정하는 값. |
 | **[안식각 (angle of repose)](terms/angle-of-repose.md)** | 마른 모래를 부었을 때 생기는 원뿔의 경사각. |
+| **[전단 상자 (direct shear box)](terms/shear-box.md)** | 덩어리를 강제로 잘라 얼마나 버티는지 잰다. 안식각이 각도 하나를 줄 때 이쪽은 `φ_peak`·`φ_cv`·`c`·`ψ` 넷을 준다. |
 | **[⚠ 점착력 vs 접착력 — 용어 정리](terms/cohesion-vs-adhesion.md)** | *물컵 하나로 둘 다 보인다 |
 | **[점착력 (cohesion, c)](terms/cohesion.md)** | *원뿔 꼭짓점을 인장 쪽으로 밀어낸 거리. |
 | **[경화 (hardening)](terms/hardening.md)** | 소성 이력에 따라 재료 성질이 변하는 것. |
@@ -177,6 +178,7 @@
 | **[★ 그래프 컬러링 — 현대적 답](terms/graph-coloring.md)** | *아이디어: 서로 영향을 안 주는 것끼리 묶으면 동시에 처리해도 된다. |
 | **[워밍 스타트 (warm starting)](terms/warm-starting.md)** | 직전 프레임의 λ를 초기값으로 쓴다. 수렴을 빠르게 하는 게 아니라 수렴한 상태를 프레임 간에 보존하는 것. |
 | **[질량 스케일링 (mass scaling)](terms/mass-scaling.md)** | 솔버 안에서만 유효 질량을 손대 나쁜 질량비를 완화. 교정 실험을 오염시키므로 순서가 중요하다. |
+| **[★ 캘리브레이션 (calibration)](terms/dem-calibration.md)** | 물성을 표에서 가져오지 않고 실험으로 역산한다. `substep`·반복·μ 를 "솔버 상수"라 부르는 근거. 실험 하나로는 답이 유일하지 않다. |
 | **[★ 강성 (stiffness) — 강도·경도·인성과 구분할 것](terms/stiffness.md)** | Unity Spring Joint의 `spring`, 천 시뮬의 `stiffness` 슬라이더. |
 | **[stiff (수치적으로 뻣뻣하다)](terms/stiff.md)** | 힘이 너무 강해 타임스텝을 작게 안 하면 발산하는 상태. |
 | **[크리프 (creep)](terms/creep.md)** | 부서지지 않는 하중인데도 시간이 지나며 변형이 쌓이는 것. 물리 크리프는 잦아들고 수치 크리프는 일정하다 — 그게 판별법이다. |
