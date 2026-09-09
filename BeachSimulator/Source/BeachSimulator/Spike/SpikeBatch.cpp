@@ -595,6 +595,20 @@ FCutFaceResult SpikeBatch::RunCutFace(const FSandParams& Params, int32 Layers, i
 	};
 	for (int32 i = 0; i < P0.Num(); ++i) { if (W[i] > 0.f) { ++R.FreeCount; } }
 	R.HeightBefore = RobustTop(P0) + Params.Radius - BaseTop;
+
+	// 준비 판정 — 정지 플래그 대신 300프레임 더 돌려 안정성으로. 21층부터 §2-2 가 안 닫혔지만 벽을 안 연 대조에선 30초에 0.1cm 도 안 움직였다 (#27)
+	{
+		TArray<FVector3f> Q0 = Sim.GetPositions();
+		for (int32 k = 0; k < 300; ++k) { Sim.Step(BatchDt); }
+		const TArray<FVector3f>& Q1 = Sim.GetPositions();
+		int32 Moved = 0;
+		for (int32 i = 0; i < Q1.Num(); ++i) { if (W[i] > 0.f && FVector3f::Dist(Q1[i], Q0[i]) > D) { ++Moved; } }
+		R.ReadyDrift = (RobustTop(Q1) + Params.Radius - BaseTop) - R.HeightBefore;
+		R.ReadyMoved = R.FreeCount > 0 ? (float)Moved / R.FreeCount : 0.f;
+		R.bReady = FMath::Abs(R.ReadyDrift) < 0.5f && R.ReadyMoved < 0.01f;
+		R.HeightBefore = RobustTop(Q1) + Params.Radius - BaseTop;
+		Before = Q1;
+	}
 	const float Area = FMath::Square(2.f * Sim.GetBoxHalf().X);
 	R.GammaSim = R.FreeCount * FMath::Abs(Params.Gravity) / FMath::Max(Area * R.HeightBefore, 1.f);
 

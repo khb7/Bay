@@ -667,7 +667,7 @@ namespace
 		const float TanTerm = FMath::Tan(UE_PI / 4.f + Phi / 2.f);
 
 		UE_LOG(LogSpikeSweep, Display, TEXT("절토 스윕 — W %.2f  BondStrength %.1f  BreakStretch %.2f  Form %.2f  μ %.2f  한 변 %d입자%s"), W, Strength, Stretch, Form, Mu, Side, bOpen ? TEXT("") : TEXT("  [벽 안 엶 — 대조]"));
-		UE_LOG(LogSpikeSweep, Display, TEXT("   층 | 입자 | 높이 전→후 | 결합 생성/끊김/넘침 | 면 이동비 전체 | 상단 후퇴 | 런아웃 | γ_sim | 이 높이가 H_c 라면 c | 다짐/정지 | 초"));
+		UE_LOG(LogSpikeSweep, Display, TEXT("   층 | 입자 | 높이 전→후 | 결합 생성/끊김/넘침 | 면 이동비 전체 | 상단 후퇴 | 런아웃 | γ_sim | 이 높이가 H_c 라면 c | 준비(드리프트/이동)/정지 | 초"));
 		float Hc = -1.f, GammaAtHc = 0.f;
 		for (const FCutFaceResult& R : Results)
 		{
@@ -680,7 +680,7 @@ namespace
 			UE_LOG(LogSpikeSweep, Display, TEXT("   %2d | %4d | %5.1f→%5.1fcm | %5d / %5d / %4d | %5.1f%%  %5.1f%% | %6.1fcm | %6.1fcm | %5.2f | %7.0f Pa | %s/%s | %5.1f %s"),
 				R.Layers, R.FreeCount, R.HeightBefore, R.HeightAfter, R.BondsMade, R.BondsBroken, R.SlotOverflow,
 				R.FaceMovedFrac * 100.f, R.AllMovedFrac * 100.f, R.TopRetreat, R.MaxRunout, R.GammaSim, CsimIfHc * CsimToPa,
-				R.bSettledBefore ? TEXT("○") : TEXT("✗"), R.bSettledAfter ? TEXT("○") : TEXT("✗"), R.WallSeconds,
+				*FString::Printf(TEXT("%s(%+.2f/%.1f%%)"), R.bReady ? TEXT("○") : TEXT("✗"), R.ReadyDrift, R.ReadyMoved * 100.f), R.bSettledAfter ? TEXT("○") : TEXT("✗"), R.WallSeconds,
 				bCollapsed ? TEXT("★붕괴") : (R.FaceMovedFrac > 0.05f ? TEXT("섬 (표피 탈락)") : TEXT("섬")));
 			FString Prof;
 			for (float Rt : R.RetreatByBand) { Prof += FString::Printf(TEXT(" %5.1f"), Rt); }

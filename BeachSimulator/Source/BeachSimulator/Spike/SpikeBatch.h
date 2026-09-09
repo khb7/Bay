@@ -173,7 +173,10 @@ struct FCutFaceResult
 	TArray<float> RetreatByBand;
 	float TopRetreat = 0.f;       // 맨 위 띠(표면 1D 제외)의 후퇴
 	float GammaSim = 0.f;         // 무게/부피 (시뮬 단위: 질량1·cm)
-	bool  bSettledBefore = false;
+	bool  bSettledBefore = false;   // §2-2 정지 플래그 — 성긴 높은 블록에선 안 닫힌다
+	float ReadyDrift = 0.f;         // 절토 전 300프레임 유지 동안 98백분위 높이 변화 (cm). 준비 판정은 이것으로
+	float ReadyMoved = 0.f;         // 그 동안 D 이상 움직인 비율
+	bool  bReady = false;           // |drift| < 0.5cm 이고 moved < 1%
 	bool  bSettledAfter = false;
 	double WallSeconds = 0.0;
 	/** 시각 프리뷰 덤프 (-dumpxyz) 전용. 측정에는 쓰지 않는다 */
