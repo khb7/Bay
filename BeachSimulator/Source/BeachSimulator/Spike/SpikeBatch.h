@@ -141,8 +141,24 @@ struct FPourResult
 	TArray<float>     FinalInvMass;
 };
 
+/** 결합 단위 검사 결과 (m0-spike.md §2-6) */
+struct FBondTestResult
+{
+	int32 Chain = 0;             // 매달린 자유 입자 수
+	int32 BondsMade = 0;
+	int32 BondsAlive = 0;
+	int32 BondsBroken = 0;
+	float ExpectedStretch = 0.f; // 결합 하나가 무게 1개를 받을 때 m·g·α
+	float TopStretch = 0.f;      // 맨 위 결합의 실제 늘어남 (끊어졌으면 -1)
+	float BottomDrop = 0.f;      // 맨 아래 입자가 시작보다 얼마나 내려갔나
+	bool  bSettled = false;
+};
+
 namespace SpikeBatch
 {
+	/** 고정 입자 아래 N 개를 세로로 결합해 매단다. N=1 은 mgα 만큼 늘어나 서야 하고, N≥2 는 위 결합이 BondStrength 를 넘어 끊어져야 한다 */
+	FBondTestResult RunBondChain(const FSandParams& Params, int32 Chain, int32 Frames);
+
 	/**
 	 * 부어 쌓기 — θr 측정 (m0-spike.md §3-0-A).
 	 *

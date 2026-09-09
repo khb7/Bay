@@ -67,6 +67,17 @@ struct FSandParams
 	 */
 	float  SettleEpsilon = 0.002f;
 	float  WGlobal    = 0.f;     // 0 = 마른 모래. 점착 비활성
+
+	// --- 점착 결합 (m0-spike.md §2-4 · §2-6) ---
+	/** 파단 순간의 결합력 / 자기 무게. Rumpf 역산 2.5N ≈ 1.5배 (papers B-S2). 상한이다 — 3-3-B 가 교정 */
+	float  BondStrength    = 1.5f;
+	/** 끊어지는 거리 / d_rest. ⚠ 1.3 은 V*≈0.2 (매우 젖음) 값 — W_opt 면 1.11 (Lian 1993, B2). 3-2 에서 W 의존으로 */
+	float  BreakStretch    = 1.3f;
+	/** 붙는 거리 / d_rest — V*≈0.001 의 파단 거리 (B2) */
+	float  BondFormStretch = 1.05f;
+	int32  BondSlots       = 12;
+	/** cohesion(W) 제어점 4개 — 구간 선형 (§2-4). B1 절벽 · Scheel 2008 고원 */
+	float  WDry = 0.05f, WOptStart = 0.15f, WOptEnd = 0.70f, WSat = 0.90f;
 	uint32 Seed       = 1337;    // 초기 배치 jitter 전용
 };
 
@@ -191,6 +202,18 @@ struct FSandContact
 };
 
 /**
+ * 점착 결합 — 접촉과 별개의 영구 목록. 도구 조작(FormBonds)에만 생기고, 늘어나면 끊어지며, 스스로 되붙지 않는다.
+ * 인장만 받는다 (모세관 다리는 당기기만 한다 — Lian 1993). λ 는 스텝을 건너 살아 워밍 스타트의 초기값이 된다.
+ */
+struct FSandBond
+{
+	int32 I = 0;
+	int32 J = 0;
+	float RestLen = 0.f;
+	float Lambda  = 0.f;   // XPBD 승수 (길이·질량). 인장이면 음수
+};
+
+/**
  * 입자 시뮬 코어. 순수 C++ — 틱도 렌더링도 모른다.
  *
  * 실시간 뷰(ASpikeActor)와 배치 스윕(FSpikeBatch)이 같은 코어를 쓰기 위한 분리다.
@@ -207,6 +230,20 @@ public:
 
 	/** 실행 중 입자를 더한다. 버퍼가 따라서 늘어난다. */
 	void AddParticles(const TArray<FVector3f>& NewPos);
+
+	/** 임의 배치 — 위치와 질량 역수(0 = 고정)를 직접 준다. 단위 검사용 */
+	void InitCustom(const FSandParams& InParams, const TArray<FVector3f>& InPos, const TArray<float>& InInvMass);
+
+	/**
+	 * 점착 결합 생성 — "도구 조작" 시점. 거리 < d·BondFormStretch 이고 W ≥ WDry 인 쌍을 가까운 순으로 슬롯까지.
+	 * 매 프레임 부르면 자발적 재결합이 되어 §4 의 규칙을 깬다. 생성된 개수를 돌려준다.
+	 */
+	int32 FormBonds();
+	void  SetWGlobal(float W) { Params.WGlobal = W; }
+	/** cohesion(W) 0~1 — §2-4 구간 선형 */
+	float CohesionOfW(float W) const;
+	/** 결합 컴플라이언스 α [cm/힘]. k = BondStrength·g/((BreakStretch−1)·d) 에 cohesion(W) 를 곱한 것의 역수. 점착 0 이면 0 (비활성) */
+	float BondCompliance() const;
 
 	/** 중력을 기울인다. 상자를 돌리는 대신 상자 좌표계에서 중력을 돌린다 (같은 것). */
 	void SetTiltDegrees(float Deg);
@@ -238,6 +275,9 @@ public:
 	const TArray<float>&     GetInvMass()    const { return InvMass; }
 	FVector3f GetBoxHalf() const { return BoxHalf; }
 	int32   NumPairs()     const { return Contacts.Num(); }
+	const TArray<FSandBond>& GetBonds() const { return Bonds; }
+	int32   BondsBroken()  const { return BondsBrokenTotal; }
+	int32   BondOverflow() const { return BondSlotOverflow; }
 	bool    WallsActive()  const { return bWallsActive; }
 	float   AvgSpeed()     const { return LastAvgSpeed; }
 	float   MaxSpeed()     const { return LastMaxSpeed; }
@@ -275,6 +315,10 @@ private:
 
 	/** Frâncu 2014 §6 — 임펄스 하나로 v 와 x 를 함께 갱신. 역산이 없다. */
 	void SolveContactsSP(float StepDt, int32 Iter, int32 MaxIter);
+	/** 결합 — XPBD 컴플라이언스, 인장만. 임펄스 하나로 v·x 함께 (SP 규약) */
+	void SolveBondsSP(float StepDt);
+	/** 거리 > RestLen·BreakStretch 또는 cohesion(W)=0 이면 삭제. 재결합 없음 */
+	void BreakBonds();
 	void SolveGroundSP(float StepDt);
 
 	/**
@@ -313,6 +357,10 @@ private:
 	TArray<float> GroundLambdaN;        // 지면도 접촉이다. 무한 질량이라 w = 0
 	TArray<float> GroundLambdaT;
 	TArray<float> WallLambdaN;          // 벽도 마찬가지
+
+	TArray<FSandBond> Bonds;            // 영구 목록. FormBonds 가 만들고 BreakBonds 가 지운다
+	int32 BondsBrokenTotal = 0;
+	int32 BondSlotOverflow = 0;
 
 	// 정렬 기반 공간 해시 — 균일 격자는 빈 공간이 크고, Niagara Neighbor Grid3D는
 	// 셀당 상한 초과를 조용히 자른다 (decision-log.md). 여기선 계수 정렬로 오버플로가 없다.

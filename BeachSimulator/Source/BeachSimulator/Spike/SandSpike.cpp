@@ -147,6 +147,154 @@ void FSandSpike::SpawnPourBase()
 	PrevPos = Pos;
 }
 
+void FSandSpike::InitCustom(const FSandParams& InParams, const TArray<FVector3f>& InPos, const TArray<float>& InInvMass)
+{
+	Params = InParams;
+	bBoxScene = false;
+	WallRadius = 0.f;
+
+	Pos = InPos;
+	InvMass = InInvMass;
+	Vel.SetNumZeroed(Pos.Num());
+	PrevPos = Pos;
+	Bonds.Reset();
+	BondsBrokenTotal = 0;
+	BondSlotOverflow = 0;
+
+	ResizeBuffers();
+	ResetRunState();
+	bWallsActive = false;
+}
+
+float FSandSpike::CohesionOfW(float W) const
+{
+	if (W <= Params.WDry || W >= Params.WSat) { return 0.f; }
+	if (W < Params.WOptStart) { return (W - Params.WDry) / FMath::Max(Params.WOptStart - Params.WDry, UE_KINDA_SMALL_NUMBER); }
+	if (W <= Params.WOptEnd)  { return 1.f; }
+	return (Params.WSat - W) / FMath::Max(Params.WSat - Params.WOptEnd, UE_KINDA_SMALL_NUMBER);
+}
+
+float FSandSpike::BondCompliance() const
+{
+	const float Coh = CohesionOfW(Params.WGlobal);
+	if (Coh <= 0.f) { return 0.f; }
+	// 파단 순간(늘어남 = (BreakStretch−1)·d)의 스프링 힘이 정확히 BondStrength·m·g 가 되는 강성. m = 1
+	const float D = 2.f * Params.Radius;
+	const float K = Params.BondStrength * FMath::Abs(Params.Gravity) / FMath::Max((Params.BreakStretch - 1.f) * D, UE_KINDA_SMALL_NUMBER);
+	return 1.f / (K * Coh);
+}
+
+int32 FSandSpike::FormBonds()
+{
+	if (CohesionOfW(Params.WGlobal) <= 0.f) { return 0; }
+
+	const float D = 2.f * Params.Radius;
+	const float MaxDist = D * Params.BondFormStretch;
+
+	// 이미 있는 결합은 다시 만들지 않는다
+	TSet<uint64> Existing;
+	for (const FSandBond& B : Bonds) { Existing.Add(((uint64)FMath::Min(B.I, B.J) << 32) | (uint64)FMath::Max(B.I, B.J)); }
+
+	TArray<int32> SlotUsed;
+	SlotUsed.SetNumZeroed(Pos.Num());
+	for (const FSandBond& B : Bonds) { ++SlotUsed[B.I]; ++SlotUsed[B.J]; }
+
+	// 후보를 전부 모아 가까운 순으로 — 슬롯이 모자랄 때 어느 쌍이 남는지가 결정적이어야 한다.
+	// O(N²) 는 도구 조작 시점 한 번이라 감당한다 (5000개 = 1.2×10⁷ 거리 검사)
+	struct FCand { int32 I, J; float Dist; };
+	TArray<FCand> Cands;
+	for (int32 i = 0; i < Pos.Num(); ++i)
+	for (int32 j = i + 1; j < Pos.Num(); ++j)
+	{
+		if (InvMass[i] <= 0.f && InvMass[j] <= 0.f) { continue; }
+		const float Dist = FVector3f::Dist(Pos[i], Pos[j]);
+		if (Dist < MaxDist && !Existing.Contains(((uint64)i << 32) | (uint64)j)) { Cands.Add({ i, j, Dist }); }
+	}
+	Cands.Sort([](const FCand& A, const FCand& B) { return A.Dist < B.Dist || (A.Dist == B.Dist && (A.I < B.I || (A.I == B.I && A.J < B.J))); });
+
+	int32 Made = 0;
+	for (const FCand& C : Cands)
+	{
+		if (SlotUsed[C.I] >= Params.BondSlots || SlotUsed[C.J] >= Params.BondSlots) { ++BondSlotOverflow; continue; }
+		Bonds.Add({ C.I, C.J, C.Dist, 0.f });
+		++SlotUsed[C.I]; ++SlotUsed[C.J]; ++Made;
+	}
+	return Made;
+}
+
+void FSandSpike::SolveBondsSP(float StepDt)
+{
+	// XPBD (Macklin 2016) 컴플라이언스 제약을 SP 규약(임펄스 하나로 v·x 함께)으로.
+	//   C = |x_i − x_j| − d_rest,   Δλ = −(C + α̃λ) / (w_i + w_j + α̃),   α̃ = α/h²
+	//   Δx_i = +Δλ·w_i·N,  Δx_j = −Δλ·w_j·N,  Δv = Δx / h
+	// 인장만 — λ ≤ 0. 압축은 접촉 제약의 일이고, 모세관 다리는 당기기만 한다 (Lian 1993).
+	if (Bonds.Num() == 0)
+	{
+		return;
+	}
+	const float Alpha = BondCompliance();
+	if (Alpha <= 0.f)
+	{
+		return;   // cohesion(W) = 0 — BreakBonds 가 목록을 비운다
+	}
+	const float AlphaTilde = Alpha / (StepDt * StepDt);
+
+	for (FSandBond& B : Bonds)
+	{
+		const float Wi = InvMass[B.I];
+		const float Wj = InvMass[B.J];
+		const float WSum = Wi + Wj;
+		if (WSum <= 0.f)
+		{
+			continue;
+		}
+		const FVector3f Diff = Pos[B.I] - Pos[B.J];
+		const float Dist = Diff.Size();
+		if (Dist < UE_KINDA_SMALL_NUMBER)
+		{
+			continue;
+		}
+		const FVector3f N = Diff / Dist;
+		const float C = Dist - B.RestLen;
+
+		float DLambda = -(C + AlphaTilde * B.Lambda) / (WSum + AlphaTilde);
+		const float NewLambda = FMath::Min(0.f, B.Lambda + DLambda);   // 인장만
+		DLambda = NewLambda - B.Lambda;
+		B.Lambda = NewLambda;
+		if (DLambda == 0.f)
+		{
+			continue;
+		}
+
+		const FVector3f Corr = N * DLambda;
+		Pos[B.I] += Corr * Wi;
+		Pos[B.J] -= Corr * Wj;
+		Vel[B.I] += Corr * (Wi / StepDt);
+		Vel[B.J] -= Corr * (Wj / StepDt);
+	}
+}
+
+void FSandSpike::BreakBonds()
+{
+	if (Bonds.Num() == 0)
+	{
+		return;
+	}
+	// 거리 > d_rest·breakStretch (Lian 1993 파단 거리) 또는 말라서 cohesion(W) = 0.
+	// 지운 결합은 돌아오지 않는다 — 되붙이는 것은 FormBonds(도구)만 한다.
+	const bool bDry = CohesionOfW(Params.WGlobal) <= 0.f;
+	for (int32 b = Bonds.Num() - 1; b >= 0; --b)
+	{
+		const FSandBond& B = Bonds[b];
+		const float Dist = FVector3f::Dist(Pos[B.I], Pos[B.J]);
+		if (bDry || Dist > B.RestLen * Params.BreakStretch)
+		{
+			Bonds.RemoveAtSwap(b);
+			++BondsBrokenTotal;
+		}
+	}
+}
+
 void FSandSpike::AddParticles(const TArray<FVector3f>& NewPos)
 {
 	for (const FVector3f& P : NewPos)
@@ -976,6 +1124,20 @@ void FSandSpike::Step(float Dt)
 			FMemory::Memzero(WallLambdaN.GetData(), WallLambdaN.Num() * sizeof(float));
 		}
 
+		// 결합 λ — 워밍이면 직전 값을 속도 임펄스로 먼저, 아니면 0. 접촉과 같은 규약 (#24)
+		for (FSandBond& B : Bonds)
+		{
+			if (!bWarm) { B.Lambda = 0.f; continue; }
+			B.Lambda *= Params.WarmStart;
+			if (B.Lambda == 0.f) { continue; }
+			const FVector3f Diff = Pos[B.I] - Pos[B.J];
+			const float Dist = Diff.Size();
+			if (Dist < UE_KINDA_SMALL_NUMBER) { B.Lambda = 0.f; continue; }
+			const FVector3f Corr = (Diff / Dist) * (B.Lambda / SubDt);   // Δx = λ·w·∇C 를 속도로
+			Vel[B.I] += Corr * InvMass[B.I];
+			Vel[B.J] -= Corr * InvMass[B.J];
+		}
+
 		PredictPositions(SubDt);
 
 		if (Params.bSequentialPositions)
@@ -994,6 +1156,7 @@ void FSandSpike::Step(float Dt)
 			for (int32 it = 0; it < Params.Iterations; ++it)
 			{
 				SolveContactsSP(SubDt, it, Params.Iterations);
+				SolveBondsSP(SubDt);
 				SolveGroundSP(SubDt);
 				SolveWallsSP(SubDt);
 				if (bTrace)
@@ -1007,6 +1170,7 @@ void FSandSpike::Step(float Dt)
 			{
 				UE_LOG(LogTemp, Display, TEXT("[trace] f%d ss%d 반복 후  %s"), Frame, s, *DescribeParticle(DebugTraceIndex));
 			}
+			BreakBonds();   // 반복이 끝난 자리에서 판정 — 도중에 지우면 뒤 반복이 다른 목록을 본다
 			// ★ 속도 역산 없음 — v 는 솔버가 직접 냈다
 		}
 		else

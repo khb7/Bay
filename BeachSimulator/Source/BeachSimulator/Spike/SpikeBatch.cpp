@@ -555,6 +555,37 @@ FConeLiftResult SpikeBatch::RunConeLift(const FSandParams& Params, const FColumn
 
 // ---------------------------------------------------------------------------
 
+FBondTestResult SpikeBatch::RunBondChain(const FSandParams& Params, int32 Chain, int32 Frames)
+{
+	FBondTestResult R;
+	R.Chain = Chain;
+
+	const float D = 2.f * Params.Radius;
+	const float TopZ = 100.f;
+	TArray<FVector3f> P;
+	TArray<float> W;
+	P.Add(FVector3f(0.f, 0.f, TopZ)); W.Add(0.f);   // 고정
+	for (int32 k = 1; k <= Chain; ++k) { P.Add(FVector3f(0.f, 0.f, TopZ - k * D)); W.Add(1.f); }
+
+	FSandSpike Sim;
+	Sim.InitCustom(Params, P, W);
+	R.BondsMade = Sim.FormBonds();
+	R.ExpectedStretch = FMath::Abs(Params.Gravity) * Sim.BondCompliance();   // m = 1
+
+	for (int32 f = 0; f < Frames && !Sim.IsSettled(); ++f) { Sim.Step(BatchDt); }
+	R.bSettled = Sim.IsSettled();
+	R.BondsAlive = Sim.GetBonds().Num();
+	R.BondsBroken = Sim.BondsBroken();
+
+	R.TopStretch = -1.f;
+	for (const FSandBond& B : Sim.GetBonds())
+	{
+		if (B.I == 0 || B.J == 0) { R.TopStretch = FVector3f::Dist(Sim.GetPositions()[B.I], Sim.GetPositions()[B.J]) - B.RestLen; }
+	}
+	R.BottomDrop = (TopZ - Chain * D) - Sim.GetPositions().Last().Z;
+	return R;
+}
+
 FPourResult SpikeBatch::RunPour(const FSandParams& Params, const FPourSetup& Setup, int32 SettleCap)
 {
 	const double T0 = FPlatformTime::Seconds();

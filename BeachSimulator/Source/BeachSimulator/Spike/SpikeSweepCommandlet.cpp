@@ -569,6 +569,41 @@ namespace
 	 * 쿨롱 마찰이면 정확히 atan(μ) 에서 미끄러져야 한다.
 	 * 여기서 안 맞으면 더미·측정·평균은 볼 필요가 없다.
 	 */
+	/** 결합 단위 검사 — m0-spike.md §2-6. 구현 전에 실패해야 한다 */
+	int32 RunBondTest(const FString& Params)
+	{
+		float W = 0.15f, Warm = 1.f;
+		FParse::Value(*Params, TEXT("w="), W);
+		FParse::Value(*Params, TEXT("warm="), Warm);
+		FSandParams P;
+		P.Friction = 0.15f;
+		P.Iterations = 90;
+		P.WGlobal = W;
+		P.WarmStart = Warm;
+		P.WarmGapTol = 0.02f;
+
+		UE_LOG(LogSpikeSweep, Display, TEXT("결합 단위 검사 — W=%.2f  BondStrength %.1f  BreakStretch %.2f  워밍 %.1f"), W, P.BondStrength, P.BreakStretch, Warm);
+		UE_LOG(LogSpikeSweep, Display, TEXT("   사슬 | 생성 살아있음 끊김 | 기대 늘어남  실측(위) | 아래 낙하 | 정지 | 판정"));
+		for (int32 N : { 1, 2, 3 })
+		{
+			const FBondTestResult R = SpikeBatch::RunBondChain(P, N, 1200);
+			const bool bShouldHold = (float)N <= P.BondStrength;   // 위 결합이 받는 무게 = N
+			bool bPass;
+			if (bShouldHold)
+			{
+				bPass = R.BondsAlive == N && R.TopStretch >= 0.f && FMath::Abs(R.TopStretch - R.ExpectedStretch) <= 0.01f * FMath::Max(R.ExpectedStretch, 1e-3f) + 0.005f;
+			}
+			else
+			{
+				bPass = R.BondsBroken >= 1 && R.BottomDrop > 5.f;
+			}
+			UE_LOG(LogSpikeSweep, Display, TEXT("   %4d | %4d %6d %5d | %8.3fcm %8.3fcm | %8.1fcm | %4s | %s (%s)"),
+				N, R.BondsMade, R.BondsAlive, R.BondsBroken, R.ExpectedStretch, R.TopStretch, R.BottomDrop,
+				R.bSettled ? TEXT("○") : TEXT("✗"), bPass ? TEXT("★통과") : TEXT("실패"), bShouldHold ? TEXT("버텨야") : TEXT("끊어져야"));
+		}
+		return 0;
+	}
+
 	int32 RunFrictionTest()
 	{
 		UE_LOG(LogSpikeSweep, Display, TEXT("단일 입자 마찰 시험 — 거친 바닥 위 입자 1개"));
@@ -635,6 +670,10 @@ int32 USpikeSweepCommandlet::Main(const FString& Params)
 	if (FParse::Param(*Params, TEXT("frictiontest")))
 	{
 		return RunFrictionTest();
+	}
+	if (FParse::Param(*Params, TEXT("bondtest")))
+	{
+		return RunBondTest(Params);
 	}
 	if (FParse::Param(*Params, TEXT("selftest")))
 	{
