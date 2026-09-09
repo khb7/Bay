@@ -555,6 +555,80 @@ FConeLiftResult SpikeBatch::RunConeLift(const FSandParams& Params, const FColumn
 
 // ---------------------------------------------------------------------------
 
+FCutFaceResult SpikeBatch::RunCutFace(const FSandParams& Params, int32 Layers, int32 SidePerLayer, int32 SettleCap, int32 HoldFrames)
+{
+	const double T0 = FPlatformTime::Seconds();
+	FCutFaceResult R;
+	R.Layers = Layers;
+
+	FTiltSetup Setup;
+	Setup.Layers = Layers;
+	Setup.FixedLayers = 1;
+	Setup.TargetCount = SidePerLayer * SidePerLayer * Layers;
+	Setup.bOpenDownhill = false;   // 닫힌 상자에서 다진다
+	Setup.BaseJitter = 0.3f;
+	Setup.FreeJitter = 0.3f;
+
+	// ① 마른 채로 다진다 — 결합은 다진 뒤 '도구 조작' 시점에 만든다
+	FSandParams Dry = Params;
+	Dry.WGlobal = 0.f;
+	FSandSpike Sim;
+	Sim.InitTiltBox(Dry, Setup);
+	int32 f = 0;
+	for (; f < SettleCap && !Sim.IsSettled(); ++f) { Sim.Step(BatchDt); }
+	R.bSettledBefore = Sim.IsSettled();
+
+	const TArray<FVector3f>& P0 = Sim.GetPositions();
+	const TArray<float>& W = Sim.GetInvMass();
+	const float D = 2.f * Params.Radius;
+	const float BaseTop = 2.f * Params.Radius;   // 고정층 윗면
+	const float LX = Sim.GetBoxHalf().X - Params.Radius;   // +X 벽선 (입자 중심)
+	TArray<FVector3f> Before = P0;
+	// 높이는 최고점이 아니라 98 백분위 — 튄 입자 하나가 블록 높이를 대표하면 γ 가 절반으로 나온다 (#23 의 단면 교훈)
+	auto RobustTop = [&](const TArray<FVector3f>& Q)
+	{
+		TArray<float> Z;
+		for (int32 i = 0; i < Q.Num(); ++i) { if (W[i] > 0.f) { Z.Add(Q[i].Z); } }
+		if (Z.Num() == 0) { return 0.f; }
+		Z.Sort();
+		return Z[FMath::Clamp((int32)(Z.Num() * 0.98f), 0, Z.Num() - 1)];
+	};
+	for (int32 i = 0; i < P0.Num(); ++i) { if (W[i] > 0.f) { ++R.FreeCount; } }
+	R.HeightBefore = RobustTop(P0) + Params.Radius - BaseTop;
+	const float Area = FMath::Square(2.f * Sim.GetBoxHalf().X);
+	R.GammaSim = R.FreeCount * FMath::Abs(Params.Gravity) / FMath::Max(Area * R.HeightBefore, 1.f);
+
+	// ② 물을 준다 → 결합 → +X 벽 제거
+	Sim.SetWGlobal(Params.WGlobal);
+	R.BondsMade = Sim.FormBonds();
+	R.SlotOverflow = Sim.BondOverflow();
+	Sim.OpenFaceXPlus();
+
+	int32 h = 0;
+	for (; h < HoldFrames && !(h > 120 && Sim.IsSettled()); ++h) { Sim.Step(BatchDt); }
+	R.bSettledAfter = Sim.IsSettled();
+	R.BondsBroken = Sim.BondsBroken();
+
+	// ③ 판정 — 절토면 띠(벽선에서 2D 안)의 입자 중 D 이상 움직인 비율. 3-1 의 '변위 > 2r' 과 같은 자
+	const TArray<FVector3f>& P1 = Sim.GetPositions();
+	int32 MovedFace = 0, MovedAll = 0;
+	const float TopAfter = RobustTop(P1);
+	for (int32 i = 0; i < P1.Num(); ++i)
+	{
+		if (W[i] <= 0.f) { continue; }
+		const float Disp = FVector3f::Dist(P1[i], Before[i]);
+		const bool bMoved = Disp > D;
+		if (bMoved) { ++MovedAll; }
+		if (Before[i].X > LX - 2.f * D) { ++R.FaceCount; if (bMoved) { ++MovedFace; } }
+		R.MaxRunout = FMath::Max(R.MaxRunout, P1[i].X - LX);
+	}
+	R.FaceMovedFrac = R.FaceCount > 0 ? (float)MovedFace / R.FaceCount : 0.f;
+	R.AllMovedFrac  = R.FreeCount > 0 ? (float)MovedAll / R.FreeCount : 0.f;
+	R.HeightAfter = TopAfter + Params.Radius - BaseTop;
+	R.WallSeconds = FPlatformTime::Seconds() - T0;
+	return R;
+}
+
 FBondTestResult SpikeBatch::RunBondChain(const FSandParams& Params, int32 Chain, int32 Frames)
 {
 	FBondTestResult R;

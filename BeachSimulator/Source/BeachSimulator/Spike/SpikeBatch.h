@@ -154,8 +154,31 @@ struct FBondTestResult
 	bool  bSettled = false;
 };
 
+/** 절토 — 점착의 자 (m0-spike.md §3-3-B). 한 면 지지 제거 후 높이별 붕괴 여부 */
+struct FCutFaceResult
+{
+	int32 Layers = 0;
+	int32 FreeCount = 0;
+	float HeightBefore = 0.f;     // 다진 뒤 자유 입자 최고점 (바닥 윗면 기준)
+	float HeightAfter = 0.f;
+	int32 BondsMade = 0;
+	int32 BondsBroken = 0;
+	int32 SlotOverflow = 0;
+	int32 FaceCount = 0;          // 절토면 띠(+X 쪽 2D) 입자 수
+	float FaceMovedFrac = 0.f;    // 그중 변위 > D 비율 — 3-1 판정과 같은 자
+	float AllMovedFrac = 0.f;
+	float MaxRunout = 0.f;        // 벽선 밖으로 나간 최대 거리 (cm)
+	float GammaSim = 0.f;         // 무게/부피 (시뮬 단위: 질량1·cm)
+	bool  bSettledBefore = false;
+	bool  bSettledAfter = false;
+	double WallSeconds = 0.0;
+};
+
 namespace SpikeBatch
 {
+	/** 닫힌 상자에 Layers 층을 채워 다지고 → FormBonds → +X 벽 제거 → HoldFrames 뒤 절토면이 남았는가 */
+	FCutFaceResult RunCutFace(const FSandParams& Params, int32 Layers, int32 SidePerLayer, int32 SettleCap, int32 HoldFrames);
+
 	/** 고정 입자 아래 N 개를 세로로 결합해 매단다. N=1 은 mgα 만큼 늘어나 서야 하고, N≥2 는 위 결합이 BondStrength 를 넘어 끊어져야 한다 */
 	FBondTestResult RunBondChain(const FSandParams& Params, int32 Chain, int32 Frames);
 

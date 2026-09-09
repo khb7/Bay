@@ -104,6 +104,8 @@ struct FTiltSetup
 	 * 벽의 한계가 된다 (실측: atan(μ) 보다 +20~31°). 열어두면 문헌의 경사면 시험과 같아진다.
 	 */
 	bool bOpenDownhill = true;
+	/** +X 면만 연다 — 절토면 (m0-spike §3-3-B). 나머지 세 벽은 그대로 */
+	bool bOpenXPlus = false;
 };
 
 /**
@@ -257,6 +259,8 @@ public:
 
 	/** 가상 벽 제거 = 붕괴 시작. 터널 실험의 "입자 지우기"와 같은 조작이다. */
 	void ReleaseWalls() { bWallsActive = false; SettledFrames = 0; }
+	/** 절토 — +X 벽만 제거. 뒤는 모래가 받치므로 박벽과 달리 좌굴이 없다 (§3-3-B) */
+	void OpenFaceXPlus() { Tilt.bOpenXPlus = true; SettledFrames = 0; }
 
 	/**
 	 * 원통을 여기까지 들어올린다 — 벽은 z > Z 인 입자에만 작용한다.

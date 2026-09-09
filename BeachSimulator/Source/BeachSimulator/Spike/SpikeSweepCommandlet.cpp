@@ -604,6 +604,67 @@ namespace
 		return 0;
 	}
 
+	/** 절토 높이 스윕 — 점착의 자 c[Pa] (m0-spike.md §3-3-B) */
+	int32 RunCutSweep(const FString& Params)
+	{
+		float W = 0.15f, Strength = 1.5f, Stretch = 1.3f, Mu = 0.15f;
+		int32 Side = 12, SettleCap = 3000, Hold = 1800;
+		FParse::Value(*Params, TEXT("w="), W);
+		FParse::Value(*Params, TEXT("strength="), Strength);
+		FParse::Value(*Params, TEXT("stretch="), Stretch);
+		FParse::Value(*Params, TEXT("mu="), Mu);
+		FParse::Value(*Params, TEXT("side="), Side);
+		FParse::Value(*Params, TEXT("hold="), Hold);
+		const TArray<int32> LayerList = ParseList<int32>(Params, TEXT("layers="), { 6, 9, 12, 15, 18 });
+
+		FSandParams P;
+		P.Friction = Mu;
+		P.Iterations = 90;
+		P.WGlobal = W;
+		P.WarmStart = 1.f;
+		P.WarmGapTol = 0.02f;
+		P.BondStrength = Strength;
+		P.BreakStretch = Stretch;
+
+		TArray<FCutFaceResult> Results;
+		Results.SetNum(LayerList.Num());
+		ParallelFor(LayerList.Num(), [&](int32 i) { Results[i] = SpikeBatch::RunCutFace(P, LayerList[i], Side, SettleCap, Hold); });
+
+		// 단위 환산 — 질량 1 = 지름 5cm 석영구 0.1734 kg (2650 kg/m³ × 65.45 cm³). 힘 단위 1 = 1.734e-3 N. c[힘/cm²] × 17.34 = Pa
+		const float ForceToN = 0.1734f * 0.01f;
+		const float CsimToPa = ForceToN / 1e-4f;
+		const float Phi = FMath::DegreesToRadians(34.f);
+		const float TanTerm = FMath::Tan(UE_PI / 4.f + Phi / 2.f);
+
+		UE_LOG(LogSpikeSweep, Display, TEXT("절토 스윕 — W %.2f  BondStrength %.1f  BreakStretch %.2f  μ %.2f  한 변 %d입자"), W, Strength, Stretch, Mu, Side);
+		UE_LOG(LogSpikeSweep, Display, TEXT("   층 | 입자 | 높이 전→후 | 결합 생성/끊김/넘침 | 면 이동비 전체 | 런아웃 | γ_sim | 이 높이가 H_c 라면 c | 다짐/정지 | 초"));
+		float Hc = -1.f, GammaAtHc = 0.f;
+		for (const FCutFaceResult& R : Results)
+		{
+			// Terzaghi 파괴는 블록을 관통하는 활동면이라 전체 이동비로 본다. 면 띠의 이동은 벽에 기대 있던 바깥 열이
+			// 떨어지는 표피 효과가 섞여(6층에서 면 25% · 전체 4%) 3-1 의 5% 기준으론 못 가른다 — 따로 적는다
+			const bool bCollapsed = R.AllMovedFrac > 0.15f;
+			const float CsimIfHc = R.HeightBefore * R.GammaSim / (4.f * TanTerm);
+			if (bCollapsed && Hc < 0.f) { Hc = R.HeightBefore; GammaAtHc = R.GammaSim; }
+			UE_LOG(LogSpikeSweep, Display, TEXT("   %2d | %4d | %5.1f→%5.1fcm | %5d / %5d / %4d | %5.1f%%  %5.1f%% | %6.1fcm | %5.2f | %7.0f Pa | %s/%s | %5.1f %s"),
+				R.Layers, R.FreeCount, R.HeightBefore, R.HeightAfter, R.BondsMade, R.BondsBroken, R.SlotOverflow,
+				R.FaceMovedFrac * 100.f, R.AllMovedFrac * 100.f, R.MaxRunout, R.GammaSim, CsimIfHc * CsimToPa,
+				R.bSettledBefore ? TEXT("○") : TEXT("✗"), R.bSettledAfter ? TEXT("○") : TEXT("✗"), R.WallSeconds,
+				bCollapsed ? TEXT("★붕괴") : (R.FaceMovedFrac > 0.05f ? TEXT("섬 (표피 탈락)") : TEXT("섬")));
+		}
+		if (Hc > 0.f)
+		{
+			const float Csim = Hc * GammaAtHc / (4.f * TanTerm);
+			UE_LOG(LogSpikeSweep, Display, TEXT("→ 처음 무너진 높이 H_c ≈ %.1fcm  →  c ≈ %.0f Pa  (Terzaghi, φ=34°)   목표 1500 · 터널 요구 2400 · Rumpf 상한(BondStrength %.1f) %.0f Pa"),
+				Hc, Csim * CsimToPa, Strength, 1.5f * Strength * 1.734f / 0.0025f);
+		}
+		else
+		{
+			UE_LOG(LogSpikeSweep, Display, TEXT("→ 스윕 안에서 안 무너짐 — c 하한만. 층수를 올릴 것"));
+		}
+		return 0;
+	}
+
 	int32 RunFrictionTest()
 	{
 		UE_LOG(LogSpikeSweep, Display, TEXT("단일 입자 마찰 시험 — 거친 바닥 위 입자 1개"));
@@ -674,6 +735,10 @@ int32 USpikeSweepCommandlet::Main(const FString& Params)
 	if (FParse::Param(*Params, TEXT("bondtest")))
 	{
 		return RunBondTest(Params);
+	}
+	if (FParse::Param(*Params, TEXT("cut")))
+	{
+		return RunCutSweep(Params);
 	}
 	if (FParse::Param(*Params, TEXT("selftest")))
 	{

@@ -216,7 +216,9 @@ int32 FSandSpike::FormBonds()
 	for (const FCand& C : Cands)
 	{
 		if (SlotUsed[C.I] >= Params.BondSlots || SlotUsed[C.J] >= Params.BondSlots) { ++BondSlotOverflow; continue; }
-		Bonds.Add({ C.I, C.J, C.Dist, 0.f });
+		// 휴지 길이 하한 = D. 살짝 침투한 쌍에 현재 거리를 주면 결합은 D 아래로 당기고 접촉은 D 로 밀어
+		// 매 반복 싸운다 — 실측: 절토 12층에서 벽을 열자 높이 46→81cm 로 솟음. 인장만 받는 결합은 D 에서 시작해야 한다
+		Bonds.Add({ C.I, C.J, FMath::Max(C.Dist, D), 0.f });
 		++SlotUsed[C.I]; ++SlotUsed[C.J]; ++Made;
 	}
 	return Made;
@@ -316,29 +318,50 @@ void FSandSpike::SpawnTiltBox()
 	const int32 PerLayer = FMath::Max(1, Tilt.TargetCount / FMath::Max(1, Tilt.Layers));
 	const int32 Side     = FMath::Max(2, FMath::RoundToInt(FMath::Sqrt((float)PerLayer)));
 
-	BoxHalf = FVector3f(Side * S * 0.5f, Side * S * 0.5f, 0.f);
-
 	FRandomStream Rng(Params.Seed);
 	const float Jitter = Tilt.FreeJitter * R2;
 	const float BaseJ  = Tilt.BaseJitter * R2;
 
-	// 고정층(거친 바닥)을 먼저 넣어 인덱스 앞쪽에 모은다
+	// 자유 격자 간격은 D + 2J — 흔들어도 초기 겹침이 없어야 한다.
+	// 간격 D 에 0.3R 을 흔들면 최대 1.5cm 침투로 시작하고, 솔버가 그걸 밀어내며 블록이 부푼다
+	// (실측: 5층이 25cm 가 아니라 37cm, 충전율 0.35). 부어 쌓기가 무사했던 것은 바닥만 흔들어서다.
+	const float SF = S + 2.f * Jitter;
+	BoxHalf = FVector3f(Side * SF * 0.5f, Side * SF * 0.5f, 0.f);
+
 	Pos.Reset();
 	InvMass.Reset();
-	for (int32 iz = 0; iz < Tilt.Layers; ++iz)
+
+	// 고정층(거친 바닥) — 간격 D 로 상자를 덮는다. 겹침은 고정이라 무해. 인덱스 앞쪽에 모은다
+	const int32 BaseN = FMath::CeilToInt(Side * SF / S);
+	for (int32 iz = 0; iz < Tilt.FixedLayers; ++iz)
 	{
-		const bool bFixed = iz < Tilt.FixedLayers;
+		for (int32 iy = 0; iy < BaseN; ++iy)
+		for (int32 ix = 0; ix < BaseN; ++ix)
+		{
+			const float X = (ix - (BaseN - 1) * 0.5f) * S;
+			const float Y = (iy - (BaseN - 1) * 0.5f) * S;
+			Pos.Add(FVector3f(
+				X + Rng.FRandRange(-BaseJ, BaseJ),
+				Y + Rng.FRandRange(-BaseJ, BaseJ),
+				R2 + iz * S + Rng.FRandRange(-BaseJ, BaseJ)));   // 격자 바닥은 거칠기가 아니라 템플릿이다 (#25)
+			InvMass.Add(0.f);
+		}
+	}
+
+	// 자유층 — 간격 SF. 첫 층은 바닥 윗면 + 흔들림 여유만큼 띄운다
+	const float FreeZ0 = R2 + Tilt.FixedLayers * S + Jitter + BaseJ;
+	for (int32 iz = Tilt.FixedLayers; iz < Tilt.Layers; ++iz)
+	{
 		for (int32 iy = 0; iy < Side; ++iy)
 		for (int32 ix = 0; ix < Side; ++ix)
 		{
-			const float X = (ix - (Side - 1) * 0.5f) * S;
-			const float Y = (iy - (Side - 1) * 0.5f) * S;
-			const float J = bFixed ? BaseJ : Jitter;   // 격자 바닥은 거칠기가 아니라 템플릿이다 (#25)
+			const float X = (ix - (Side - 1) * 0.5f) * SF;
+			const float Y = (iy - (Side - 1) * 0.5f) * SF;
 			Pos.Add(FVector3f(
-				X + Rng.FRandRange(-J, J),
-				Y + Rng.FRandRange(-J, J),
-				R2 + iz * S + Rng.FRandRange(-J, J)));
-			InvMass.Add(bFixed ? 0.f : 1.f);
+				X + Rng.FRandRange(-Jitter, Jitter),
+				Y + Rng.FRandRange(-Jitter, Jitter),
+				FreeZ0 + (iz - Tilt.FixedLayers) * SF + Rng.FRandRange(-Jitter, Jitter)));
+			InvMass.Add(1.f);
 		}
 	}
 
@@ -741,7 +764,10 @@ void FSandSpike::SolveWallsSP(float StepDt)
 			if (!Tilt.bOpenDownhill)
 			{
 				Push(i, FVector3f( 1.f, 0.f, 0.f), Pos[i].X + LX);
-				Push(i, FVector3f(-1.f, 0.f, 0.f), LX - Pos[i].X);
+				if (!Tilt.bOpenXPlus)
+				{
+					Push(i, FVector3f(-1.f, 0.f, 0.f), LX - Pos[i].X);
+				}
 			}
 			Push(i, FVector3f(0.f,  1.f, 0.f), Pos[i].Y + LY);
 			Push(i, FVector3f(0.f, -1.f, 0.f), LY - Pos[i].Y);
@@ -871,7 +897,7 @@ void FSandSpike::SolveWalls()
 			}
 			if (!Tilt.bOpenDownhill)
 			{
-				Pos[i].X = FMath::Clamp(Pos[i].X, -LX, LX);
+				Pos[i].X = FMath::Clamp(Pos[i].X, -LX, Tilt.bOpenXPlus ? FLT_MAX : LX);
 			}
 			Pos[i].Y = FMath::Clamp(Pos[i].Y, -LY, LY);
 		}
