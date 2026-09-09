@@ -233,6 +233,7 @@ namespace
 		FParse::Value(*Params, TEXT("warmtol="), WarmTol);
 		const TArray<float> KvList = ParseList<float>(Params, TEXT("kv="), { 0.1f });
 		const TArray<float> JitterList = ParseList<float>(Params, TEXT("basejitter="), { 0.f });
+		const TArray<int32> SeedList = ParseList<int32>(Params, TEXT("seed="), { 1337 });
 		float EventFactor = 0.f; int32 EventStop = 0, TraceFrame = -1, TraceIdx = -1;
 		FParse::Value(*Params, TEXT("event="), EventFactor);
 		FParse::Value(*Params, TEXT("eventstop="), EventStop);
@@ -251,6 +252,7 @@ namespace
 		for (float Dr : DropList)
 		for (float Sr : SpawnList)
 		for (float Bj : JitterList)
+		for (int32 Sd : SeedList)
 		for (int32 Per : RateList)
 		{
 			// 낙하 충격 속도 √(2gh) 로 한 서브스텝 이동이 지름의 0.2배를 넘으면
@@ -264,6 +266,7 @@ namespace
 			P.bWarmTangent = WarmTan != 0;
 			P.WarmGapTol = WarmTol;
 			P.Kv         = KvV;
+			P.Seed       = (uint32)Sd;
 			Cfgs.Add(P);
 
 			FPourSetup S;
@@ -300,8 +303,8 @@ namespace
 			const FPourResult& R = Results[i];
 			const float Diff = FMath::Abs(R.Angle.ProfileDeg - R.Angle.MedianDeg);
 			UE_LOG(LogSpikeSweep, Display,
-				TEXT("%5.2f kv%3.1f %2d %3d %4.2f sr%3.1f bj%3.1f %4.2f | %4s | %7.1f°  %7.1f°  %4.1f | %5.1f/%5.1fcm | %9.1f | %5.1f%s"),
-				R.Friction, Cfgs[i].Kv, Cfgs[i].Substeps, R.Iterations, R.DropHeightDiameters, Setups[i].SpawnRadiusDiameters, Setups[i].BaseJitter, R.RatePerFrame,
+				TEXT("%5.2f kv%3.1f %2d %3d %4.2f sr%3.1f bj%3.1f s%-5u %4.2f | %4s | %7.1f°  %7.1f°  %4.1f | %5.1f/%5.1fcm | %9.1f | %5.1f%s"),
+				R.Friction, Cfgs[i].Kv, Cfgs[i].Substeps, R.Iterations, R.DropHeightDiameters, Setups[i].SpawnRadiusDiameters, Setups[i].BaseJitter, Cfgs[i].Seed, R.RatePerFrame,
 				R.bSettled ? TEXT("○") : TEXT("★미완"),
 				R.Angle.ProfileDeg, R.Angle.MedianDeg, Diff,
 				R.ConeHeight, R.ConeRadius, R.MaxSpeedDuringPour, R.WallSeconds,
