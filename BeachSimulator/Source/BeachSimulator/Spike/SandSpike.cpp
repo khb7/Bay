@@ -1080,6 +1080,14 @@ void FSandSpike::UpdateSettleState(float Dt)
 	LastAvgSpeed = Free > 0 ? (float)(SumSpeed / Free) : 0.f;
 	LastMaxSpeed = MaxSpeed;
 
+	// 불평형력 비 — 남은 운동량(= 이번 스텝에 못 푼 잔차) 을 접촉이 나른 임펄스로 나눈다. 둘 다 질량·속도 단위
+	{
+		double SumLambda = 0.0;
+		for (const FSandContact& C : Contacts) { SumLambda += FMath::Abs(C.LambdaN); }
+		for (int32 i = 0; i < GroundLambdaN.Num(); ++i) { SumLambda += FMath::Abs(GroundLambdaN[i]); }
+		LastUnbalanced = SumLambda > 0.0 ? (float)(SumSpeed / SumLambda) : 0.f;   // m = 1
+	}
+
 	// §2-2 — 평균 |v| < ε·√(g·d) 가 60프레임 연속.
 	// dt 가 들어가지 않으므로 시간 조각을 바꿔도 판정선이 안 움직인다
 	const float Threshold = Params.SettleEpsilon *

@@ -309,8 +309,8 @@ namespace
 					? TEXT("  ★통과") : TEXT(""));
 			if (Hold > 0)
 			{
-				UE_LOG(LogSpikeSweep, Display, TEXT("      유지 %d프레임 후: 프로파일 %5.1f° 법선중앙 %5.1f°  높이 %5.1f→%5.1f  크리프 평균|v| %.4f cm/s  바닥하중/무게 %.2f"),
-					Hold, R.AngleAfterHold.ProfileDeg, R.AngleAfterHold.MedianDeg, R.ConeHeight, R.ConeHeightAfterHold, R.CreepAvgSpeed, R.BaseLoadRatio);
+				UE_LOG(LogSpikeSweep, Display, TEXT("      유지 %d프레임 후: 프로파일 %5.1f° 법선중앙 %5.1f°  높이 %5.1f→%5.1f  크리프 평균|v| %.4f cm/s  바닥하중/무게 %.2f  불평형비 %.2e"),
+					Hold, R.AngleAfterHold.ProfileDeg, R.AngleAfterHold.MedianDeg, R.ConeHeight, R.ConeHeightAfterHold, R.CreepAvgSpeed, R.BaseLoadRatio, R.UnbalancedRatio);
 			}
 		}
 

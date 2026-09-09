@@ -843,13 +843,15 @@ FPourResult SpikeBatch::RunPour(const FSandParams& Params, const FPourSetup& Set
 	// --- ③ 유지 — 정지 판정 뒤에도 퍼지는가 (크리프) ---
 	if (Setup.HoldFrames > 0)
 	{
-		double SumAvg = 0.0;
+		double SumAvg = 0.0, SumUnb = 0.0;
 		for (int32 h = 0; h < Setup.HoldFrames; ++h)
 		{
 			Sim.Step(BatchDt);
 			SumAvg += Sim.AvgSpeed();
+			SumUnb += Sim.UnbalancedRatio();
 		}
 		R.CreepAvgSpeed = (float)(SumAvg / Setup.HoldFrames);
+		R.UnbalancedRatio = (float)(SumUnb / Setup.HoldFrames);
 		{
 			// 하중 검산 — 고정 바닥과 지면이 받는 수직 임펄스가 자유 입자 무게와 맞는가
 			const TArray<FVector3f>& P = Sim.GetPositions();

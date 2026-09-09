@@ -291,6 +291,8 @@ public:
 	bool    WallsActive()  const { return bWallsActive; }
 	float   AvgSpeed()     const { return LastAvgSpeed; }
 	float   MaxSpeed()     const { return LastMaxSpeed; }
+	/** 불평형력 비 (A-R7 · §2-1-a) — 스텝 끝 자유 입자 Σ m|v| ÷ 접촉 Σ|λn|. 정지 더미면 0 이 정답, 잔차가 곧 미수렴 */
+	float   UnbalancedRatio() const { return LastUnbalanced; }
 	int32   FrameIndex()   const { return Frame; }
 	float   SimTime()      const { return Time; }
 	float   LastStepMs()   const { return StepMs; }
@@ -394,6 +396,7 @@ private:
 
 	float LastAvgSpeed = 0.f;
 	float LastMaxSpeed = 0.f;
+	float LastUnbalanced = 0.f;
 	int32 SettledFrames = 0;
 	static constexpr int32 SettleFramesRequired = 60;
 };
