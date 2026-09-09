@@ -646,6 +646,8 @@ FCutFaceResult SpikeBatch::RunCutFace(const FSandParams& Params, int32 Layers, i
 	R.FaceMovedFrac = R.FaceCount > 0 ? (float)MovedFace / R.FaceCount : 0.f;
 	R.AllMovedFrac  = R.FreeCount > 0 ? (float)MovedAll / R.FreeCount : 0.f;
 	R.HeightAfter = TopAfter + Params.Radius - BaseTop;
+	R.FinalPos = P1;          // 시각 프리뷰 덤프용. 측정 경로는 이 값을 안 본다
+	R.FinalInvMass = W;
 	R.WallSeconds = FPlatformTime::Seconds() - T0;
 	return R;
 }

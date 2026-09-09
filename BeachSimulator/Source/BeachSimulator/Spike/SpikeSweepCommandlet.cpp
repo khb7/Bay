@@ -621,10 +621,12 @@ namespace
 		FParse::Value(*Params, TEXT("side="), Side);
 		FParse::Value(*Params, TEXT("hold="), Hold);
 		const TArray<int32> LayerList = ParseList<int32>(Params, TEXT("layers="), { 6, 9, 12, 15, 18 });
+		const bool bDumpXyz = FParse::Param(*Params, TEXT("dumpxyz"));   // 시각 프리뷰용 위치 덤프
 
 		FSandParams P;
 		P.Friction = Mu;
 		P.Iterations = 90;
+		FParse::Value(*Params, TEXT("iterations="), P.Iterations);
 		P.WGlobal = W;
 		P.WarmStart = 1.f;
 		P.WarmGapTol = 0.02f;
@@ -635,6 +637,28 @@ namespace
 		TArray<FCutFaceResult> Results;
 		Results.SetNum(LayerList.Num());
 		ParallelFor(LayerList.Num(), [&](int32 i) { Results[i] = SpikeBatch::RunCutFace(P, LayerList[i], Side, SettleCap, Hold, bOpen); });
+
+		// 시각 프리뷰 덤프 — 오프라인 메시화로 "5cm 입자가 모래로 보이는가" 를 보기 위한 것. 판정과 무관하다
+		if (bDumpXyz)
+		{
+			const FString DumpDir = FPaths::ProjectSavedDir() / TEXT("SpikeRuns");
+			for (const FCutFaceResult& R : Results)
+			{
+				FString Out = FString::Printf(TEXT("# BeachSimulator cut-face dump\n# radius_cm %.4f\n# layers %d\n# side %d\n# w %.3f\n# height_before_cm %.2f\n# columns: x y z free\n"),
+					P.Radius, R.Layers, Side, W, R.HeightBefore);
+				Out.Reserve(Out.Len() + R.FinalPos.Num() * 40);
+				for (int32 i = 0; i < R.FinalPos.Num(); ++i)
+				{
+					Out += FString::Printf(TEXT("%.4f %.4f %.4f %d\n"),
+						R.FinalPos[i].X, R.FinalPos[i].Y, R.FinalPos[i].Z,
+						R.FinalInvMass.IsValidIndex(i) && R.FinalInvMass[i] > 0.f ? 1 : 0);
+				}
+				const FString Path = DumpDir / FString::Printf(TEXT("cut_L%02d_side%d_w%.2f.xyz"), R.Layers, Side, W);
+				FFileHelper::SaveStringToFile(Out, *Path, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+				UE_LOG(LogSpikeSweep, Display, TEXT("덤프 %s — 입자 %d"), *Path, R.FinalPos.Num());
+			}
+		}
+
 
 		// 단위 환산 — 질량 1 = 지름 5cm 석영구 0.1734 kg (2650 kg/m³ × 65.45 cm³). 힘 단위 1 = 1.734e-3 N. c[힘/cm²] × 17.34 = Pa
 		const float ForceToN = 0.1734f * 0.01f;

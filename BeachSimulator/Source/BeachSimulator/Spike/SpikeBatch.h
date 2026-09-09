@@ -176,6 +176,9 @@ struct FCutFaceResult
 	bool  bSettledBefore = false;
 	bool  bSettledAfter = false;
 	double WallSeconds = 0.0;
+	/** 시각 프리뷰 덤프 (-dumpxyz) 전용. 측정에는 쓰지 않는다 */
+	TArray<FVector3f> FinalPos;
+	TArray<float>     FinalInvMass;
 };
 
 namespace SpikeBatch
