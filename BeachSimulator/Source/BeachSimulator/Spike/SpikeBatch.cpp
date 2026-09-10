@@ -865,6 +865,7 @@ FTunnelResult SpikeBatch::RunTunnel(const FSandParams& Params, const FTunnelSetu
 	// --- ③ 터널 — X 축 관통, 하단 중앙. 한 번에 제거 (가혹 조건) ---
 	const float Rt = T.Diameter * 0.5f;
 	const float Zc = BaseTop + Rt;                 // 원형 중심 높이
+	const TArray<float> W0 = Sim.GetInvMass();          // 제거 전 사본 — 제거 뒤 배열은 압축되어 옛 인덱스로 읽으면 안 된다
 	const TArray<FVector3f> P0 = Sim.GetPositions();   // 제거 전 사본 (판정 기준)
 	auto InTunnelRegion = [&](const FVector3f& P)
 	{
@@ -878,7 +879,7 @@ FTunnelResult SpikeBatch::RunTunnel(const FSandParams& Params, const FTunnelSetu
 	{
 		KeepMap.SetNum(P0.Num());
 		int32 w = 0;
-		for (int32 i = 0; i < P0.Num(); ++i) { KeepMap[i] = (W[i] > 0.f && InTunnelRegion(P0[i])) ? -1 : w++; }
+		for (int32 i = 0; i < P0.Num(); ++i) { KeepMap[i] = (W0[i] > 0.f && InTunnelRegion(P0[i])) ? -1 : w++; }
 	}
 	R.Removed = Sim.RemoveParticles([&](int32 i) { return InTunnelRegion(P0[i]); });
 	TArray<FVector3f> Before;   // 제거 후 인덱스 기준 시작 위치
@@ -887,7 +888,7 @@ FTunnelResult SpikeBatch::RunTunnel(const FSandParams& Params, const FTunnelSetu
 	{
 		if (KeepMap[i] < 0) { continue; }
 		Before.Add(P0[i]);
-		if (W[i] > 0.f && FMath::Abs(P0[i].Y) < Rt && P0[i].Z > TunnelTop && P0[i].Z < TunnelTop + 30.f) { Ceiling.Add(KeepMap[i]); }
+		if (W0[i] > 0.f && FMath::Abs(P0[i].Y) < Rt && P0[i].Z > TunnelTop && P0[i].Z < TunnelTop + 30.f) { Ceiling.Add(KeepMap[i]); }
 	}
 	R.CeilingCount = Ceiling.Num();
 	const float Rin = FMath::Min(10.f, Rt - Rp);   // 관통 판정 반경
