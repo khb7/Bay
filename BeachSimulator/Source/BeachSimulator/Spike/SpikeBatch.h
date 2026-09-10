@@ -191,7 +191,7 @@ namespace SpikeBatch
 	FCutFaceResult RunCutFace(const FSandParams& Params, int32 Layers, int32 SidePerLayer, int32 SettleCap, int32 HoldFrames, bool bOpen = true);
 
 	/** 같은 절토 시험을 **상자에 부어 만든 블록**으로. 격자 채움은 높으면 준정적이 안 되고(#29), 게임의 블록도 붓고 다져서 생긴다 */
-	FCutFaceResult RunCutFacePour(const FSandParams& Params, int32 TargetCount, float BoxHalf, int32 SettleCap, int32 HoldFrames, bool bOpen = true);
+	FCutFaceResult RunCutFacePour(const FSandParams& Params, int32 TargetCount, float BoxHalf, int32 SettleCap, int32 HoldFrames, bool bOpen = true, float BaseJitter = 0.3f);
 
 	/** 고정 입자 아래 N 개를 세로로 결합해 매단다. N=1 은 mgα 만큼 늘어나 서야 하고, N≥2 는 위 결합이 BondStrength 를 넘어 끊어져야 한다 */
 	FBondTestResult RunBondChain(const FSandParams& Params, int32 Chain, int32 Frames);

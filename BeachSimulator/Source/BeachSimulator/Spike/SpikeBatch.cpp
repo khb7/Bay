@@ -682,7 +682,7 @@ FCutFaceResult SpikeBatch::RunCutFace(const FSandParams& Params, int32 Layers, i
 	return CutFaceTail(Sim, Params, SettleCap, HoldFrames, bOpen, R, T0);
 }
 
-FCutFaceResult SpikeBatch::RunCutFacePour(const FSandParams& Params, int32 TargetCount, float BoxHalf, int32 SettleCap, int32 HoldFrames, bool bOpen)
+FCutFaceResult SpikeBatch::RunCutFacePour(const FSandParams& Params, int32 TargetCount, float BoxHalf, int32 SettleCap, int32 HoldFrames, bool bOpen, float BaseJitter)
 {
 	const double T0 = FPlatformTime::Seconds();
 	FCutFaceResult R;
@@ -691,7 +691,7 @@ FCutFaceResult SpikeBatch::RunCutFacePour(const FSandParams& Params, int32 Targe
 	FPourSetup Setup;
 	Setup.TargetCount = TargetCount;
 	Setup.BoxHalf = BoxHalf;
-	Setup.BaseJitter = 0.3f;
+	Setup.BaseJitter = BaseJitter;
 	Setup.DropHeightDiameters = 1.f;
 
 	FSandParams Dry = Params;
