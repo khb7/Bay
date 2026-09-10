@@ -380,7 +380,7 @@ private:
 	TMap<uint64, TPair<float, FVector3f>> WarmLambda;   // 프레임 경계용 — 입자쌍 키 → (λn, λtan)
 	TArray<float> GroundLambdaN;        // 지면도 접촉이다. 무한 질량이라 w = 0
 	TArray<float> GroundLambdaT;
-	TArray<float> WallLambdaN;          // 벽도 마찬가지
+	TArray<FVector4f> WallLambda;       // 벽별 λn: [0] 법선 +x(−X면) · [1] −x(+X면) · [2] +y · [3] −y. 원통은 [0]. ★ 워밍 대상 (#29)
 
 	TArray<FSandBond> Bonds;            // 영구 목록. FormBonds 가 만들고 BreakBonds 가 지운다
 	int32 BondsBrokenTotal = 0;

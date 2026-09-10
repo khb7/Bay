@@ -78,7 +78,7 @@ void FSandSpike::ResizeBuffers()
 	DeltaScale.SetNumZeroed(Pos.Num());
 	GroundLambdaN.SetNumZeroed(Pos.Num());
 	GroundLambdaT.SetNumZeroed(Pos.Num());
-	WallLambdaN.SetNumZeroed(Pos.Num());
+	WallLambda.SetNumZeroed(Pos.Num());
 }
 
 void FSandSpike::ResetRunState()
@@ -747,38 +747,39 @@ void FSandSpike::SolveWallsSP(float StepDt)
 	const float InvH = 1.f / StepDt;
 
 	// 마찰 없는 단방향 제약. 형틀은 물성이 아니라 비계다
-	auto Push = [&](int32 i, const FVector3f& N, float Gap)
+	auto Push = [&](int32 i, int32 K, const FVector3f& N, float Gap)
 	{
 		const float Wi = InvMass[i];
 		if (Wi <= 0.f)
 		{
 			return;
 		}
-		if (Gap > 0.f && WallLambdaN[i] <= 0.f)
+		float& WallLambdaN_i = WallLambda[i][K];
+		if (Gap > 0.f && WallLambdaN_i <= 0.f)
 		{
-			WallLambdaN[i] = 0.f;
+			WallLambdaN_i = 0.f;
 			return;
 		}
 
 		const float ResN = Params.Kv * FVector3f::DotProduct(Vel[i], N) + (Params.Kc * InvH) * Gap;
 		float DLambdaN = -(Params.SorOmega / Wi) * ResN;
 
-		const float OldN = WallLambdaN[i];
-		WallLambdaN[i] = FMath::Max(0.f, WallLambdaN[i] + DLambdaN);
-		DLambdaN = WallLambdaN[i] - OldN;
+		const float OldN = WallLambdaN_i;
+		WallLambdaN_i = FMath::Max(0.f, WallLambdaN_i + DLambdaN);
+		DLambdaN = WallLambdaN_i - OldN;
 
 		Vel[i] += N * (DLambdaN * Wi);
 		Pos[i] += N * (DLambdaN * Wi * StepDt);
 
 		// 벽 마찰 — 지면(SolveGroundSP)과 같은 구조. 반복당 μ·λn 클램프
-		if (Params.WallFriction > 0.f && WallLambdaN[i] > 0.f)
+		if (Params.WallFriction > 0.f && WallLambdaN_i > 0.f)
 		{
 			FVector3f DriftT = Pos[i] - PrevPos[i];
 			DriftT -= N * FVector3f::DotProduct(DriftT, N);
 			FVector3f NuT = Vel[i];
 			NuT -= N * FVector3f::DotProduct(NuT, N);
 			FVector3f DLambdaTan = (NuT * Params.Kv + DriftT * (Params.Kc * InvH)) * (-(Params.SorOmega / Wi));
-			const float MaxTan = Params.WallFriction * WallLambdaN[i];
+			const float MaxTan = Params.WallFriction * WallLambdaN_i;
 			const float L = DLambdaTan.Size();
 			if (L > MaxTan) { DLambdaTan = (L > UE_KINDA_SMALL_NUMBER) ? DLambdaTan * (MaxTan / L) : FVector3f::ZeroVector; }
 			Vel[i] += DLambdaTan * Wi;
@@ -794,14 +795,14 @@ void FSandSpike::SolveWallsSP(float StepDt)
 		{
 			if (!Tilt.bOpenDownhill)
 			{
-				Push(i, FVector3f( 1.f, 0.f, 0.f), Pos[i].X + LX);
+				Push(i, 0, FVector3f( 1.f, 0.f, 0.f), Pos[i].X + LX);
 				if (!Tilt.bOpenXPlus)
 				{
-					Push(i, FVector3f(-1.f, 0.f, 0.f), LX - Pos[i].X);
+					Push(i, 1, FVector3f(-1.f, 0.f, 0.f), LX - Pos[i].X);
 				}
 			}
-			Push(i, FVector3f(0.f,  1.f, 0.f), Pos[i].Y + LY);
-			Push(i, FVector3f(0.f, -1.f, 0.f), LY - Pos[i].Y);
+			Push(i, 2, FVector3f(0.f,  1.f, 0.f), Pos[i].Y + LY);
+			Push(i, 3, FVector3f(0.f, -1.f, 0.f), LY - Pos[i].Y);
 		}
 		return;
 	}
@@ -821,7 +822,7 @@ void FSandSpike::SolveWallsSP(float StepDt)
 		}
 		const float Rad = FMath::Sqrt(Rad2);
 		const FVector3f N(-Pos[i].X / Rad, -Pos[i].Y / Rad, 0.f);   // 안쪽을 향한다
-		Push(i, N, Limit - Rad);
+		Push(i, 0, N, Limit - Rad);
 	}
 }
 
@@ -1174,7 +1175,34 @@ void FSandSpike::Step(float Dt)
 				Vel[i].Z += GroundLambdaN[i] * InvMass[i];
 			}
 			FMemory::Memzero(GroundLambdaT.GetData(), GroundLambdaT.Num() * sizeof(float));
-			FMemory::Memzero(WallLambdaN.GetData(), WallLambdaN.Num() * sizeof(float));
+
+			// ★ 벽도 워밍한다. 벽만 매 서브스텝 0 에서 시작하면 벽에 눌린 층이 횡압 지지를 매번 다시 쌓아야 하고,
+			// 그 잔차가 #24 의 크리프와 같은 기제로 벽 층을 흔든다 — 상자에 부은 60cm 블록이 창마다 50% 순환한 원인 (#29).
+			// #18 에서 벽만 SP 규약에서 빠졌던 것과 같은 실수를 워밍에서 되풀이했다
+			if (bWallsActive && bBoxScene)
+			{
+				const float LX = BoxHalf.X - Params.Radius;
+				const float LY = BoxHalf.Y - Params.Radius;
+				const float Tol = Params.WarmGapTol * Params.Radius;
+				const FVector3f Ns[4] = { FVector3f(1.f, 0.f, 0.f), FVector3f(-1.f, 0.f, 0.f), FVector3f(0.f, 1.f, 0.f), FVector3f(0.f, -1.f, 0.f) };
+				const bool bActive[4] = { !Tilt.bOpenDownhill, !Tilt.bOpenDownhill && !Tilt.bOpenXPlus, true, true };
+				for (int32 i = 0; i < Pos.Num(); ++i)
+				{
+					if (InvMass[i] <= 0.f) { WallLambda[i] = FVector4f::Zero(); continue; }
+					const float Gaps[4] = { Pos[i].X + LX, LX - Pos[i].X, Pos[i].Y + LY, LY - Pos[i].Y };
+					for (int32 K = 0; K < 4; ++K)
+					{
+						const float L = WallLambda[i][K] * Params.WarmStart;
+						if (!bActive[K] || Gaps[K] > Tol || L <= 0.f) { WallLambda[i][K] = 0.f; continue; }
+						WallLambda[i][K] = L;
+						Vel[i] += Ns[K] * (L * InvMass[i]);
+					}
+				}
+			}
+			else
+			{
+				FMemory::Memzero(WallLambda.GetData(), WallLambda.Num() * sizeof(FVector4f));
+			}
 		}
 		else
 		{
@@ -1186,7 +1214,7 @@ void FSandSpike::Step(float Dt)
 			}
 			FMemory::Memzero(GroundLambdaN.GetData(), GroundLambdaN.Num() * sizeof(float));
 			FMemory::Memzero(GroundLambdaT.GetData(), GroundLambdaT.Num() * sizeof(float));
-			FMemory::Memzero(WallLambdaN.GetData(), WallLambdaN.Num() * sizeof(float));
+			FMemory::Memzero(WallLambda.GetData(), WallLambda.Num() * sizeof(FVector4f));
 		}
 
 		// 결합 λ — 워밍이면 직전 값을 속도 임펄스로 먼저, 아니면 0. 접촉과 같은 규약 (#24)
