@@ -934,7 +934,7 @@ FTunnelResult SpikeBatch::RunTunnel(const FSandParams& Params, const FTunnelSetu
 	{
 		const float WStart = Params.WGlobal;
 		const int32 N = Sim.Num();
-		const TArray<FVector3f> Ref = Sim.GetPositions();   // 터널이 선 상태 = 기준
+		const TArray<FVector3f>& Ref = Before;   // 기준 = 터널 제거 직후. 유지 뒤로 잡으면 뚫자마자 무너진 대조군의 이동이 0 으로 찍힌다
 		TArray<int32> FragId;
 		FragId.Init(-1, N);
 		TArray<int32> FragSizes;
