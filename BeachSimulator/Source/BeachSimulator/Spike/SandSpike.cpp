@@ -1242,6 +1242,12 @@ void FSandSpike::Step(float Dt)
 		}
 	}
 
+	if (VelocityDamping > 0.f)
+	{
+		const float K = 1.f - VelocityDamping;
+		for (int32 i = 0; i < Vel.Num(); ++i) { if (InvMass[i] > 0.f) { Vel[i] *= K; } }
+	}
+
 	UpdateSettleState(Dt);
 
 	++Frame;

@@ -582,6 +582,7 @@ namespace
 	for (int32 i = 0; i < P0.Num(); ++i) { if (W[i] > 0.f) { ++R.FreeCount; } }
 	R.HeightBefore = RobustTop(P0) + Params.Radius - BaseTop;
 
+	Sim.SetVelocityDamping(0.f);   // ★ 여기부터 측정 — 감쇠 없이 정지해 있어야 준비다
 	// 준비 판정 — 정지 플래그 대신 300프레임 창의 안정성으로. 창을 최대 10개 이어 돌리며 창마다 기록한다:
 	// 이동비가 감쇠하면 압밀(기다리면 된다), 안 하면 에너지원(장치 문제). 21층부터 §2-2 가 안 닫혔지만 벽을 안 연 대조에선 30초에 0.1cm 도 안 움직였다 (#27)
 	for (int32 Win = 0; Win < 10; ++Win)
@@ -677,6 +678,7 @@ FCutFaceResult SpikeBatch::RunCutFace(const FSandParams& Params, int32 Layers, i
 	Dry.WGlobal = 0.f;
 	FSandSpike Sim;
 	Sim.InitTiltBox(Dry, Setup);
+	Sim.SetVelocityDamping(0.05f);   // 준비 단계 — 꼬리의 준비 창 직전에 끈다
 	return CutFaceTail(Sim, Params, SettleCap, HoldFrames, bOpen, R, T0);
 }
 
@@ -743,6 +745,10 @@ FCutFaceResult SpikeBatch::RunCutFacePour(const FSandParams& Params, int32 Targe
 	for (int32 k = 0; k < 300; ++k) { Sim.Step(BatchDt); }
 	Ramp(3.f, 1.f, 600);
 	for (int32 k = 0; k < 600; ++k) { Sim.Step(BatchDt); }
+
+	// 감쇠는 여기서부터 — 붓기·다지기 중에 걸면 재배치 속도까지 죽여 성긴 채(충전 0.40, 84cm) 얼어붙는다.
+	// 압밀은 감쇠 없이 순환하며 일어나게 두고(0.5, 68cm), 마지막 정지만 감쇠로 얼린다. 준비 창은 꼬리가 감쇠를 끄고 잰다
+	Sim.SetVelocityDamping(0.05f);
 
 	return CutFaceTail(Sim, Params, SettleCap, HoldFrames, bOpen, R, T0);
 }

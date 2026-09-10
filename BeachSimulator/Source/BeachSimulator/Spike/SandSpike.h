@@ -271,6 +271,12 @@ public:
 	void OpenFaceXPlus() { Tilt.bOpenXPlus = true; SettledFrames = 0; }
 	/** 다지기 — 중력 배율. 상자에 부은 성긴 충전(0.5)은 스스로 안 조밀해지고 국소 붕괴를 반복한다 (#29). 과잉 하중으로 누른 뒤 1 로 되돌린다 */
 	void SetGravityScale(float S) { GravityScale = S; SettledFrames = 0; }
+	/**
+	 * 준비 단계 전용 속도 감쇠 (DEM 의 local damping, PFC 관행). 프레임 끝에 자유 입자 v *= (1 − D).
+	 * μ 0.13 의 무작위 성긴 충전은 스스로 준정적이 안 된다 — 창마다 35~50% 가 재배치되고 감쇠하지 않는다 (#29).
+	 * 측정 구간에서는 반드시 0 으로 되돌리고, 준비 창(감쇠 0)으로 진짜 정지인지 확인한다.
+	 */
+	void SetVelocityDamping(float D) { VelocityDamping = D; SettledFrames = 0; }
 
 	/**
 	 * 원통을 여기까지 들어올린다 — 벽은 z > Z 인 입자에만 작용한다.
@@ -402,6 +408,7 @@ private:
 	float LastMaxSpeed = 0.f;
 	float LastUnbalanced = 0.f;
 	float GravityScale = 1.f;
+	float VelocityDamping = 0.f;
 	int32 SettledFrames = 0;
 	static constexpr int32 SettleFramesRequired = 60;
 };

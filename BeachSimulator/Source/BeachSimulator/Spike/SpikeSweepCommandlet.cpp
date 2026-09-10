@@ -634,6 +634,9 @@ namespace
 		P.WGlobal = W;
 		P.WarmStart = 1.f;
 		P.WarmGapTol = 0.02f;
+		FParse::Value(*Params, TEXT("warm="), P.WarmStart);
+		FParse::Value(*Params, TEXT("warmtol="), P.WarmGapTol);
+		FParse::Value(*Params, TEXT("kv="), P.Kv);
 		P.BondStrength = Strength;
 		P.BreakStretch = Stretch;
 		P.BondFormStretch = Form;
@@ -683,7 +686,7 @@ namespace
 		const float Phi = FMath::DegreesToRadians(34.f);
 		const float TanTerm = FMath::Tan(UE_PI / 4.f + Phi / 2.f);
 
-		UE_LOG(LogSpikeSweep, Display, TEXT("절토 스윕 — W %.2f  BondStrength %.1f  BreakStretch %.2f  Form %.2f  μ %.2f  반복 %d  %s%s"), W, Strength, Stretch, Form, Mu, P.Iterations,
+		UE_LOG(LogSpikeSweep, Display, TEXT("절토 스윕 — W %.2f  BondStrength %.1f  BreakStretch %.2f  Form %.2f  μ %.2f  반복 %d  warm %.1f tol %.2f kv %.1f  %s%s"), W, Strength, Stretch, Form, Mu, P.Iterations, P.WarmStart, P.WarmGapTol, P.Kv,
 			bPourBlock ? *FString::Printf(TEXT("상자 붓기 반폭 %.0fcm (층 열 = 목표 높이 cm)"), BoxHalf) : *FString::Printf(TEXT("격자 채움 한 변 %d입자"), Side),
 			bOpen ? TEXT("") : TEXT("  [벽 안 엶 — 대조]"));
 		UE_LOG(LogSpikeSweep, Display, TEXT("   층 | 입자 | 높이 전→후 | 결합 생성/끊김/넘침 | 면 이동비 전체 | 상단 후퇴 | 런아웃 | γ_sim | 이 높이가 H_c 라면 c | 준비(드리프트/이동)/정지 | 초"));
