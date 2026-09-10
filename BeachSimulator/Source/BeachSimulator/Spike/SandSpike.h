@@ -67,6 +67,8 @@ struct FSandParams
 	 */
 	float  SettleEpsilon = 0.002f;
 	float  WGlobal    = 0.f;     // 0 = 마른 모래. 점착 비활성
+	/** 상자·형틀 벽의 마찰. 0 = 마찰 없는 비계(기본). 무작위 충전을 마찰 없는 상자에 넣으면 벽 층이 미끄러지며 끓는다 (#29 진단) */
+	float  WallFriction = 0.f;
 
 	// --- 점착 결합 (m0-spike.md §2-4 · §2-6) ---
 	/** 파단 순간의 결합력 / 자기 무게. Rumpf 역산 2.5N ≈ 1.5배 (papers B-S2). 상한이다 — 3-3-B 가 교정 */

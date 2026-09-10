@@ -769,6 +769,21 @@ void FSandSpike::SolveWallsSP(float StepDt)
 
 		Vel[i] += N * (DLambdaN * Wi);
 		Pos[i] += N * (DLambdaN * Wi * StepDt);
+
+		// 벽 마찰 — 지면(SolveGroundSP)과 같은 구조. 반복당 μ·λn 클램프
+		if (Params.WallFriction > 0.f && WallLambdaN[i] > 0.f)
+		{
+			FVector3f DriftT = Pos[i] - PrevPos[i];
+			DriftT -= N * FVector3f::DotProduct(DriftT, N);
+			FVector3f NuT = Vel[i];
+			NuT -= N * FVector3f::DotProduct(NuT, N);
+			FVector3f DLambdaTan = (NuT * Params.Kv + DriftT * (Params.Kc * InvH)) * (-(Params.SorOmega / Wi));
+			const float MaxTan = Params.WallFriction * WallLambdaN[i];
+			const float L = DLambdaTan.Size();
+			if (L > MaxTan) { DLambdaTan = (L > UE_KINDA_SMALL_NUMBER) ? DLambdaTan * (MaxTan / L) : FVector3f::ZeroVector; }
+			Vel[i] += DLambdaTan * Wi;
+			Pos[i] += DLambdaTan * (Wi * StepDt);
+		}
 	};
 
 	if (bBoxScene)
