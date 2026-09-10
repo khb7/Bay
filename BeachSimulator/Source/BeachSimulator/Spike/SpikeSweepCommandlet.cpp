@@ -623,6 +623,10 @@ namespace
 		FParse::Value(*Params, TEXT("iterations="), Iterations);
 		FParse::Value(*Params, TEXT("hold="), Hold);
 		FParse::Value(*Params, TEXT("settlecap="), SettleCap);
+		int32 Ramp = 0;
+		FParse::Value(*Params, TEXT("ramp="), Ramp);   // > 0 이면 3-2 덩어리 붕괴
+		const bool bDump = FParse::Param(*Params, TEXT("dumppos"));
+		if (Ramp > 0 && !FParse::Value(*Params, TEXT("hold="), Hold)) { Hold = 600; }   // 붕괴 실험은 유지를 짧게
 		const TArray<float> DiamList = ParseList<float>(Params, TEXT("diam="), { 30.f });
 		FString ShapeRaw = TEXT("round,square");
 		ReadRaw(Params, TEXT("shape="), ShapeRaw);
@@ -651,6 +655,8 @@ namespace
 			T.bRound = !Sh.Equals(TEXT("square"), ESearchCase::IgnoreCase);
 			T.SettleCap = SettleCap;
 			T.HoldFrames = Hold;
+			T.CollapseRampFrames = Ramp;
+			T.bDumpFinal = bDump;
 			Setups.Add(T);
 		}
 		TArray<FTunnelResult> Results;
@@ -674,6 +680,16 @@ namespace
 			for (int32 k = 0; k < R.CeilingSeries.Num(); ++k) { Ser += FString::Printf(TEXT(" %4.1f%%/%d"), R.CeilingSeries[k] * 100.f, R.InTunnelSeries[k]); }
 			UE_LOG(LogSpikeSweep, Display, TEXT("           300프레임마다 천장 이동비/관통 안:%s   준비 창:%s"), *Ser,
 				*[&]{ FString Q; for (float M : R.ReadySeries) { Q += FString::Printf(TEXT(" %.1f%%"), M * 100.f); } return Q; }());
+			if (Ramp > 0)
+			{
+				UE_LOG(LogSpikeSweep, Display, TEXT("     ★ 덩어리 붕괴 — 이동 %d/%d (%.0f%%)  파편 %d개  massWeightedMeanSize %.1f  최대 파편 %d  finesRatio %.2f  첫 파단 W %.3f  W10 %.3f  W90 %.3f  ΔW %.3f  결합 끊김 %d  높이 %.1f→%.1f%s"),
+					R.MovedTotal, R.FreeCount, R.FreeCount > 0 ? 100.f * R.MovedTotal / R.FreeCount : 0.f, R.FragmentCount, R.FinalMwms, R.LargestFragment, R.FinalFines,
+					R.FirstBreakW, R.W10, R.W90, (R.W10 >= 0.f && R.W90 >= 0.f) ? R.W10 - R.W90 : -1.f, R.BondsBroken, R.HeightBefore, R.HeightAfter,
+					R.DumpPath.IsEmpty() ? TEXT("") : *FString::Printf(TEXT("  → %s"), *R.DumpPath));
+				FString CS;
+				for (int32 k = 0; k < R.CW.Num(); ++k) { CS += FString::Printf(TEXT(" W%.3f:%.0f%%/%.0f"), R.CW[k], R.CMoved[k] * 100.f, R.CMwms[k]); }
+				UE_LOG(LogSpikeSweep, Display, TEXT("       창별 W:이동%%/MWMS:%s"), *CS);
+			}
 		}
 		return 0;
 	}

@@ -166,6 +166,9 @@ struct FTunnelSetup
 	int32 SettleCap = 3000;
 	int32 HoldFrames = 1800;
 	float BaseJitter = 0.3f;
+	/** > 0 이면 3-2 덩어리 붕괴: 유지 뒤 W 를 W0 → 0 으로 이만큼의 프레임에 걸쳐 선형 하강시키며 파편을 센다 */
+	int32 CollapseRampFrames = 0;
+	bool  bDumpFinal = false;
 };
 
 struct FTunnelResult
@@ -189,6 +192,20 @@ struct FTunnelResult
 	TArray<int32> InTunnelSeries;
 	bool  bSettledAfter = false;
 	double WallSeconds = 0.0;
+
+	// --- 3-2 덩어리 붕괴 (CollapseRampFrames > 0) ---
+	TArray<float> CW;          // 창(300프레임)별 W
+	TArray<float> CMoved;      // 이동한 자유 입자 비율 (누적)
+	TArray<float> CMwms;       // massWeightedMeanSize (누적 파편)
+	TArray<float> CFines;      // 크기 ≤ 2 파편의 질량 비율
+	int32 FragmentCount = 0;
+	int32 MovedTotal = 0;
+	float FinalMwms = 0.f;
+	float FinalFines = 0.f;
+	float FirstBreakW = -1.f;  // 처음 이동이 생긴 창의 W
+	float W10 = -1.f, W90 = -1.f;   // 최종 이동량의 10% · 90% 에 이른 W → ΔW = W10 − W90
+	int32 LargestFragment = 0;
+	FString DumpPath;
 };
 
 /** 절토 — 점착의 자 (m0-spike.md §3-3-B). 한 면 지지 제거 후 높이별 붕괴 여부 */

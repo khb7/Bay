@@ -1,4 +1,7 @@
 #include "SpikeBatch.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "HAL/FileManager.h"
 
 namespace
 {
@@ -925,6 +928,102 @@ FTunnelResult SpikeBatch::RunTunnel(const FSandParams& Params, const FTunnelSetu
 	R.bSettledAfter = Sim.IsSettled();
 	R.BondsBroken = Sim.BondsBroken();
 	R.HeightAfter = RobustTop(Sim.GetPositions()) + Rp - BaseTop;
+
+	// --- ⑤ 3-2 덩어리 붕괴: W 를 선형 하강시키며 파편을 센다 ---
+	if (T.CollapseRampFrames > 0)
+	{
+		const float WStart = Params.WGlobal;
+		const int32 N = Sim.Num();
+		const TArray<FVector3f> Ref = Sim.GetPositions();   // 터널이 선 상태 = 기준
+		TArray<int32> FragId;
+		FragId.Init(-1, N);
+		TArray<int32> FragSizes;
+
+		// 창마다: 새로 움직인 입자들을 그 순간의 결합 그래프로 묶어 파편으로 등록한다.
+		// 나중에 (W < W_dry) 결합이 전부 지워지므로, 파편은 떨어져 나오는 순간에 세야 한다
+		auto Window = [&]()
+		{
+			const TArray<FVector3f>& P1 = Sim.GetPositions();
+			TArray<int32> NewIdx;
+			for (int32 i = 0; i < N; ++i)
+			{
+				if (W2[i] > 0.f && FragId[i] < 0 && FVector3f::Dist(P1[i], Ref[i]) > D) { NewIdx.Add(i); }
+			}
+			if (NewIdx.Num() > 0)
+			{
+				TArray<int32> Parent;
+				Parent.SetNum(N);
+				for (int32 i = 0; i < N; ++i) { Parent[i] = i; }
+				TArray<uint8> IsNew;
+				IsNew.Init(0, N);
+				for (int32 i : NewIdx) { IsNew[i] = 1; }
+				auto Find = [&](int32 x) { while (Parent[x] != x) { Parent[x] = Parent[Parent[x]]; x = Parent[x]; } return x; };
+				for (const FSandBond& B : Sim.GetBonds())
+				{
+					if (IsNew[B.I] && IsNew[B.J]) { const int32 a = Find(B.I), b = Find(B.J); if (a != b) { Parent[a] = b; } }
+				}
+				TMap<int32, int32> RootToFrag;
+				for (int32 i : NewIdx)
+				{
+					const int32 r = Find(i);
+					int32* F = RootToFrag.Find(r);
+					if (!F) { F = &RootToFrag.Add(r, FragSizes.Num()); FragSizes.Add(0); }
+					FragId[i] = *F;
+					++FragSizes[*F];
+				}
+			}
+			double SumS = 0.0, SumS2 = 0.0, Fines = 0.0;
+			int32 Largest = 0;
+			for (int32 s : FragSizes) { SumS += s; SumS2 += (double)s * s; if (s <= 2) { Fines += s; } Largest = FMath::Max(Largest, s); }
+			R.MovedTotal = (int32)SumS;
+			R.FragmentCount = FragSizes.Num();
+			R.LargestFragment = Largest;
+			R.FinalMwms  = SumS > 0.0 ? (float)(SumS2 / SumS) : 0.f;
+			R.FinalFines = SumS > 0.0 ? (float)(Fines / SumS) : 0.f;
+			R.CW.Add(Params.WGlobal);   // 갱신은 아래 루프가 한다 — 여기선 Sim 의 현재 W 를 적는다
+			R.CW.Last() = WStart * (1.f - FMath::Clamp((float)R.CW.Num() * 300.f / T.CollapseRampFrames, 0.f, 1.f));
+			R.CMoved.Add(R.FreeCount > 0 ? (float)R.MovedTotal / R.FreeCount : 0.f);
+			R.CMwms.Add(R.FinalMwms);
+			R.CFines.Add(R.FinalFines);
+		};
+
+		for (int32 f = 0; f < T.CollapseRampFrames; ++f)
+		{
+			Sim.SetWGlobal(WStart * (1.f - (float)(f + 1) / T.CollapseRampFrames));
+			Sim.Step(BatchDt);
+			if ((f + 1) % 300 == 0) { Window(); }
+		}
+		// W = 0 에서 한 창 더 — 마지막 결합이 지워진 뒤의 낙하까지 센다
+		for (int32 k = 0; k < 600; ++k) { Sim.Step(BatchDt); }
+		Window();
+		R.CW.Last() = 0.f;
+
+		// 첫 파단 · ΔW (최종 이동량의 10% / 90% 에 이른 창의 W)
+		for (int32 k = 0; k < R.CMoved.Num(); ++k)
+		{
+			const float Frac = R.CMoved.Last() > 0.f ? R.CMoved[k] / R.CMoved.Last() : 0.f;
+			if (R.FirstBreakW < 0.f && R.CMoved[k] > 0.f) { R.FirstBreakW = R.CW[k]; }
+			if (R.W10 < 0.f && Frac >= 0.1f) { R.W10 = R.CW[k]; }
+			if (R.W90 < 0.f && Frac >= 0.9f) { R.W90 = R.CW[k]; }
+		}
+		R.BondsBroken = Sim.BondsBroken();
+		R.HeightAfter = RobustTop(Sim.GetPositions()) + Rp - BaseTop;
+
+		if (T.bDumpFinal)
+		{
+			const FString Dir = FPaths::ProjectSavedDir() / TEXT("SpikeRuns");
+			IFileManager::Get().MakeDirectory(*Dir, true);
+			FString Text = TEXT("x,y,z,fixed,frag\n");
+			const TArray<FVector3f>& P1 = Sim.GetPositions();
+			for (int32 i = 0; i < N; ++i)
+			{
+				Text += FString::Printf(TEXT("%.3f,%.3f,%.3f,%d,%d\n"), P1[i].X, P1[i].Y, P1[i].Z, W2[i] <= 0.f ? 1 : 0, FragId[i]);
+			}
+			R.DumpPath = Dir / FString::Printf(TEXT("collapse_%s%.0f_w%.2f_bs%.1f.csv"), T.bRound ? TEXT("round") : TEXT("square"), T.Diameter, WStart, Params.BreakStretch);
+			FFileHelper::SaveStringToFile(Text, *R.DumpPath);
+		}
+	}
+
 	R.WallSeconds = FPlatformTime::Seconds() - T0;
 	return R;
 }
