@@ -753,6 +753,181 @@ FCutFaceResult SpikeBatch::RunCutFacePour(const FSandParams& Params, int32 Targe
 	return CutFaceTail(Sim, Params, SettleCap, HoldFrames, bOpen, R, T0);
 }
 
+FTunnelResult SpikeBatch::RunTunnel(const FSandParams& Params, const FTunnelSetup& T)
+{
+	const double T0 = FPlatformTime::Seconds();
+	FTunnelResult R;
+	R.bRound = T.bRound;
+	R.Diameter = T.Diameter;
+	R.W = Params.WGlobal;
+
+	const float Rp = Params.Radius;
+	const float D  = 2.f * Rp;
+	const float BaseTop = D;
+
+	// --- ① 블록: 상자에 붓기 (절토와 같은 시험체) ---
+	FPourSetup Setup;
+	const float Vp = (4.f / 3.f) * UE_PI * Rp * Rp * Rp;
+	Setup.TargetCount = FMath::RoundToInt((2.f * T.BoxHalfX) * (2.f * T.BoxHalfY) * T.Height * 0.59f / Vp);
+	Setup.BoxHalf  = T.BoxHalfX;
+	Setup.BoxHalfY = T.BoxHalfY;
+	Setup.BaseJitter = T.BaseJitter;
+	Setup.DropHeightDiameters = 1.f;
+
+	FSandParams Dry = Params;
+	Dry.WGlobal = 0.f;
+	FSandSpike Sim;
+	Sim.InitPour(Dry, Setup);
+
+	{
+		const float SX = T.BoxHalfX - 1.5f * Rp;
+		const float SY = T.BoxHalfY - 1.5f * Rp;
+		const float RestSpeed = 0.1f * FMath::Sqrt(FMath::Abs(Params.Gravity) * D);
+		const float MinDist2 = FMath::Square(D * 1.05f);
+		FRandomStream Rng(Params.Seed);
+		int32 Poured = 0, Frame = 0, LastPlaced = 0;
+		while (Poured < Setup.TargetCount)
+		{
+			if (Frame - LastPlaced > 600) { UE_LOG(LogTemp, Warning, TEXT("터널 블록 붓기 정체: %d/%d"), Poured, Setup.TargetCount); break; }
+			if (Frame % 2 == 0)
+			{
+				const TArray<FVector3f>& Ps = Sim.GetPositions();
+				const TArray<FVector3f>& Vs = Sim.GetVelocities();
+				float Apex = 0.f;
+				for (int32 i = 0; i < Ps.Num(); ++i) { if (Vs[i].Size() < RestSpeed) { Apex = FMath::Max(Apex, Ps[i].Z); } }
+				const float Z = Apex + D;
+				TArray<FVector3f> Batch;
+				for (int32 k = 0; k < 3 && Poured < Setup.TargetCount; ++k)   // 큰 블록이라 3개씩
+				{
+					for (int32 Try = 0; Try < 16; ++Try)
+					{
+						const FVector3f Cand(Rng.FRandRange(-SX, SX), Rng.FRandRange(-SY, SY), Z);
+						bool bClear = true;
+						for (const FVector3f& E : Ps) { if (FVector3f::DistSquared(Cand, E) < MinDist2) { bClear = false; break; } }
+						if (bClear) { for (const FVector3f& B : Batch) { if (FVector3f::DistSquared(Cand, B) < MinDist2) { bClear = false; break; } } }
+						if (bClear) { Batch.Add(Cand); ++Poured; break; }
+					}
+				}
+				if (Batch.Num() > 0) { Sim.AddParticles(Batch); LastPlaced = Frame; }
+			}
+			Sim.Step(BatchDt);
+			++Frame;
+		}
+	}
+
+	// 램프 다지기 1→3→1 g (#29)
+	auto Ramp = [&](float From, float To, int32 Frames)
+	{
+		for (int32 k = 0; k < Frames; ++k) { Sim.SetGravityScale(FMath::Lerp(From, To, (float)(k + 1) / Frames)); Sim.Step(BatchDt); }
+	};
+	Ramp(1.f, 3.f, 300);
+	for (int32 k = 0; k < 300; ++k) { Sim.Step(BatchDt); }
+	Ramp(3.f, 1.f, 600);
+	for (int32 k = 0; k < 600; ++k) { Sim.Step(BatchDt); }
+	Sim.SetVelocityDamping(0.05f);
+	for (int32 f = 0; f < T.SettleCap && !Sim.IsSettled(); ++f) { Sim.Step(BatchDt); }
+	Sim.SetVelocityDamping(0.f);
+
+	const TArray<float>& W = Sim.GetInvMass();
+	auto RobustTop = [&](const TArray<FVector3f>& Q)
+	{
+		TArray<float> Z;
+		for (int32 i = 0; i < Q.Num(); ++i) { if (W[i] > 0.f) { Z.Add(Q[i].Z); } }
+		if (Z.Num() == 0) { return 0.f; }
+		Z.Sort();
+		return Z[FMath::Clamp((int32)(Z.Num() * 0.98f), 0, Z.Num() - 1)];
+	};
+	auto MovedFrac = [&](const TArray<FVector3f>& A, const TArray<FVector3f>& B)
+	{
+		int32 Moved = 0, N = 0;
+		for (int32 i = 0; i < B.Num(); ++i) { if (W[i] > 0.f) { ++N; if (FVector3f::Dist(A[i], B[i]) > D) { ++Moved; } } }
+		return N > 0 ? (float)Moved / N : 0.f;
+	};
+
+	// 준비 창 — 절토와 같은 계기 (#29)
+	for (int32 Win = 0; Win < 10; ++Win)
+	{
+		TArray<FVector3f> Q0 = Sim.GetPositions();
+		const float H0 = RobustTop(Q0);
+		for (int32 k = 0; k < 300; ++k) { Sim.Step(BatchDt); }
+		const float Mv = MovedFrac(Q0, Sim.GetPositions());
+		R.ReadySeries.Add(Mv);
+		R.bReady = Mv < 0.01f && FMath::Abs(RobustTop(Sim.GetPositions()) - H0) < 0.5f;
+		if (R.bReady) { break; }
+	}
+	for (int32 i = 0; i < W.Num(); ++i) { if (W[i] > 0.f) { ++R.FreeCount; } }
+	R.HeightBefore = RobustTop(Sim.GetPositions()) + Rp - BaseTop;
+
+	// --- ② 물 → 결합 (W=0 이면 대조군: 결합 없음) ---
+	Sim.SetWGlobal(Params.WGlobal);
+	R.BondsMade = Sim.FormBonds();
+
+	// --- ③ 터널 — X 축 관통, 하단 중앙. 한 번에 제거 (가혹 조건) ---
+	const float Rt = T.Diameter * 0.5f;
+	const float Zc = BaseTop + Rt;                 // 원형 중심 높이
+	const TArray<FVector3f> P0 = Sim.GetPositions();   // 제거 전 사본 (판정 기준)
+	auto InTunnelRegion = [&](const FVector3f& P)
+	{
+		if (T.bRound) { return FMath::Square(P.Y) + FMath::Square(P.Z - Zc) < Rt * Rt; }
+		return FMath::Abs(P.Y) < Rt && P.Z > BaseTop && P.Z < BaseTop + T.Diameter;
+	};
+	// 천장 띠: 터널 윗면 위 30cm, 터널 폭 안 (제거 전 위치 기준)
+	const float TunnelTop = BaseTop + T.Diameter;
+	TArray<int32> Ceiling;   // 제거 후 인덱스로 다시 매겨야 하므로, 제거 전 인덱스 → 제거 후 인덱스 맵을 만든다
+	TArray<int32> KeepMap;
+	{
+		KeepMap.SetNum(P0.Num());
+		int32 w = 0;
+		for (int32 i = 0; i < P0.Num(); ++i) { KeepMap[i] = (W[i] > 0.f && InTunnelRegion(P0[i])) ? -1 : w++; }
+	}
+	R.Removed = Sim.RemoveParticles([&](int32 i) { return InTunnelRegion(P0[i]); });
+	TArray<FVector3f> Before;   // 제거 후 인덱스 기준 시작 위치
+	Before.Reserve(P0.Num() - R.Removed);
+	for (int32 i = 0; i < P0.Num(); ++i)
+	{
+		if (KeepMap[i] < 0) { continue; }
+		Before.Add(P0[i]);
+		if (W[i] > 0.f && FMath::Abs(P0[i].Y) < Rt && P0[i].Z > TunnelTop && P0[i].Z < TunnelTop + 30.f) { Ceiling.Add(KeepMap[i]); }
+	}
+	R.CeilingCount = Ceiling.Num();
+	const float Rin = FMath::Min(10.f, Rt - Rp);   // 관통 판정 반경
+
+	// --- ④ 유지 · 시계열 ---
+	const TArray<float>& W2 = Sim.GetInvMass();
+	auto Measure = [&]()
+	{
+		const TArray<FVector3f>& P1 = Sim.GetPositions();
+		int32 Moved = 0; double Sag = 0.0;
+		for (int32 k : Ceiling)
+		{
+			if (FVector3f::Dist(P1[k], Before[k]) > D) { ++Moved; }
+			Sag += Before[k].Z - P1[k].Z;
+		}
+		R.CeilingMovedFrac = Ceiling.Num() > 0 ? (float)Moved / Ceiling.Num() : 0.f;
+		R.CeilingSag = Ceiling.Num() > 0 ? (float)(Sag / Ceiling.Num()) : 0.f;
+		int32 In = 0;
+		for (int32 i = 0; i < P1.Num(); ++i)
+		{
+			if (W2[i] <= 0.f) { continue; }
+			const bool bIn = T.bRound ? (FMath::Square(P1[i].Y) + FMath::Square(P1[i].Z - Zc) < Rin * Rin)
+			                          : (FMath::Abs(P1[i].Y) < Rin && FMath::Abs(P1[i].Z - Zc) < Rin);
+			if (bIn) { ++In; }
+		}
+		R.InTunnel = In;
+	};
+	for (int32 h = 0; h < T.HoldFrames; ++h)
+	{
+		Sim.Step(BatchDt);
+		if ((h + 1) % 300 == 0) { Measure(); R.CeilingSeries.Add(R.CeilingMovedFrac); R.InTunnelSeries.Add(R.InTunnel); }
+	}
+	Measure();
+	R.bSettledAfter = Sim.IsSettled();
+	R.BondsBroken = Sim.BondsBroken();
+	R.HeightAfter = RobustTop(Sim.GetPositions()) + Rp - BaseTop;
+	R.WallSeconds = FPlatformTime::Seconds() - T0;
+	return R;
+}
+
 FBondTestResult SpikeBatch::RunBondChain(const FSandParams& Params, int32 Chain, int32 Frames)
 {
 	FBondTestResult R;

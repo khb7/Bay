@@ -607,6 +607,76 @@ namespace
 		return 0;
 	}
 
+	/** 터널 (m0-spike.md §3-1) — 본 실행 · 대조군(W=0) · 지름 스윕을 같은 명령으로 */
+	int32 RunTunnelSweep(const FString& Params)
+	{
+		float W = 0.15f, Strength = 3.f, Stretch = 1.3f, Mu = 0.13f, Form = 1.2f, Height = 60.f, BoxX = 45.f, BoxY = 30.f;
+		int32 Iterations = 180, Hold = 1800, SettleCap = 3000;
+		FParse::Value(*Params, TEXT("w="), W);
+		FParse::Value(*Params, TEXT("strength="), Strength);
+		FParse::Value(*Params, TEXT("stretch="), Stretch);
+		FParse::Value(*Params, TEXT("mu="), Mu);
+		FParse::Value(*Params, TEXT("form="), Form);
+		FParse::Value(*Params, TEXT("height="), Height);
+		FParse::Value(*Params, TEXT("boxx="), BoxX);
+		FParse::Value(*Params, TEXT("boxy="), BoxY);
+		FParse::Value(*Params, TEXT("iterations="), Iterations);
+		FParse::Value(*Params, TEXT("hold="), Hold);
+		FParse::Value(*Params, TEXT("settlecap="), SettleCap);
+		const TArray<float> DiamList = ParseList<float>(Params, TEXT("diam="), { 30.f });
+		FString ShapeRaw = TEXT("round,square");
+		ReadRaw(Params, TEXT("shape="), ShapeRaw);
+		TArray<FString> Shapes;
+		ShapeRaw.ParseIntoArray(Shapes, TEXT(","), true);
+
+		FSandParams P;
+		P.Friction = Mu;
+		P.Iterations = Iterations;
+		P.WGlobal = W;
+		P.WarmStart = 1.f;
+		P.WarmGapTol = 0.02f;
+		P.BondStrength = Strength;
+		P.BreakStretch = Stretch;
+		P.BondFormStretch = Form;
+
+		TArray<FTunnelSetup> Setups;
+		for (const FString& Sh : Shapes)
+		for (float Dm : DiamList)
+		{
+			FTunnelSetup T;
+			T.BoxHalfX = BoxX;
+			T.BoxHalfY = BoxY;
+			T.Height = Height;
+			T.Diameter = Dm;
+			T.bRound = !Sh.Equals(TEXT("square"), ESearchCase::IgnoreCase);
+			T.SettleCap = SettleCap;
+			T.HoldFrames = Hold;
+			Setups.Add(T);
+		}
+		TArray<FTunnelResult> Results;
+		Results.SetNum(Setups.Num());
+		ParallelFor(Setups.Num(), [&](int32 i) { Results[i] = SpikeBatch::RunTunnel(P, Setups[i]); });
+
+		UE_LOG(LogSpikeSweep, Display, TEXT("터널 — 블록 %.0f×%.0f×%.0f  W %.2f  BondStrength %.1f  Form %.2f  μ %.2f  반복 %d  (판정: 천장 이동비 < 5%% · 관통 반경 안 0개)"),
+			2.f * BoxX, 2.f * BoxY, Height, W, Strength, Form, Mu, Iterations);
+		UE_LOG(LogSpikeSweep, Display, TEXT("   단면   지름 | 입자  제거 | 결합 생성/끊김 | 준비 | 높이 전→후 | 천장 %d개: 이동비  처짐 | 관통 안 | 정지 | 초 | 판정"), Results.Num() > 0 ? Results[0].CeilingCount : 0);
+		for (const FTunnelResult& R : Results)
+		{
+			const bool bCeil = R.CeilingMovedFrac < 0.05f;
+			const bool bOpen = R.InTunnel == 0;
+			UE_LOG(LogSpikeSweep, Display, TEXT("   %-6s %4.0fcm | %4d %5d | %5d / %5d | %s | %5.1f→%5.1f | %3d개: %5.1f%%  %5.1fcm | %5d | %s | %5.0f | %s"),
+				R.bRound ? TEXT("원형") : TEXT("사각"), R.Diameter, R.FreeCount, R.Removed, R.BondsMade, R.BondsBroken,
+				R.bReady ? TEXT("○") : TEXT("✗"), R.HeightBefore, R.HeightAfter, R.CeilingCount, R.CeilingMovedFrac * 100.f, R.CeilingSag, R.InTunnel,
+				R.bSettledAfter ? TEXT("○") : TEXT("✗"), R.WallSeconds,
+				(bCeil && bOpen) ? TEXT("★선다") : (bCeil ? TEXT("천장은 서나 막힘") : TEXT("붕괴")));
+			FString Ser;
+			for (int32 k = 0; k < R.CeilingSeries.Num(); ++k) { Ser += FString::Printf(TEXT(" %4.1f%%/%d"), R.CeilingSeries[k] * 100.f, R.InTunnelSeries[k]); }
+			UE_LOG(LogSpikeSweep, Display, TEXT("           300프레임마다 천장 이동비/관통 안:%s   준비 창:%s"), *Ser,
+				*[&]{ FString Q; for (float M : R.ReadySeries) { Q += FString::Printf(TEXT(" %.1f%%"), M * 100.f); } return Q; }());
+		}
+		return 0;
+	}
+
 	/** 절토 높이 스윕 — 점착의 자 c[Pa] (m0-spike.md §3-3-B) */
 	int32 RunCutSweep(const FString& Params)
 	{
@@ -801,6 +871,10 @@ int32 USpikeSweepCommandlet::Main(const FString& Params)
 	if (FParse::Param(*Params, TEXT("cut")))
 	{
 		return RunCutSweep(Params);
+	}
+	if (FParse::Param(*Params, TEXT("tunnel")))
+	{
+		return RunTunnelSweep(Params);
 	}
 	if (FParse::Param(*Params, TEXT("selftest")))
 	{

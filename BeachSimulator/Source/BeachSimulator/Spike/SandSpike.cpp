@@ -108,7 +108,7 @@ void FSandSpike::InitPour(const FSandParams& InParams, const FPourSetup& InPour)
 	{
 		// 상자 안에 붓기 — 벽은 SP 규약(SolveWallsSP 의 상자 분기). 절토는 나중에 OpenFaceXPlus 로 한 면만 연다
 		bBoxScene = true;
-		BoxHalf = FVector3f(Pour.BoxHalf, Pour.BoxHalf, 0.f);
+		BoxHalf = FVector3f(Pour.BoxHalf, Pour.BoxHalfY > 0.f ? Pour.BoxHalfY : Pour.BoxHalf, 0.f);
 		Tilt.bOpenDownhill = false;
 		Tilt.bOpenXPlus = false;
 		bWallsActive = true;
@@ -135,7 +135,7 @@ void FSandSpike::SpawnPourBase()
 	}
 
 	const bool bBox = Pour.BoxHalf > 0.f;
-	if (bBox) { BaseR = Pour.BoxHalf + S; }   // 상자를 벽 너머까지 덮는다
+	if (bBox) { BaseR = FMath::Max(Pour.BoxHalf, Pour.BoxHalfY) + S; }   // 상자를 벽 너머까지 덮는다 (정사각 바닥으로 넉넉히)
 	const int32 Lat = FMath::CeilToInt(BaseR / S);
 	FRandomStream Rng(Params.Seed ^ 0x9E3779B9u);
 	const float J = Pour.BaseJitter * R2;
@@ -311,6 +311,44 @@ void FSandSpike::BreakBonds()
 			++BondsBrokenTotal;
 		}
 	}
+}
+
+int32 FSandSpike::RemoveParticles(TFunctionRef<bool(int32)> ShouldRemove)
+{
+	TArray<int32> NewIndex;
+	NewIndex.SetNum(Pos.Num());
+	int32 Kept = 0;
+	for (int32 i = 0; i < Pos.Num(); ++i)
+	{
+		NewIndex[i] = (InvMass[i] > 0.f && ShouldRemove(i)) ? -1 : Kept++;
+	}
+	const int32 Removed = Pos.Num() - Kept;
+	if (Removed == 0)
+	{
+		return 0;
+	}
+
+	auto Compact = [&](auto& Arr)
+	{
+		int32 w = 0;
+		for (int32 i = 0; i < Arr.Num(); ++i) { if (NewIndex[i] >= 0) { Arr[w++] = Arr[i]; } }
+		Arr.SetNum(w);
+	};
+	Compact(Pos); Compact(Vel); Compact(PrevPos); Compact(InvMass);
+	Compact(GroundLambdaN); Compact(GroundLambdaT); Compact(WallLambda);
+
+	for (int32 b = Bonds.Num() - 1; b >= 0; --b)
+	{
+		const int32 NI = NewIndex[Bonds[b].I], NJ = NewIndex[Bonds[b].J];
+		if (NI < 0 || NJ < 0) { Bonds.RemoveAtSwap(b); continue; }
+		Bonds[b].I = NI; Bonds[b].J = NJ;
+	}
+
+	Contacts.Reset();
+	WarmLambda.Reset();
+	ResizeBuffers();
+	SettledFrames = 0;
+	return Removed;
 }
 
 void FSandSpike::AddParticles(const TArray<FVector3f>& NewPos)

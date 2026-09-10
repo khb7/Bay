@@ -161,6 +161,8 @@ struct FPourSetup
 	float BaseJitter  = 0.f;
 	/** > 0 이면 닫힌 상자(반폭 cm) 안에 붓는다 — 절토·터널 블록. 격자 채움은 21층부터 준정적이 안 된다 (#29) */
 	float BoxHalf     = 0.f;
+	/** Y 반폭. 0 이면 BoxHalf 와 같다 (정사각). 터널 블록은 90×60 이라 직사각 */
+	float BoxHalfY    = 0.f;
 
 	/** 현재 더미 꼭대기 위 몇 지름에서 놓는가. 낮을수록 충격이 작다 */
 	float DropHeightDiameters = 3.f;
@@ -251,6 +253,12 @@ public:
 	 * 매 프레임 부르면 자발적 재결합이 되어 §4 의 규칙을 깬다. 생성된 개수를 돌려준다.
 	 */
 	int32 FormBonds();
+
+	/**
+	 * 자유 입자 제거 — 터널 뚫기(3-1). 조건에 맞는 자유 입자를 빼고 배열을 압축한다. 결합은 인덱스를 다시 매기고
+	 * 빠진 입자에 걸린 결합은 삭제. 접촉 목록·워밍 표는 초기화(한 프레임 차가운 시작). 제거된 개수를 돌려준다
+	 */
+	int32 RemoveParticles(TFunctionRef<bool(int32)> ShouldRemove);
 	void  SetWGlobal(float W) { Params.WGlobal = W; }
 	/** cohesion(W) 0~1 — §2-4 구간 선형 */
 	float CohesionOfW(float W) const;

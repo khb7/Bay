@@ -155,6 +155,42 @@ struct FBondTestResult
 	bool  bSettled = false;
 };
 
+/** 터널 배치 (m0-spike.md §3-1) */
+struct FTunnelSetup
+{
+	float BoxHalfX = 45.f;      // 블록 90 × 60 × 60
+	float BoxHalfY = 30.f;
+	float Height   = 60.f;
+	float Diameter = 30.f;      // 터널 지름 (사각이면 한 변)
+	bool  bRound   = true;
+	int32 SettleCap = 3000;
+	int32 HoldFrames = 1800;
+	float BaseJitter = 0.3f;
+};
+
+struct FTunnelResult
+{
+	bool  bRound = true;
+	float Diameter = 0.f;
+	float W = 0.f;
+	int32 FreeCount = 0;
+	int32 Removed = 0;
+	int32 BondsMade = 0;
+	int32 BondsBroken = 0;
+	float HeightBefore = 0.f;
+	float HeightAfter = 0.f;
+	bool  bReady = false;
+	TArray<float> ReadySeries;
+	int32 CeilingCount = 0;       // 터널 상방 30cm 띠의 입자 수
+	float CeilingMovedFrac = 0.f; // 그중 변위 > 2r (판정 1: < 5%)
+	int32 InTunnel = 0;           // 중심선 반경 r_t 안의 입자 수 (판정 2: 0)
+	float CeilingSag = 0.f;       // 천장 띠 평균 하강 (cm)
+	TArray<float> CeilingSeries;  // 300프레임마다 천장 이동비
+	TArray<int32> InTunnelSeries;
+	bool  bSettledAfter = false;
+	double WallSeconds = 0.0;
+};
+
 /** 절토 — 점착의 자 (m0-spike.md §3-3-B). 한 면 지지 제거 후 높이별 붕괴 여부 */
 struct FCutFaceResult
 {
@@ -192,6 +228,9 @@ namespace SpikeBatch
 
 	/** 같은 절토 시험을 **상자에 부어 만든 블록**으로. 격자 채움은 높으면 준정적이 안 되고(#29), 게임의 블록도 붓고 다져서 생긴다 */
 	FCutFaceResult RunCutFacePour(const FSandParams& Params, int32 TargetCount, float BoxHalf, int32 SettleCap, int32 HoldFrames, bool bOpen = true, float BaseJitter = 0.3f);
+
+	/** 터널 (m0-spike.md §3-1). 상자에 부어 다진 블록에 결합 → X 축 관통 터널 제거 → 유지. 벽은 둔다(형틀 안 블록) */
+	FTunnelResult RunTunnel(const FSandParams& Params, const FTunnelSetup& Setup);
 
 	/** 고정 입자 아래 N 개를 세로로 결합해 매단다. N=1 은 mgα 만큼 늘어나 서야 하고, N≥2 는 위 결합이 BondStrength 를 넘어 끊어져야 한다 */
 	FBondTestResult RunBondChain(const FSandParams& Params, int32 Chain, int32 Frames);
