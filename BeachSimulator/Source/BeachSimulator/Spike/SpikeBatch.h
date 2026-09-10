@@ -177,6 +177,7 @@ struct FCutFaceResult
 	float ReadyDrift = 0.f;         // 절토 전 300프레임 유지 동안 98백분위 높이 변화 (cm). 준비 판정은 이것으로
 	float ReadyMoved = 0.f;         // 그 동안 D 이상 움직인 비율
 	bool  bReady = false;           // |drift| < 0.5cm 이고 moved < 1%
+	TArray<float> ReadySeries;      // 창(300프레임)별 이동비 — 감쇠하면 압밀, 안 하면 에너지원
 	bool  bSettledAfter = false;
 	double WallSeconds = 0.0;
 	/** 시각 프리뷰 덤프 (-dumpxyz) 전용. 측정에는 쓰지 않는다 */
@@ -188,6 +189,9 @@ namespace SpikeBatch
 {
 	/** 닫힌 상자에 Layers 층을 채워 다지고 → FormBonds → +X 벽 제거 → HoldFrames 뒤 절토면이 남았는가 */
 	FCutFaceResult RunCutFace(const FSandParams& Params, int32 Layers, int32 SidePerLayer, int32 SettleCap, int32 HoldFrames, bool bOpen = true);
+
+	/** 같은 절토 시험을 **상자에 부어 만든 블록**으로. 격자 채움은 높으면 준정적이 안 되고(#29), 게임의 블록도 붓고 다져서 생긴다 */
+	FCutFaceResult RunCutFacePour(const FSandParams& Params, int32 TargetCount, float BoxHalf, int32 SettleCap, int32 HoldFrames, bool bOpen = true);
 
 	/** 고정 입자 아래 N 개를 세로로 결합해 매단다. N=1 은 mgα 만큼 늘어나 서야 하고, N≥2 는 위 결합이 BondStrength 를 넘어 끊어져야 한다 */
 	FBondTestResult RunBondChain(const FSandParams& Params, int32 Chain, int32 Frames);

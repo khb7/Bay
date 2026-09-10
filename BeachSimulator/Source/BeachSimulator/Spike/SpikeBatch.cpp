@@ -555,25 +555,11 @@ FConeLiftResult SpikeBatch::RunConeLift(const FSandParams& Params, const FColumn
 
 // ---------------------------------------------------------------------------
 
-FCutFaceResult SpikeBatch::RunCutFace(const FSandParams& Params, int32 Layers, int32 SidePerLayer, int32 SettleCap, int32 HoldFrames, bool bOpen)
+namespace
 {
-	const double T0 = FPlatformTime::Seconds();
-	FCutFaceResult R;
-	R.Layers = Layers;
-
-	FTiltSetup Setup;
-	Setup.Layers = Layers;
-	Setup.FixedLayers = 1;
-	Setup.TargetCount = SidePerLayer * SidePerLayer * Layers;
-	Setup.bOpenDownhill = false;   // 닫힌 상자에서 다진다
-	Setup.BaseJitter = 0.3f;
-	Setup.FreeJitter = 0.3f;
-
-	// ① 마른 채로 다진다 — 결합은 다진 뒤 '도구 조작' 시점에 만든다
-	FSandParams Dry = Params;
-	Dry.WGlobal = 0.f;
-	FSandSpike Sim;
-	Sim.InitTiltBox(Dry, Setup);
+	/** 절토 시험의 공통 꼬리 — 다짐 → 준비 판정 → 결합 → 절토 → 유지 → 판정. 블록을 어떻게 만들었든 같다 */
+	FCutFaceResult CutFaceTail(FSandSpike& Sim, const FSandParams& Params, int32 SettleCap, int32 HoldFrames, bool bOpen, FCutFaceResult R, double T0)
+	{
 	int32 f = 0;
 	for (; f < SettleCap && !Sim.IsSettled(); ++f) { Sim.Step(BatchDt); }
 	R.bSettledBefore = Sim.IsSettled();
@@ -596,18 +582,23 @@ FCutFaceResult SpikeBatch::RunCutFace(const FSandParams& Params, int32 Layers, i
 	for (int32 i = 0; i < P0.Num(); ++i) { if (W[i] > 0.f) { ++R.FreeCount; } }
 	R.HeightBefore = RobustTop(P0) + Params.Radius - BaseTop;
 
-	// 준비 판정 — 정지 플래그 대신 300프레임 더 돌려 안정성으로. 21층부터 §2-2 가 안 닫혔지만 벽을 안 연 대조에선 30초에 0.1cm 도 안 움직였다 (#27)
+	// 준비 판정 — 정지 플래그 대신 300프레임 창의 안정성으로. 창을 최대 10개 이어 돌리며 창마다 기록한다:
+	// 이동비가 감쇠하면 압밀(기다리면 된다), 안 하면 에너지원(장치 문제). 21층부터 §2-2 가 안 닫혔지만 벽을 안 연 대조에선 30초에 0.1cm 도 안 움직였다 (#27)
+	for (int32 Win = 0; Win < 10; ++Win)
 	{
 		TArray<FVector3f> Q0 = Sim.GetPositions();
+		const float H0 = RobustTop(Q0) + Params.Radius - BaseTop;
 		for (int32 k = 0; k < 300; ++k) { Sim.Step(BatchDt); }
 		const TArray<FVector3f>& Q1 = Sim.GetPositions();
 		int32 Moved = 0;
 		for (int32 i = 0; i < Q1.Num(); ++i) { if (W[i] > 0.f && FVector3f::Dist(Q1[i], Q0[i]) > D) { ++Moved; } }
-		R.ReadyDrift = (RobustTop(Q1) + Params.Radius - BaseTop) - R.HeightBefore;
+		R.ReadyDrift = (RobustTop(Q1) + Params.Radius - BaseTop) - H0;
 		R.ReadyMoved = R.FreeCount > 0 ? (float)Moved / R.FreeCount : 0.f;
+		R.ReadySeries.Add(R.ReadyMoved);
 		R.bReady = FMath::Abs(R.ReadyDrift) < 0.5f && R.ReadyMoved < 0.01f;
 		R.HeightBefore = RobustTop(Q1) + Params.Radius - BaseTop;
 		Before = Q1;
+		if (R.bReady) { break; }
 	}
 	const float Area = FMath::Square(2.f * Sim.GetBoxHalf().X);
 	R.GammaSim = R.FreeCount * FMath::Abs(Params.Gravity) / FMath::Max(Area * R.HeightBefore, 1.f);
@@ -664,6 +655,96 @@ FCutFaceResult SpikeBatch::RunCutFace(const FSandParams& Params, int32 Layers, i
 	R.FinalInvMass = W;
 	R.WallSeconds = FPlatformTime::Seconds() - T0;
 	return R;
+	}
+}
+
+FCutFaceResult SpikeBatch::RunCutFace(const FSandParams& Params, int32 Layers, int32 SidePerLayer, int32 SettleCap, int32 HoldFrames, bool bOpen)
+{
+	const double T0 = FPlatformTime::Seconds();
+	FCutFaceResult R;
+	R.Layers = Layers;
+
+	FTiltSetup Setup;
+	Setup.Layers = Layers;
+	Setup.FixedLayers = 1;
+	Setup.TargetCount = SidePerLayer * SidePerLayer * Layers;
+	Setup.bOpenDownhill = false;   // 닫힌 상자에서 다진다
+	Setup.BaseJitter = 0.3f;
+	Setup.FreeJitter = 0.3f;
+
+	// ① 마른 채로 다진다 — 결합은 다진 뒤 '도구 조작' 시점에 만든다
+	FSandParams Dry = Params;
+	Dry.WGlobal = 0.f;
+	FSandSpike Sim;
+	Sim.InitTiltBox(Dry, Setup);
+	return CutFaceTail(Sim, Params, SettleCap, HoldFrames, bOpen, R, T0);
+}
+
+FCutFaceResult SpikeBatch::RunCutFacePour(const FSandParams& Params, int32 TargetCount, float BoxHalf, int32 SettleCap, int32 HoldFrames, bool bOpen)
+{
+	const double T0 = FPlatformTime::Seconds();
+	FCutFaceResult R;
+	R.Layers = 0;
+
+	FPourSetup Setup;
+	Setup.TargetCount = TargetCount;
+	Setup.BoxHalf = BoxHalf;
+	Setup.BaseJitter = 0.3f;
+	Setup.DropHeightDiameters = 1.f;
+
+	FSandParams Dry = Params;
+	Dry.WGlobal = 0.f;
+	FSandSpike Sim;
+	Sim.InitPour(Dry, Setup);
+
+	// 상자 전체에 붓는다 — 놓는 지점은 상자 안 균일, 높이는 상자 안 정지 입자 최고점 + 1d (#23 규칙 그대로)
+	const float D = 2.f * Params.Radius;
+	const float SpawnR = BoxHalf - 1.5f * Params.Radius;
+	const float RestSpeed = 0.1f * FMath::Sqrt(FMath::Abs(Params.Gravity) * D);
+	const float MinDist2 = FMath::Square(D * 1.05f);
+	FRandomStream Rng(Params.Seed);
+	int32 Poured = 0, Frame = 0, LastPlaced = 0;
+	while (Poured < TargetCount)
+	{
+		if (Frame - LastPlaced > 600) { UE_LOG(LogTemp, Warning, TEXT("상자 붓기 정체: %d/%d"), Poured, TargetCount); break; }
+		if (Frame % 2 == 0)
+		{
+			const TArray<FVector3f>& Ps = Sim.GetPositions();
+			const TArray<FVector3f>& Vs = Sim.GetVelocities();
+			float Apex = 0.f;
+			for (int32 i = 0; i < Ps.Num(); ++i) { if (Vs[i].Size() < RestSpeed) { Apex = FMath::Max(Apex, Ps[i].Z); } }
+			const float Z = Apex + D;
+			TArray<FVector3f> Batch;
+			for (int32 k = 0; k < 2 && Poured < TargetCount; ++k)
+			{
+				for (int32 Try = 0; Try < 16; ++Try)
+				{
+					const FVector3f Cand(Rng.FRandRange(-SpawnR, SpawnR), Rng.FRandRange(-SpawnR, SpawnR), Z);
+					bool bClear = true;
+					for (const FVector3f& E : Ps) { if (FVector3f::DistSquared(Cand, E) < MinDist2) { bClear = false; break; } }
+					if (bClear) { for (const FVector3f& B : Batch) { if (FVector3f::DistSquared(Cand, B) < MinDist2) { bClear = false; break; } } }
+					if (bClear) { Batch.Add(Cand); ++Poured; break; }
+				}
+			}
+			if (Batch.Num() > 0) { Sim.AddParticles(Batch); LastPlaced = Frame; }
+		}
+		Sim.Step(BatchDt);
+		++Frame;
+	}
+
+	// 다지기 — 과잉 하중 3g. 형틀에 부은 모래를 다지는 것과 같다.
+	// ★ 계단으로 바꾸면 안 된다: 워밍 스타트가 직전 λ(3g 하중)를 그대로 임펄스로 넣어 1g 로 돌아오는 첫 스텝에
+	// 블록 전체가 2g 만큼 위로 차인다 (실측: 풀어준 뒤 5초에 +8.7cm). 램프로 올리고 내린다
+	auto Ramp = [&](float From, float To, int32 Frames)
+	{
+		for (int32 k = 0; k < Frames; ++k) { Sim.SetGravityScale(FMath::Lerp(From, To, (float)(k + 1) / Frames)); Sim.Step(BatchDt); }
+	};
+	Ramp(1.f, 3.f, 300);
+	for (int32 k = 0; k < 300; ++k) { Sim.Step(BatchDt); }
+	Ramp(3.f, 1.f, 600);
+	for (int32 k = 0; k < 600; ++k) { Sim.Step(BatchDt); }
+
+	return CutFaceTail(Sim, Params, SettleCap, HoldFrames, bOpen, R, T0);
 }
 
 FBondTestResult SpikeBatch::RunBondChain(const FSandParams& Params, int32 Chain, int32 Frames)

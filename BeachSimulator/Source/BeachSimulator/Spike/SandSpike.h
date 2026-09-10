@@ -157,6 +157,8 @@ struct FPourSetup
 	float BaseRadius  = 0.f;    // 0이면 예상 퇴적 반경 × 1.2 로 역산
 	/** 바닥 격자 흔들림 (반경 배수). 0 이면 간격 D 정사각 격자 — 단분산 구가 그 홈을 템플릿으로 FCC 결정을 키운다 (#23: CN 10, 충전 0.70) */
 	float BaseJitter  = 0.f;
+	/** > 0 이면 닫힌 상자(반폭 cm) 안에 붓는다 — 절토·터널 블록. 격자 채움은 21층부터 준정적이 안 된다 (#29) */
+	float BoxHalf     = 0.f;
 
 	/** 현재 더미 꼭대기 위 몇 지름에서 놓는가. 낮을수록 충격이 작다 */
 	float DropHeightDiameters = 3.f;
@@ -267,6 +269,8 @@ public:
 	void ReleaseWalls() { bWallsActive = false; SettledFrames = 0; }
 	/** 절토 — +X 벽만 제거. 뒤는 모래가 받치므로 박벽과 달리 좌굴이 없다 (§3-3-B) */
 	void OpenFaceXPlus() { Tilt.bOpenXPlus = true; SettledFrames = 0; }
+	/** 다지기 — 중력 배율. 상자에 부은 성긴 충전(0.5)은 스스로 안 조밀해지고 국소 붕괴를 반복한다 (#29). 과잉 하중으로 누른 뒤 1 로 되돌린다 */
+	void SetGravityScale(float S) { GravityScale = S; SettledFrames = 0; }
 
 	/**
 	 * 원통을 여기까지 들어올린다 — 벽은 z > Z 인 입자에만 작용한다.
@@ -397,6 +401,7 @@ private:
 	float LastAvgSpeed = 0.f;
 	float LastMaxSpeed = 0.f;
 	float LastUnbalanced = 0.f;
+	float GravityScale = 1.f;
 	int32 SettledFrames = 0;
 	static constexpr int32 SettleFramesRequired = 60;
 };

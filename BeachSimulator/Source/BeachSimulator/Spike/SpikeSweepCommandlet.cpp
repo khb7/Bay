@@ -614,6 +614,10 @@ namespace
 		int32 Side = 12, SettleCap = 3000, Hold = 1800;
 		FParse::Value(*Params, TEXT("form="), Form);
 		const bool bOpen = !FParse::Param(*Params, TEXT("noopen"));
+		const bool bPourBlock = FParse::Param(*Params, TEXT("pourblock"));
+		float BoxHalf = 29.f;
+		FParse::Value(*Params, TEXT("boxhalf="), BoxHalf);
+		const TArray<float> HeightList = ParseList<float>(Params, TEXT("heights="), { 60.f, 70.f, 80.f, 90.f });
 		FParse::Value(*Params, TEXT("w="), W);
 		FParse::Value(*Params, TEXT("strength="), Strength);
 		FParse::Value(*Params, TEXT("stretch="), Stretch);
@@ -635,8 +639,21 @@ namespace
 		P.BondFormStretch = Form;
 
 		TArray<FCutFaceResult> Results;
-		Results.SetNum(LayerList.Num());
-		ParallelFor(LayerList.Num(), [&](int32 i) { Results[i] = SpikeBatch::RunCutFace(P, LayerList[i], Side, SettleCap, Hold, bOpen); });
+		if (bPourBlock)
+		{
+			// 목표 높이 → 입자 수. 충전율 0.59 (부어 쌓기 실측 #23)
+			const float Vp = (4.f / 3.f) * UE_PI * FMath::Pow(P.Radius, 3.f);
+			const float Area = FMath::Square(2.f * BoxHalf);
+			TArray<int32> Counts;
+			for (float H : HeightList) { Counts.Add(FMath::RoundToInt(Area * H * 0.59f / Vp)); }
+			Results.SetNum(Counts.Num());
+			ParallelFor(Counts.Num(), [&](int32 i) { Results[i] = SpikeBatch::RunCutFacePour(P, Counts[i], BoxHalf, SettleCap, Hold, bOpen); Results[i].Layers = FMath::RoundToInt(HeightList[i]); });
+		}
+		else
+		{
+			Results.SetNum(LayerList.Num());
+			ParallelFor(LayerList.Num(), [&](int32 i) { Results[i] = SpikeBatch::RunCutFace(P, LayerList[i], Side, SettleCap, Hold, bOpen); });
+		}
 
 		// 시각 프리뷰 덤프 — 오프라인 메시화로 "5cm 입자가 모래로 보이는가" 를 보기 위한 것. 판정과 무관하다
 		if (bDumpXyz)
@@ -666,7 +683,9 @@ namespace
 		const float Phi = FMath::DegreesToRadians(34.f);
 		const float TanTerm = FMath::Tan(UE_PI / 4.f + Phi / 2.f);
 
-		UE_LOG(LogSpikeSweep, Display, TEXT("절토 스윕 — W %.2f  BondStrength %.1f  BreakStretch %.2f  Form %.2f  μ %.2f  한 변 %d입자%s"), W, Strength, Stretch, Form, Mu, Side, bOpen ? TEXT("") : TEXT("  [벽 안 엶 — 대조]"));
+		UE_LOG(LogSpikeSweep, Display, TEXT("절토 스윕 — W %.2f  BondStrength %.1f  BreakStretch %.2f  Form %.2f  μ %.2f  반복 %d  %s%s"), W, Strength, Stretch, Form, Mu, P.Iterations,
+			bPourBlock ? *FString::Printf(TEXT("상자 붓기 반폭 %.0fcm (층 열 = 목표 높이 cm)"), BoxHalf) : *FString::Printf(TEXT("격자 채움 한 변 %d입자"), Side),
+			bOpen ? TEXT("") : TEXT("  [벽 안 엶 — 대조]"));
 		UE_LOG(LogSpikeSweep, Display, TEXT("   층 | 입자 | 높이 전→후 | 결합 생성/끊김/넘침 | 면 이동비 전체 | 상단 후퇴 | 런아웃 | γ_sim | 이 높이가 H_c 라면 c | 준비(드리프트/이동)/정지 | 초"));
 		float Hc = -1.f, GammaAtHc = 0.f;
 		for (const FCutFaceResult& R : Results)
@@ -685,6 +704,9 @@ namespace
 			FString Prof;
 			for (float Rt : R.RetreatByBand) { Prof += FString::Printf(TEXT(" %5.1f"), Rt); }
 			UE_LOG(LogSpikeSweep, Display, TEXT("         후퇴(cm) 아래→위:%s"), *Prof);
+			FString Ser;
+			for (float Mv : R.ReadySeries) { Ser += FString::Printf(TEXT(" %4.1f%%"), Mv * 100.f); }
+			UE_LOG(LogSpikeSweep, Display, TEXT("         준비 창별 이동비(300프레임):%s"), *Ser);
 		}
 		if (Hc > 0.f)
 		{

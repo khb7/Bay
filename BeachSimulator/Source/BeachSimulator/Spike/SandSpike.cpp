@@ -104,7 +104,19 @@ void FSandSpike::InitPour(const FSandParams& InParams, const FPourSetup& InPour)
 	SpawnPourBase();
 	ResizeBuffers();
 	ResetRunState();
-	bWallsActive = false;   // ResetRunState 가 켜므로 다시 끈다
+	if (Pour.BoxHalf > 0.f)
+	{
+		// 상자 안에 붓기 — 벽은 SP 규약(SolveWallsSP 의 상자 분기). 절토는 나중에 OpenFaceXPlus 로 한 면만 연다
+		bBoxScene = true;
+		BoxHalf = FVector3f(Pour.BoxHalf, Pour.BoxHalf, 0.f);
+		Tilt.bOpenDownhill = false;
+		Tilt.bOpenXPlus = false;
+		bWallsActive = true;
+	}
+	else
+	{
+		bWallsActive = false;   // ResetRunState 가 켜므로 다시 끈다
+	}
 }
 
 void FSandSpike::SpawnPourBase()
@@ -122,6 +134,8 @@ void FSandSpike::SpawnPourBase()
 		BaseR = ConeR * 1.2f;
 	}
 
+	const bool bBox = Pour.BoxHalf > 0.f;
+	if (bBox) { BaseR = Pour.BoxHalf + S; }   // 상자를 벽 너머까지 덮는다
 	const int32 Lat = FMath::CeilToInt(BaseR / S);
 	FRandomStream Rng(Params.Seed ^ 0x9E3779B9u);
 	const float J = Pour.BaseJitter * R2;
@@ -134,7 +148,7 @@ void FSandSpike::SpawnPourBase()
 		{
 			const float X = ix * S;
 			const float Y = iy * S;
-			if (X * X + Y * Y > BaseR * BaseR)
+			if (bBox ? (FMath::Abs(X) > BaseR || FMath::Abs(Y) > BaseR) : (X * X + Y * Y > BaseR * BaseR))
 			{
 				continue;
 			}
@@ -551,7 +565,7 @@ void FSandSpike::BuildContacts(float Dt)
 
 void FSandSpike::PredictPositions(float SubDt)
 {
-	const FVector3f G = GravityDir * FMath::Abs(Params.Gravity);
+	const FVector3f G = GravityDir * (FMath::Abs(Params.Gravity) * GravityScale);
 	for (int32 i = 0; i < Pos.Num(); ++i)
 	{
 		PrevPos[i] = Pos[i];
