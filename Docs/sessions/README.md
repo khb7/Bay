@@ -25,6 +25,7 @@
 ## 어디를 봐야 하나
 
 ```
+M0-a 가 뭘 답했나     ../design/m0-a-result.md (한 장)
 결과가 궁금하면        ../design/system-design.md · ../design/milestones.md
 경로가 궁금하면        이 폴더
 지금 상태가 궁금하면    ../design/m0-ruler.md (계기)  ·  ../design/m0-log.md (실행별)
