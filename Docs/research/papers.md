@@ -1098,13 +1098,19 @@ for l = 0 .. lmax-1:
 = 우리가 겪은 **Jacobi 평균 모드**를 논문이 직접 언급한다. §4.3이 그 처방.
 
 **§7 워밍 스타트** — "도움은 되지만 **GS에서만큼 극적이지는 않다.**" Jacobi 계열에선 기대치를 낮출 것.
+그리고 이어지는 문장(2026-09-14 원문 재확인): **"직전 승수의 더 낮은 비율을 써야 했고, 떨림·불안정을 막으려 IJ 파라미터를 손봐야 했다."**
+= Jacobi 에서 워밍은 **부분 워밍**(λ 의 일부만 이어받기)이 기본이다. 우리 `WarmStart` 가 이미 비율 파라미터라 축은 있다.
 
-**§7 병렬 구현** — 두 패스: ① 제약을 돌며 임펄스 계산 ② 입자를 돌며 인접 리스트로 모아 적용.
+**§7 병렬 구현** — "Jacobi 의 직접적인 복제 + (37)의 개선". C++/OpenCL. 두 패스: ① 제약을 돌며 임펄스 계산 ② 입자를 돌며 인접 리스트로 모아 적용.
+"멀티코어를 활용해 더 많은 입자를 실시간으로 — **다만 충돌 검출은 여전히 병목**." Tonge 블록 솔버 결합은 "could be" — 논문이 해본 것이 아니다.
 **입자가 자기 것만 쓰는 gather 구조**라 [Niagara의 쓰기 제약](terms/simulation-stages.md)에도 안 걸린다.
 논문 자신의 제안: **Tonge 2012 블록 솔버와 결합** — 워크그룹 안은 로컬 메모리로 GS,
 워크그룹 사이는 개선된 Jacobi. **전파 깊이를 블록 크기만큼 한 번에 건너뛴다.**
 
 **§9 결과** — Figure 7에서 GS / SOR(ω=1.2) / IJ를 비교하고 **IJ가 이긴다** → 단순 SOR 튜닝은 열등.
+> ⚠ **논문의 SP 결과는 전부 "Sequential Positions using GS" 다** (Fig. 8 · Fig. 10 범례). SP 를 IJ(Jacobi) 형으로 돌린 결과는 논문에 없다 —
+> 우리 M0-b 3-1 의 조합(SP + gather)은 **논문 밖**이다. 접촉 단독 IJ 는 "GS 와 비슷하되 항상 더 낫진 않다(a=2 로 조정)".
+> "SP 는 VTS 보다 잘 수렴하지만 **반복이 충분할 때만**" (Fig. 10 은 반복 60) — #35 의 하한 120 과 같은 방향.
 GS의 단점을 "제약 순서 편향 + 병렬화를 위한 배칭(그래프 컬러링)"으로 명시하고,
 **IJ는 그 배칭을 불필요하게 만드는 것이 목적**이라고 위치 짓는다.
 반복 수가 아주 낮으면 `ω`와 `b`를 더 낮출 것. 속도가 빠르고 물체가 작으면
@@ -1134,6 +1140,34 @@ GS의 단점을 "제약 순서 편향 + 병렬화를 위한 배칭(그래프 컬
 | **Macklin et al. (2019), "Small Steps in Physics Simulation"** | 같은 예산이면 반복보다 서브스텝. **"반복 1회" 관행의 출처** — C1 마찰의 반복 의존이 안 보이게 된 이유이기도 하다 |
 | Gao et al. (2018), "GPU Optimization of Material Point Methods", SIGGRAPH Asia | MPM을 GPU로 |
 | Wang et al. (2020), "A Massively Parallel and Scalable Multi-GPU Material Point Method", SIGGRAPH | 위의 확장 |
+
+---
+
+### C5. GPU 병렬 솔버 — M0-b 의 갈림길 (2026-09-14)
+
+> M0-a 의 솔버는 SP(C4 §6 Algorithm 1)를 **순차(GS) 순서로** 돌린다 — 제약마다 즉시 적용한다 (`SolveContactsSP`).
+> GPU 는 그 순서를 못 지킨다. 세 갈래가 있고, **A 가 지금 코드에서 가장 가깝다.** 절차는 [m0b-spike.md](../design/m0b-spike.md).
+
+| 갈래 | 논문 | 무엇 | 우리 쪽 |
+|---|---|---|---|
+| **A. Jacobi + 모멘텀 (gather)** | **C4 Frâncu 2014 §7** | 두 패스: ① 제약을 돌며 Δλ 계산 ② 입자를 돌며 인접 목록으로 **모아서** 적용. β 모멘텀이 GS 급 수렴. 워밍은 "GS 만큼 극적이진 않다" | ★ **1순위.** IJ 항(`PrevDLambdaN/Tan`)이 이미 있다 — 적용 시점만 바꾼다. **순서 무관 = 결정성 공짜** |
+| **A′. 질량 분할** | **Tonge, Benevolenski, Voroshilov (2012), "Mass Splitting for Jitter-Free Parallel Rigid Body Simulation", SIGGRAPH / TOG 31(4)** | Jacobi 의 **유효 질량은 접촉 수로 나누되 임펄스는 전체 질량으로** 적용. 낮은 반복에서 떨림 없음. GPU 5000 강체 60fps | A 의 과보정(#4 "Jacobi 평균 모드")의 정식 처방. Frâncu §3.4.1 의 `n_bi` 나누기와 **같은 자리, 다른 수식** — 그쪽은 전체 질량으로 푼 임펄스를 뒤에서 N 으로 나누고(우리 #4), 이쪽은 **질량을 N 으로 쪼갠 가상 부분체에 대해 정확히 풀고** 합친다. 접촉 수가 다른 두 입자(12 대 1)를 각자 무게로 다루므로 수렴이 살아남는다. LCP 해로의 수렴 증명 있음. A 가 흔들리면 첫 손질. ⚠ 본문 미열람(저자 사이트 차단) — 초록 + Frâncu 의 인용으로 정리 |
+| **A″. 블록 솔버 (지역 GS + 경계 Jacobi)** | C4 Frâncu §7 말미 ("could be") · **Tonge 2012** (블록 경계의 질량 분할이 원래 여기서 나왔다) | 정렬 해시의 연속 구간을 **워크그룹 하나 = 블록**으로 `groupshared` 에 올려 블록 안은 GS 로 여러 번, 블록 경계 접촉만 외부 반복마다 Jacobi. **전파 깊이가 접촉 한 칸 → 블록 한 변**. 블록 안 순차 + 블록 간 Jacobi 라 결정성도 유지 | ★ 256 입자 ≈ 30cm 블록 = **터널 아치 경로 길이**. #35 가 반복 120 을 요구한 아치가 블록 하나에 들어간다. 대가: 경계 입자 비율 · 결합이 블록을 가로지를 때 12슬롯 재배치 · 구현 난도. **B 의 대안** — 컬러링은 전역, 블록은 지역이라 문제 크기가 블록 크기와 같은 우리 쪽이 더 맞는다 |
+| **A″-b. 클러스터 컬러링** | **Ton-That, Kry, Andrews (2023), "Parallel Block Neo-Hookean XPBD using Graph Clustering", Computers & Graphics 110** ([프리프린트](http://profs.etsmtl.ca/sandrews/pdf/xpbdBlockNeo_MIG22_preprint.pdf)) | XPBD 제약 그래프를 **작은 클러스터(K_s=5)로 묶고 클러스터 그래프를 컬러링**. 클러스터 안은 순차(GS), 같은 색 클러스터는 병렬, 색은 순차. 색 수 40~104 → 17~26. 클러스터링은 **전처리**(BFS 탐욕) | A″ 와 B 의 중간이고 **XPBD 라 우리 수식 그대로**. ⚠ 결론에 명시: "동적 제약(접촉)은 다루지 않았다 — 매 프레임 슈퍼노드 그래프에 넣을 효율적 알고리즘이 필요". 그런데 **우리 결합은 정적**(영구 목록, `FormBonds` 때만 생김) → 결합은 클러스터 컬러링, 접촉은 gather 로 **가르는** 설계가 자연스럽다. #35 의 접촉/결합 예산 분리와 같은 절단선 |
+| **B. 그래프 컬러링 GS** | **Fratarcangeli, Tibaldo, Pellacini (2016), "Vivace: a Practical Gauss-Seidel Method for Stable Soft Body Dynamics", SIGGRAPH Asia / TOG 35(6)** | 매 프레임 **무작위 컬러링**으로 제약을 색별 배치. 색 안은 병렬, 색 사이는 순차 → GS 수렴을 그대로 가져간다. ms 예산의 게임 전제 | A 가 34°·터널을 못 지키면. 비용 = 컬러링 패스 + 색 수만큼의 동기화. 결정성은 색 배정이 결정적이어야 한다 |
+| **C. 순서로 전파 앞당기기** | **Erleben (2007), "Velocity-based Shock Propagation for Multibody Dynamics Animation", TOG 26(2)** · C3 Guendelman 접촉 그래프 | GS 는 접촉 하나당 반복 하나씩만 정보가 가므로 **쌓인 높이만큼 반복이 필요** — 바닥→위 레벨 순서로 한 스윕에 스택을 관통시킨다 | 반복 120(#35)의 **근본 원인**(경로 길이)을 치는 카드. A/B 위에 얹는다. **⚠ C3 의 벽 셋이 그대로 적용된다** — 접촉 그래프 비용 · **아치가 근사의 실패 지점** · 무한 질량은 모래에 과함. C3 결론(워밍 스타트가 shock 보다 낫다)을 M0-a #24 가 실증했으므로 Erleben 은 **안 읽어도 된다** — "경로 길이만큼 반복" 진단은 C3 §8.1 에 이미 있다. 결합을 클러스터 컬러링으로 가르면(A″-b) 이 카드의 필요성도 같이 내려간다 |
+
+**워밍 스타트의 GPU 형태** — **Catto (2005), "Iterative Dynamics with Temporal Coherence", GDC.** 접촉에 ID 를 붙여 λ 를 프레임 간 이어 붙이는 원전.
+정렬 해시가 매 프레임 입자를 재배치하므로 λ 는 **쌍 ID `(min i, max j)` 해시 슬롯**으로 찾아야 한다.
+⚠ 충돌하는 두 실측: M0-a #24 "워밍 없으면 크리프 0.08 cm/s" vs Frâncu §7 "Jacobi 에선 워밍이 GS 만큼 극적이지 않다" → M0-b ② 가 잰다.
+
+**블록 솔버 계보** — Tonge 2012 초록 "접촉을 블록 단위로 풀어 PGS 급 성능"(본문 미열람) · Harada (2011), "A Parallel Constraint Solver for a Rigid-Body Simulation", SIGGRAPH Asia Sketches — GPU 배칭의 초기 형태(Frâncu 의 [Har09] 계열) ·
+Kale & Kry (2024), "Distributed Simulation of Large Multi-body Systems", arXiv 2403.17261 — 파티션 경계 물체를 **겹치게 두고 블렌딩**(Schwarz 식), CPU/네트워크, 안은 PGS. 우리 GPU 워크그룹엔 안 맞지만 "경계 입자를 두 블록이 같이 갖는다"는 처리는 A″ 의 경계 문제에 참고.
+
+**공간 해시의 GPU 원전** — **Green (2010), "Particle Simulation using CUDA", NVIDIA whitepaper** (정렬 기반 균일 격자: 셀 키 → 정렬 → 셀 시작 테이블 → 27칸 순회) ·
+**Hoetzlein (2014), "Fast Fixed-Radius Nearest Neighbors: Interactive Million-Particle Fluids", GTC** (counting sort 격자, 수백만 입자). system-design §4 의 4단계가 이것이다.
+
+**지각 문턱** — **Yeh, Reinman, Patel, Faloutsos (2009), "Fool Me Twice: Exploring and Exploiting Error Tolerance in Physics-Based Animation", TOG 29(1).** GPU 가 CPU 와 다른 답을 낼 때 "얼마나 달라도 되나"의 근거. #35 의 예산 스윕이 쓴 기준(시드 산포 ±1°)을 지각 쪽에서 받친다.
 
 ---
 
