@@ -129,6 +129,8 @@ struct FPourResult
 	FAngleStats AngleAfterHold;
 	float ConeHeightAfterHold = 0.f;
 	float CreepAvgSpeed = 0.f;        // 유지 구간 평균 |v| 의 평균
+	float CreepFirstHalf = 0.f;       // 유지 앞 절반 / 뒤 절반 — 감쇠하는가 (예산 스윕의 세션 외삽용)
+	float CreepSecondHalf = 0.f;
 	float UnbalancedRatio = 0.f;      // 유지 구간 불평형력 비의 평균 (§2-1-a)
 	/** 바닥(고정 입자·지면)이 받는 수직 임펄스 합 / 자유 입자 총 무게 임펄스. 1 이 정답 — λn 인플레이션 계기 */
 	float BaseLoadRatio = 0.f;

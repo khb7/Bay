@@ -312,8 +312,10 @@ namespace
 					? TEXT("  ★통과") : TEXT(""));
 			if (Hold > 0)
 			{
-				UE_LOG(LogSpikeSweep, Display, TEXT("      유지 %d프레임 후: 프로파일 %5.1f° 법선중앙 %5.1f°  높이 %5.1f→%5.1f  크리프 평균|v| %.4f cm/s  바닥하중/무게 %.2f  불평형비 %.2e"),
-					Hold, R.AngleAfterHold.ProfileDeg, R.AngleAfterHold.MedianDeg, R.ConeHeight, R.ConeHeightAfterHold, R.CreepAvgSpeed, R.BaseLoadRatio, R.UnbalancedRatio);
+				const float TotalFrames = R.PourFrames + R.SettleFrames + Hold;
+				UE_LOG(LogSpikeSweep, Display, TEXT("      유지 %d프레임 후: 프로파일 %5.1f° 법선중앙 %5.1f°  높이 %5.1f→%5.1f  크리프 평균|v| %.4f cm/s (앞 %.4f / 뒤 %.4f)  바닥하중/무게 %.2f  불평형비 %.2e  | %.1f ms/프레임 (%d프레임, 병렬 %d)"),
+					Hold, R.AngleAfterHold.ProfileDeg, R.AngleAfterHold.MedianDeg, R.ConeHeight, R.ConeHeightAfterHold, R.CreepAvgSpeed, R.CreepFirstHalf, R.CreepSecondHalf, R.BaseLoadRatio, R.UnbalancedRatio,
+					TotalFrames > 0 ? R.WallSeconds * 1000.0 / TotalFrames : 0.0, (int32)TotalFrames, Results.Num());
 			}
 		}
 
@@ -704,6 +706,8 @@ namespace
 		const bool bPourBlock = FParse::Param(*Params, TEXT("pourblock"));
 		float BoxHalf = 29.f;
 		FParse::Value(*Params, TEXT("boxhalf="), BoxHalf);
+		int32 CutIterations = 90;   // #27~#29 의 값. 예산 스윕은 -iterations= 로 덮는다
+		FParse::Value(*Params, TEXT("iterations="), CutIterations);
 		const TArray<float> HeightList = ParseList<float>(Params, TEXT("heights="), { 60.f, 70.f, 80.f, 90.f });
 		FParse::Value(*Params, TEXT("w="), W);
 		FParse::Value(*Params, TEXT("strength="), Strength);
@@ -716,7 +720,7 @@ namespace
 
 		FSandParams P;
 		P.Friction = Mu;
-		P.Iterations = 90;
+		P.Iterations = CutIterations;
 		FParse::Value(*Params, TEXT("iterations="), P.Iterations);
 		P.WGlobal = W;
 		P.WarmStart = 1.f;
