@@ -257,11 +257,22 @@ void FSandSpike::SolveBondsSP(float StepDt)
 	// 고원 — 힘 ≤ BondStrength·m·g·cohesion(W). λ 는 위치형 승수라 힘 = λ/h²
 	const float LambdaMax = Params.BondStrength * FMath::Abs(Params.Gravity) * CohesionOfW(Params.WGlobal) * StepDt * StepDt;
 
+	const bool bGatherHere = Params.bGatherApply && Params.bGatherBonds;   // 결합만 순차로 두는 진단 (bGatherBonds=false)
+	if (bGatherHere)
+	{
+		FMemory::Memzero(Delta.GetData(), Delta.Num() * sizeof(FVector3f));
+		if (Params.bMassSplit) { CountConstraintsPerParticle(); }
+	}
+	const bool bSplit = bGatherHere && Params.bMassSplit && Params.bMassSplitBonds;
+	const float OmegaB = bGatherHere ? Params.BondOmega : 1.f;
+
 	for (FSandBond& B : Bonds)
 	{
 		const float Wi = InvMass[B.I];
 		const float Wj = InvMass[B.J];
-		const float WSum = Wi + Wj;
+		const float WSum = bSplit
+			? Wi * FMath::Max(1, DeltaCount[B.I]) + Wj * FMath::Max(1, DeltaCount[B.J])
+			: Wi + Wj;
 		if (WSum <= 0.f)
 		{
 			continue;
@@ -275,7 +286,7 @@ void FSandSpike::SolveBondsSP(float StepDt)
 		const FVector3f N = Diff / Dist;
 		const float C = Dist - B.RestLen;
 
-		float DLambda = -(C + AlphaTilde * B.Lambda) / (WSum + AlphaTilde);
+		float DLambda = -OmegaB * (C + AlphaTilde * B.Lambda) / (WSum + AlphaTilde);
 		const float NewLambda = FMath::Clamp(B.Lambda + DLambda, -LambdaMax, 0.f);   // 인장만 · 고원
 		DLambda = NewLambda - B.Lambda;
 		B.Lambda = NewLambda;
@@ -285,10 +296,21 @@ void FSandSpike::SolveBondsSP(float StepDt)
 		}
 
 		const FVector3f Corr = N * DLambda;
+		if (bGatherHere)
+		{
+			Delta[B.I] += Corr * (Wi / StepDt);   // Δv 단위로 모아 패스 2 에서 함께
+			Delta[B.J] -= Corr * (Wj / StepDt);
+			continue;
+		}
 		Pos[B.I] += Corr * Wi;
 		Pos[B.J] -= Corr * Wj;
 		Vel[B.I] += Corr * (Wi / StepDt);
 		Vel[B.J] -= Corr * (Wj / StepDt);
+	}
+
+	if (bGatherHere)
+	{
+		ApplyGatheredVelocityDeltas(StepDt);
 	}
 }
 
@@ -699,13 +721,25 @@ void FSandSpike::SolveContactsSP(float StepDt, int32 Iter, int32 MaxIter)
 		? FMath::Min(Params.MomentumA * FMath::Pow((float)Iter / (float)MaxIter, Params.MomentumB), 1.f)
 		: 0.f;
 
+	// gather: 이 패스 동안 v·x 를 건드리지 않고 Δv 를 모았다가 끝에 한 번 적용한다 (m0b-spike §3-1 갈래 A)
+	const bool bGatherC = Params.bGatherApply && Params.bGatherContacts;   // 거울 진단: bGatherContacts=false 면 접촉은 순차
+	if (bGatherC)
+	{
+		FMemory::Memzero(Delta.GetData(), Delta.Num() * sizeof(FVector3f));
+		if (Params.bMassSplit) { CountConstraintsPerParticle(); }
+	}
+	const bool bSplit = bGatherC && Params.bMassSplit;
+
 	for (FSandContact& C : Contacts)
 	{
 		const int32 i = C.I;
 		const int32 j = C.J;
 		const float Wi = InvMass[i];
 		const float Wj = InvMass[j];
-		const float WSum = Wi + Wj;
+		// 질량 분할: 유효 질량은 n 배 가벼운 부분체로(역질량 n·w), 적용은 전체 w 로 (Tonge 2012)
+		const float WSum = bSplit
+			? Wi * FMath::Max(1, DeltaCount[i]) + Wj * FMath::Max(1, DeltaCount[j])
+			: Wi + Wj;
 		if (WSum <= 0.f)
 		{
 			continue;
@@ -768,10 +802,46 @@ void FSandSpike::SolveContactsSP(float StepDt, int32 Iter, int32 MaxIter)
 
 		// --- 적용: v 와 x 를 같은 임펄스로 ---
 		const FVector3f Impulse = N * DLambdaN + DLambdaTan;
+		if (bGatherC)
+		{
+			Delta[i] += Impulse * Wi;      // Δv 단위. x 는 h 배 — 패스 2 에서
+			Delta[j] -= Impulse * Wj;
+			continue;
+		}
 		Vel[i] += Impulse * Wi;
 		Vel[j] -= Impulse * Wj;
 		Pos[i] += Impulse * (Wi * StepDt);
 		Pos[j] -= Impulse * (Wj * StepDt);
+	}
+
+	if (bGatherC)
+	{
+		ApplyGatheredVelocityDeltas(StepDt);
+	}
+}
+
+void FSandSpike::CountConstraintsPerParticle()
+{
+	// 활성 접촉(닿았거나 λ 를 들고 있는 쌍) + 결합. 지면·벽은 입자 하나짜리라 과보정이 없어 세지 않는다
+	FMemory::Memzero(DeltaCount.GetData(), DeltaCount.Num() * sizeof(int32));
+	const float D = 2.f * Params.Radius;
+	for (const FSandContact& C : Contacts)
+	{
+		const float Gap = FVector3f::Dist(Pos[C.I], Pos[C.J]) - D;
+		if (Gap > 0.f && C.LambdaN <= 0.f) { continue; }
+		++DeltaCount[C.I]; ++DeltaCount[C.J];
+	}
+	for (const FSandBond& B : Bonds) { ++DeltaCount[B.I]; ++DeltaCount[B.J]; }
+}
+
+void FSandSpike::ApplyGatheredVelocityDeltas(float StepDt)
+{
+	// 패스 2 — 입자마다 한 번. Delta 는 Δv 단위, x 는 같은 임펄스의 h 배 (SP 규약 유지)
+	for (int32 i = 0; i < Pos.Num(); ++i)
+	{
+		if (InvMass[i] <= 0.f) { continue; }
+		Vel[i] += Delta[i];
+		Pos[i] += Delta[i] * StepDt;
 	}
 }
 

@@ -242,6 +242,11 @@ namespace
 		const TArray<int32> RateList = ParseList<int32>(Params, TEXT("perdrop="), { 2 });
 		const TArray<float> DropList = ParseList<float>(Params, TEXT("drop="), { Drop });
 		const TArray<float> SpawnList = ParseList<float>(Params, TEXT("spawnr="), { 2.5f });
+		const TArray<float> SorList = ParseList<float>(Params, TEXT("sor="), { 0.5f });   // (36) ω — 갈래 A 의 과보정 손잡이
+		const TArray<float> MaList  = ParseList<float>(Params, TEXT("ma="),  { 0.f });    // (38) a — 모멘텀
+		float Mb = 0.6f; FParse::Value(*Params, TEXT("mb="), Mb);
+		const bool bGather = FParse::Param(*Params, TEXT("gather"));                       // m0b-spike §3-1 ①
+		const bool bMassSplit = FParse::Param(*Params, TEXT("masssplit"));                 // A′ 질량 분할 (Tonge 2012)
 
 		TArray<FSandParams> Cfgs;
 		TArray<FPourSetup>  Setups;
@@ -254,6 +259,8 @@ namespace
 		for (float Bj : JitterList)
 		for (int32 Sd : SeedList)
 		for (int32 Per : RateList)
+		for (float Sor : SorList)
+		for (float Ma : MaList)
 		{
 			// 낙하 충격 속도 √(2gh) 로 한 서브스텝 이동이 지름의 0.2배를 넘으면
 			// 입자가 한 스텝에 깊이 박히고, 그 침투를 해소하는 보정이 속도가 되어 튕긴다.
@@ -267,6 +274,11 @@ namespace
 			P.WarmGapTol = WarmTol;
 			P.Kv         = KvV;
 			P.Seed       = (uint32)Sd;
+			P.SorOmega   = Sor;
+			P.MomentumA  = Ma;
+			P.MomentumB  = Mb;
+			P.bGatherApply = bGather;
+			P.bMassSplit   = bMassSplit;
 			Cfgs.Add(P);
 
 			FPourSetup S;
@@ -303,8 +315,9 @@ namespace
 			const FPourResult& R = Results[i];
 			const float Diff = FMath::Abs(R.Angle.ProfileDeg - R.Angle.MedianDeg);
 			UE_LOG(LogSpikeSweep, Display,
-				TEXT("%5.2f kv%3.1f %2d %3d %4.2f sr%3.1f bj%3.1f s%-5u %4.2f | %4s | %7.1f°  %7.1f°  %4.1f | %5.1f/%5.1fcm | %9.1f | %5.1f%s"),
+				TEXT("%5.2f kv%3.1f %2d %3d %4.2f sr%3.1f bj%3.1f s%-5u %4.2f sor%4.2f a%3.1f %s | %4s | %7.1f°  %7.1f°  %4.1f | %5.1f/%5.1fcm | %9.1f | %5.1f%s"),
 				R.Friction, Cfgs[i].Kv, Cfgs[i].Substeps, R.Iterations, R.DropHeightDiameters, Setups[i].SpawnRadiusDiameters, Setups[i].BaseJitter, Cfgs[i].Seed, R.RatePerFrame,
+				Cfgs[i].SorOmega, Cfgs[i].MomentumA, Cfgs[i].bGatherApply ? (Cfgs[i].bMassSplit ? TEXT("GM") : TEXT("G ")) : TEXT("S "),
 				R.bSettled ? TEXT("○") : TEXT("★미완"),
 				R.Angle.ProfileDeg, R.Angle.MedianDeg, Diff,
 				R.ConeHeight, R.ConeRadius, R.MaxSpeedDuringPour, R.WallSeconds,
@@ -641,6 +654,15 @@ namespace
 		P.WGlobal = W;
 		P.WarmStart = 1.f;
 		P.WarmGapTol = 0.02f;
+		P.bGatherApply = FParse::Param(*Params, TEXT("gather"));   // m0b-spike §3-1
+		P.bMassSplit = FParse::Param(*Params, TEXT("masssplit"));  // A′
+		P.bGatherBonds = !FParse::Param(*Params, TEXT("seqbonds"));  // 결합만 순차 (진단)
+		FParse::Value(*Params, TEXT("bondomega="), P.BondOmega);
+		P.bMassSplitBonds = FParse::Param(*Params, TEXT("splitbonds"));
+		P.bGatherContacts = !FParse::Param(*Params, TEXT("seqcontacts"));  // 거울 진단
+		FParse::Value(*Params, TEXT("sor="), P.SorOmega);
+		FParse::Value(*Params, TEXT("ma="),  P.MomentumA);
+		FParse::Value(*Params, TEXT("mb="),  P.MomentumB);
 		P.BondStrength = Strength;
 		P.BreakStretch = Stretch;
 		P.BondFormStretch = Form;
@@ -729,6 +751,15 @@ namespace
 		FParse::Value(*Params, TEXT("warmtol="), P.WarmGapTol);
 		FParse::Value(*Params, TEXT("kv="), P.Kv);
 		FParse::Value(*Params, TEXT("wallmu="), P.WallFriction);
+		P.bGatherApply = FParse::Param(*Params, TEXT("gather"));   // m0b-spike §3-1
+		P.bMassSplit = FParse::Param(*Params, TEXT("masssplit"));  // A′
+		P.bGatherBonds = !FParse::Param(*Params, TEXT("seqbonds"));  // 결합만 순차 (진단)
+		FParse::Value(*Params, TEXT("bondomega="), P.BondOmega);
+		P.bMassSplitBonds = FParse::Param(*Params, TEXT("splitbonds"));
+		P.bGatherContacts = !FParse::Param(*Params, TEXT("seqcontacts"));  // 거울 진단
+		FParse::Value(*Params, TEXT("sor="), P.SorOmega);
+		FParse::Value(*Params, TEXT("ma="),  P.MomentumA);
+		FParse::Value(*Params, TEXT("mb="),  P.MomentumB);
 		float CutBaseJitter = 0.3f;
 		FParse::Value(*Params, TEXT("basejitter="), CutBaseJitter);
 		P.BondStrength = Strength;

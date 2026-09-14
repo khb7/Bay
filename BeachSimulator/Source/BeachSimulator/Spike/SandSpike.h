@@ -39,6 +39,26 @@ struct FSandParams
 	float  Kv    = 0.1f;    // 잔차의 속도 성분. 0이면 순수 PBD, 0.1이 논문 권장 출발점
 	float  Kc    = 1.0f;    // 잔차의 위치 성분
 	float  SorOmega = 0.5f; // (36) 의 ω
+	/**
+	 * M0-b 갈래 A (m0b-spike.md §3-1) — gather 적용. 접촉·결합을 종류별로 "전부 계산 → 한 번 적용".
+	 * 수식·클램프·모멘텀은 그대로고 적용 시점만 미룬다 (Frâncu 2014 §7 의 두 패스). 종류 사이(접촉→결합→지면→벽)는 갱신된 v·x 를 본다.
+	 * false = 지금까지의 즉시 적용(순차, GS). GPU 는 true 형태만 가능하다.
+	 */
+	bool   bGatherApply = false;
+	/**
+	 * A′ 질량 분할 (Tonge 2012, papers C5). gather 에서만 의미. 접촉 j 가 보는 입자 i 의 역질량을 w_i/n_i 가 아니라
+	 * n_i·w_i 로 — 입자를 n_i 개 가상 부분체로 쪼개 각 제약이 제 부분체에 대해 정확히 풀고, 적용은 전체 w_i 로 합친다.
+	 * n_i = 이 반복에서 입자 i 에 붙은 활성 접촉 수 (+결합 수). 순수 Jacobi 의 n배 과보정을 원리적으로 없앤다.
+	 */
+	bool   bMassSplit = false;
+	/** gather 를 접촉에만 걸고 결합은 순차(즉시 적용)로 둘 때 false. "결합만 GS 급 수렴" (클러스터 컬러링) 이 살릴 수 있는 상한을 재는 진단 스위치 */
+	bool   bGatherBonds = true;
+	/** 거울 진단: 접촉은 순차(즉시 적용), 결합만 gather. 3단계·큐3 이 결합 순차로도 무너져 접촉 gather 가 범인인지 가른다 */
+	bool   bGatherContacts = true;
+	/** gather 결합의 완화 계수. XPBD Δλ 에 곱한다 (1 = 완화 없음). 접촉의 SorOmega 와 같은 자리 — 결합 9개가 한 입자를 동시에 밀 때의 과보정 억제 */
+	float  BondOmega = 1.f;
+	/** 질량 분할을 결합에도 거는가. 컴플라이언스 제약은 WSum 을 키우면 α̃ 대비 물러지므로(#36 가설) 기본 false 로 두고 시험한다 */
+	bool   bMassSplitBonds = false;
 
 	// (38) 모멘텀 항. β_l = min(a·(l/l_max)^b, 1). 접촉(단방향)에서는 a=2 를 시도하라고 논문이 밝힘
 	float  MomentumA = 0.f;   // 0이면 모멘텀 없음 (기본은 꺼둔다 — 단계적으로 켠다)
@@ -362,6 +382,8 @@ private:
 	 */
 	void SolveWallsSP(float StepDt);
 	void ApplyDeltas();
+	void ApplyGatheredVelocityDeltas(float StepDt);   // gather 패스 2 (SP 경로)
+	void CountConstraintsPerParticle();               // 질량 분할용 n_i (DeltaCount 재사용)
 	void CommitLambdas();       // 실제 적용 비율로 λ 를 갱신
 	void SolveWalls();          // 형틀(원통) 또는 상자. 마찰 없는 단순 투영
 	void SolveGround();
