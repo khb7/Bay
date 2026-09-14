@@ -440,3 +440,6 @@ timeScale                           →  설정값으로 남기되 기본 1×. �
 4. [A]↔[B] 경계 — 모래를 퍼서 옮기고, 파도가 입자를 쓸어가고, 쓸려간 모래가 하이트필드로 돌아가는 흐름
 
 > **각 단계에서 물어볼 것: 이 거동이 창발인가, 내가 규칙으로 적었나?**
+
+- [references.md](references.md) — 만들어진 게임·데모 레퍼런스: Sandcastle(2026 데모, 직접 경쟁작) · 실시간 입자 모래 규모 기준점 · 렌더링 참고
+- [tools.md](tools.md) — 제작 도구 상세: Houdini Grains · Flex(실측표) · PhysX 5 · Obi · Molecular+ · Taichi — 파라미터 대응과 우리 설계에 돌아오는 것

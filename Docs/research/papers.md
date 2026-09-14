@@ -5,6 +5,7 @@
 용어 하나당 개별 문서가 [terms/](terms/) 아래에 있다.
 
 > ⚠️ 서지사항은 상당수 기억 기반이다. 실제로 찾아볼 때 연도·학회가 어긋날 수 있으니
+> 만들어진 게임·데모(Sandcastle 2026, Niagara PBD 쇼케이스, Flex…)는 [references.md](references.md).
 > 저자명 + 제목 키워드로 검색하는 것을 권한다. 특히 **F절(해변 [지하수면](terms/water-table.md))** 은 검증이 덜 됐다.
 
 ---
@@ -844,6 +845,7 @@ d = 5cm  →  40 ~ 80 cm  >  터널 지름 30cm
 | **Roessler & Katterfeld (2018)**, Powder Technology 330 | 업스케일 입자에서 **전단 상자가 크기 불변 + 빠르다.** B-S6 에도 있다 | 〃 |
 | **Wensrich & Katterfeld (2012)**, "Rolling friction as a technique for modelling particle shape in DEM", Powder Technology | 구름 마찰 = 모양의 대역. **A-R3 의 "회전 없음은 문헌 밖"에 부분적 답** | 〃 |
 | Coetzee & Scheffler (2023), Processes 11(1), 5 | 점착 재료 교정은 아직 미성숙 — B-S3 을 문헌 쪽에서 확인 | 〃 |
+| **Chen, Ly, Wojtan (2025), "Numerical Homogenization of Sand from Grain-level Simulations", SIGGRAPH Asia / TOG (DOI 10.1145/3763344)** | **알갱이 형태 → 거시 거동**을 알갱이 DEM 에서 접는다. 구 → dolos → hexapod → dodecafang 순으로 마찰·얽힘이 커지고 **물 없이 형태만으로 더미가 응집**한다. 코드·데이터 공개 | #25·#34 의 "회전 잠금 구의 기하 맞물림 = μ 위의 ~25°" 의 학술판. 우리 μ 0.15 유효값은 이 형태 축을 μ 하나로 접은 것. 회전 자유도를 넣을지 말지의 근거 ([references.md §4](references.md)) |
 | Roessler & Katterfeld (2019), Particuology | **젖은 모래** 교정 절차. 원통 인상 + 인상 속도 축 | 〃 |
 | **Richter et al. (2022)**, "Shear lid motion in DEM shear calibration…", Powder Technology | 전단 뚜껑의 수직 자유도가 내부마찰각을 바꾼다 | [terms/shear-box.md](terms/shear-box.md) |
 | ASTM D3080 / D6528 | 전단 상자-입경 비 표준 (`W/d ≥ 10`). DEM REV 는 `> 12.5` + 3,000 입자 | 〃 |
@@ -901,6 +903,16 @@ x = p;
 | **입상체(모래)** | **접촉 제약 + 마찰** |
 
 → 충돌 판정이 전부 구-구 하나로 통일. **파도와 모래의 양방향 상호작용이 거저 나옴**
+
+**★ 실측표 (Table 1, GTX 680, 프레임 16 ms 고정) — 2026-09-14 원문 확인**
+```
+Bunny Pile    44k 입자   서브스텝 2 × 반복  2    3.8 ms
+Sandcastle    73k        서브스텝 2 × 반복 12   10.2 ms     ← 마른 더미 + 위치 마찰, 결합 없음 (Fig. 11)
+Water Balloons 29k       서브스텝 3 × 반복 12   12.1 ms
+```
+Sandcastle = 초당 1.7억 입자·반복. 우리 20만 × 120 × 60fps = 14.4억 → **GTX 680 의 8.4배** ([m0b-spike §2-2-a](../design/m0b-spike.md) 사전 추정의 기준점 — Green 의 DEM 반복 1 보다 이쪽이 같은 구조다).
+Fig. 11: "위치 마찰은 300프레임 뒤에도 가파른 더미를 유지, 옛 PBD 마찰은 거의 다 무너짐" — 우리 #24 크리프 그림. §4.5 **입자 슬리핑**: "스텝 끝에 제약이 다 안 맞으면 드리프트 → 속도가 문턱 아래면 얼린다" — 업계의 크리프 처방은 얼리기, 우리는 워밍(#24).
+§6.1 은 **"마찰 강도가 반복 수에 다소 의존한다"** 를 한계로 명시한다.
 
 **GPU를 위한 장치**: Gauss-Seidel(순차) 대신 Jacobi(병렬) + **제약 평균화** + **SOR**.
 한 입자에 제약 N개가 동시에 밀어 과보정하는 걸 개수로 나눠 막고, 1보다 큰 계수로 수렴 회복.
@@ -1166,6 +1178,8 @@ Kale & Kry (2024), "Distributed Simulation of Large Multi-body Systems", arXiv 2
 
 **공간 해시의 GPU 원전** — **Green (2010), "Particle Simulation using CUDA", NVIDIA whitepaper** (정렬 기반 균일 격자: 셀 키 → 정렬 → 셀 시작 테이블 → 27칸 순회) ·
 **Hoetzlein (2014), "Fast Fixed-Radius Nearest Neighbors: Interactive Million-Particle Fluids", GTC** (counting sort 격자, 수백만 입자). system-design §4 의 4단계가 이것이다.
+읽은 뒤(2026-09-14): **radix 가 아니라 counting sort** — "셀 순서만 필요하고 셀 안 순서는 무의미하니 자릿수가 아니라 셀 ID 로 1-radix" → 커널 15 → 4, 8M 점 4억 질의/초(Titan).
+Green 은 셀 크기 = 지름 · loose grid(중심 셀 하나) · 27칸 · **정렬 순서로 데이터 재배치 시 45% 이득** · 65k 입자 175 fps (GTX 280, 반복 1) — [m0b-spike §2-2-a](../design/m0b-spike.md) 의 사전 추정 기준점.
 
 **지각 문턱** — **Yeh, Reinman, Patel, Faloutsos (2009), "Fool Me Twice: Exploring and Exploiting Error Tolerance in Physics-Based Animation", TOG 29(1).** GPU 가 CPU 와 다른 답을 낼 때 "얼마나 달라도 되나"의 근거. #35 의 예산 스윕이 쓴 기준(시드 산포 ±1°)을 지각 쪽에서 받친다.
 
