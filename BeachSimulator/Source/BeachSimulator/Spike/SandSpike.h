@@ -61,6 +61,14 @@ struct FSandParams
 	 * 블록끼리는 서로의 갱신을 못 보므로 단일 스레드 순차 처리가 병렬 블록 처리와 같은 답을 낸다.
 	 */
 	float  BlockSize = 0.f;
+	/** 블록 격자를 홀수 반복마다 반 칸 민다 — 한 격자에서 경계였던 접촉이 다른 격자에선 블록 안이 되어, 모든 접촉이 절반의 반복에서 순차로 풀린다 (#37 마른 더미 크리프) */
+	bool   bBlockShift = false;
+	/**
+	 * M0-b 3-1 ② — 반복 루프(접촉·결합·지면·벽)를 GPU 에서 돈다 (SandGpu 모듈). 이웃 탐색·워밍·예측·파단은 CPU 그대로.
+	 * 형태는 ①-b 와 같다: 블록 안 접촉 순차 · 경계 접촉 gather(질량 분할은 bMassSplit) · 결합 gather. BlockSize 0 이면 30cm.
+	 * RHI 가 없으면(커맨드릿에 -AllowCommandletRendering 누락) CPU 로 떨어지지 않고 멈춘다 — 조용히 대조군을 재면 안 된다.
+	 */
+	bool   bGpuSolve = false;
 	/** gather 결합의 완화 계수. XPBD Δλ 에 곱한다 (1 = 완화 없음). 접촉의 SorOmega 와 같은 자리 — 결합 9개가 한 입자를 동시에 밀 때의 과보정 억제 */
 	float  BondOmega = 1.f;
 	/** 질량 분할을 결합에도 거는가. 컴플라이언스 제약은 WSum 을 키우면 α̃ 대비 물러지므로(#36 가설) 기본 false 로 두고 시험한다 */
@@ -390,8 +398,12 @@ private:
 	void ApplyDeltas();
 	void ApplyGatheredVelocityDeltas(float StepDt);   // gather 패스 2 (SP 경로)
 	void CountConstraintsPerParticle(bool bBoundaryOnly = false);   // 질량 분할용 n_i (DeltaCount 재사용). 블록 모드면 경계 접촉만
-	void AssignBlocks();                                             // BlockSize 격자로 BlockId 부여
+	void AssignBlocks(float Offset = 0.f);                                          // BlockSize 격자로 BlockId 부여
+	void SolveIterationsGpu(float StepDt);                           // 반복 루프 전체를 GPU 로 (bGpuSolve)
 public:
+	/** GPU 경로의 마지막 프레임 벽시계 (올리기 + 반복 + 내려받기) · CPU 쪽 포장(블록 분류·인접) 시간 */
+	float LastGpuMs() const { return GpuMs; }
+	float LastGpuPrepMs() const { return GpuPrepMs; }
 	/** 마지막 접촉 패스에서 블록 경계를 넘은 활성 접촉 비율 (블록 모드 계측) */
 	float BoundaryContactFrac() const { return LastBoundaryFrac; }
 private:
@@ -416,6 +428,8 @@ private:
 	TArray<FVector3f> Delta;
 	TArray<int64>     BlockId;          // ①-b 블록 모사용. 셀 좌표를 21비트씩 묶은 정확한 키
 	float LastBoundaryFrac = 0.f;
+	float GpuMs = 0.f;
+	float GpuPrepMs = 0.f;
 	TArray<int32>     DeltaCount;
 	TArray<float>     DeltaScale;   // 입자별 ω/접촉수. 장부를 맞추는 데 쓴다
 

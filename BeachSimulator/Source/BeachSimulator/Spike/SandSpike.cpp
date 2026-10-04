@@ -1,6 +1,7 @@
 #include "SandSpike.h"
 
 #include "Math/RandomStream.h"
+#include "SandGpuSolver.h"
 
 namespace
 {
@@ -729,7 +730,7 @@ void FSandSpike::SolveContactsSP(float StepDt, int32 Iter, int32 MaxIter)
 	if (bAnyGather)
 	{
 		FMemory::Memzero(Delta.GetData(), Delta.Num() * sizeof(FVector3f));
-		if (bBlock) { AssignBlocks(); }
+		if (bBlock) { AssignBlocks((Params.bBlockShift && (Iter & 1)) ? 0.5f * Params.BlockSize : 0.f); }
 		if (Params.bMassSplit) { CountConstraintsPerParticle(bBlock); }
 	}
 	const bool bSplit = bAnyGather && Params.bMassSplit;
@@ -845,7 +846,7 @@ void FSandSpike::CountConstraintsPerParticle(bool bBoundaryOnly)
 	if (!bBoundaryOnly) { for (const FSandBond& B : Bonds) { ++DeltaCount[B.I]; ++DeltaCount[B.J]; } }
 }
 
-void FSandSpike::AssignBlocks()
+void FSandSpike::AssignBlocks(float Offset)
 {
 	// 위치를 BlockSize 격자로 양자화한 정확한 키. 이웃 셀끼리만 비교하므로 21비트 좌표면 충분하다
 	BlockId.SetNum(Pos.Num(), EAllowShrinking::No);
@@ -853,11 +854,188 @@ void FSandSpike::AssignBlocks()
 	const int64 Bias = 1048576;   // 2^20
 	for (int32 i = 0; i < Pos.Num(); ++i)
 	{
-		const int64 bx = (int64)FMath::FloorToInt(Pos[i].X * InvB) + Bias;
-		const int64 by = (int64)FMath::FloorToInt(Pos[i].Y * InvB) + Bias;
-		const int64 bz = (int64)FMath::FloorToInt(Pos[i].Z * InvB) + Bias;
+		const int64 bx = (int64)FMath::FloorToInt((Pos[i].X + Offset) * InvB) + Bias;
+		const int64 by = (int64)FMath::FloorToInt((Pos[i].Y + Offset) * InvB) + Bias;
+		const int64 bz = (int64)FMath::FloorToInt((Pos[i].Z + Offset) * InvB) + Bias;
 		BlockId[i] = (bx * 4398046511104LL) + (by * 2097152LL) + bz;   // bx<<42 | by<<21 | bz
 	}
+}
+
+void FSandSpike::SolveIterationsGpu(float StepDt)
+{
+	// 3-1 ② — 반복 루프를 통째로 GPU 에. 여기서 하는 일은 분류와 포장뿐이다:
+	//   접촉을 블록 안(블록 순으로 모음) / 경계로 가르고, 경계 접촉과 결합의 입자별 인접(CSR)을 만든다.
+	// 블록은 서브스텝 동안 고정이다 (CPU ①-b 는 반복마다 다시 매겼다 — GPU 는 프레임당 한 번 정렬하므로 이쪽이 실제 형태).
+	checkf(SandGpu::IsAvailable(), TEXT("-gpu 는 RHI 가 필요하다. 커맨드릿이면 -AllowCommandletRendering 을 붙일 것"));
+	checkf(Params.MomentumA == 0.f && !Params.bMassSplitBonds, TEXT("GPU 경로는 모멘텀·결합 질량 분할을 지원하지 않는다 (#36 에서 둘 다 껐다)"));
+
+	const double T0 = FPlatformTime::Seconds();
+	const int32 N = Pos.Num();
+	const float SavedBlock = Params.BlockSize;
+	if (Params.BlockSize <= 0.f) { Params.BlockSize = 30.f; }
+	AssignBlocks();
+	Params.BlockSize = SavedBlock;
+
+	static FSandGpuSolveData D;   // 배열 재할당을 피한다. 게임 스레드 전용
+	D.Iterations = Params.Iterations;
+	D.Pos.SetNumUninitialized(N);
+	D.Vel.SetNumUninitialized(N);
+	D.PrevPos.SetNumUninitialized(N);
+	D.WallLambda.SetNumUninitialized(N);
+	for (int32 i = 0; i < N; ++i)
+	{
+		D.Pos[i]     = FVector4f(Pos[i], InvMass[i]);
+		D.Vel[i]     = FVector4f(Vel[i], 0.f);
+		D.PrevPos[i] = FVector4f(PrevPos[i], 0.f);
+		D.WallLambda[i] = WallLambda[i];
+	}
+	D.GroundLambda = GroundLambdaN;
+
+	// --- 접촉: 블록 안은 블록별로 모으고(목록 순서 유지), 경계는 뒤에 ---
+	const int32 NumC = Contacts.Num();
+	TMap<int64, int32> BlockIndex;
+	TArray<int32> BlockOf;          // 접촉 → 블록 번호 (-1 = 경계)
+	TArray<int32> BlockCount;
+	BlockOf.SetNumUninitialized(NumC);
+	for (int32 k = 0; k < NumC; ++k)
+	{
+		const FSandContact& C = Contacts[k];
+		if (BlockId[C.I] != BlockId[C.J]) { BlockOf[k] = -1; continue; }
+		int32& B = BlockIndex.FindOrAdd(BlockId[C.I], -1);
+		if (B < 0) { B = BlockCount.Add(0); }
+		BlockOf[k] = B;
+		++BlockCount[B];
+	}
+	const int32 NumBlocks = BlockCount.Num();
+	D.BlockRange.SetNumUninitialized(NumBlocks * 2);
+	int32 NumInternal = 0;
+	for (int32 b = 0; b < NumBlocks; ++b)
+	{
+		D.BlockRange[2 * b]     = NumInternal;
+		D.BlockRange[2 * b + 1] = BlockCount[b];
+		NumInternal += BlockCount[b];
+		BlockCount[b] = D.BlockRange[2 * b];   // 이제부터 채움 커서
+	}
+	D.NumInternal = NumInternal;
+
+	TArray<int32> GpuSlot;          // 접촉 → GPU 버퍼 자리
+	GpuSlot.SetNumUninitialized(NumC);
+	D.ContactIJ.SetNumUninitialized(NumC * 2);
+	D.ContactLambda.SetNumUninitialized(NumC);
+	D.BoundaryAdjOffset.SetNumUninitialized(N + 1);
+	FMemory::Memzero(D.BoundaryAdjOffset.GetData(), (N + 1) * sizeof(uint32));
+	int32 BoundaryCursor = NumInternal;
+	for (int32 k = 0; k < NumC; ++k)
+	{
+		const FSandContact& C = Contacts[k];
+		const int32 Slot = BlockOf[k] >= 0 ? BlockCount[BlockOf[k]]++ : BoundaryCursor++;
+		GpuSlot[k] = Slot;
+		D.ContactIJ[2 * Slot]     = C.I;
+		D.ContactIJ[2 * Slot + 1] = C.J;
+		D.ContactLambda[Slot]     = FVector4f(C.LambdaTan, C.LambdaN);
+		if (BlockOf[k] < 0) { ++D.BoundaryAdjOffset[C.I + 1]; ++D.BoundaryAdjOffset[C.J + 1]; }
+	}
+	const int32 NumBoundary = NumC - NumInternal;
+	LastBoundaryFrac = NumC > 0 ? (float)NumBoundary / NumC : 0.f;
+
+	// 입자별 인접 (CSR). 원소 = (순번 << 1) | (입자가 j 쪽이면 1). Offset 에는 입자별 개수가 [i+1] 에 들어 있다
+	auto FillAdj = [N](TArray<uint32>& Offset, TArray<uint32>& Adj, int32 Count, TFunctionRef<void(int32, int32&, int32&)> PairOf)
+	{
+		for (int32 i = 0; i < N; ++i) { Offset[i + 1] += Offset[i]; }
+		Adj.SetNumUninitialized(Offset[N]);
+		TArray<uint32> Cursor(Offset.GetData(), N);
+		for (int32 c = 0; c < Count; ++c)
+		{
+			int32 I, J;
+			PairOf(c, I, J);
+			Adj[Cursor[I]++] = ((uint32)c << 1);
+			Adj[Cursor[J]++] = ((uint32)c << 1) | 1u;
+		}
+	};
+	FillAdj(D.BoundaryAdjOffset, D.BoundaryAdj, NumBoundary, [&](int32 c, int32& I, int32& J)
+	{
+		I = D.ContactIJ[2 * (NumInternal + c)];
+		J = D.ContactIJ[2 * (NumInternal + c) + 1];
+	});
+
+	// --- 결합 ---
+	const float Alpha = BondCompliance();
+	D.bBondsActive = Bonds.Num() > 0 && Alpha > 0.f;
+	D.BondAdjOffset.SetNumUninitialized(N + 1);
+	FMemory::Memzero(D.BondAdjOffset.GetData(), (N + 1) * sizeof(uint32));
+	D.BondIJ.Reset();
+	D.BondData.Reset();
+	D.BondAdj.Reset();
+	if (D.bBondsActive)
+	{
+		const int32 NumB = Bonds.Num();
+		D.BondIJ.SetNumUninitialized(NumB * 2);
+		D.BondData.SetNumUninitialized(NumB);
+		for (int32 b = 0; b < NumB; ++b)
+		{
+			D.BondIJ[2 * b]     = Bonds[b].I;
+			D.BondIJ[2 * b + 1] = Bonds[b].J;
+			D.BondData[b]       = FVector4f(Bonds[b].RestLen, Bonds[b].Lambda, 0.f, 0.f);
+			++D.BondAdjOffset[Bonds[b].I + 1];
+			++D.BondAdjOffset[Bonds[b].J + 1];
+		}
+		FillAdj(D.BondAdjOffset, D.BondAdj, NumB, [&](int32 b, int32& I, int32& J) { I = Bonds[b].I; J = Bonds[b].J; });
+		D.BondAlphaTilde = Alpha / (StepDt * StepDt);
+		D.BondLambdaMax  = Params.BondStrength * FMath::Abs(Params.Gravity) * CohesionOfW(Params.WGlobal) * StepDt * StepDt;
+		D.BondOmega      = Params.BondOmega;
+	}
+
+	D.Radius   = Params.Radius;
+	D.StepDt   = StepDt;
+	D.Kv       = Params.Kv;
+	D.Kc       = Params.Kc;
+	D.SorOmega = Params.SorOmega;
+	D.Friction = Params.Friction;
+	D.bMassSplit = Params.bMassSplit;
+
+	D.WallMode = 0;
+	D.WallActiveMask = 0;
+	D.WallFriction = Params.WallFriction;
+	if (bWallsActive && bBoxScene)
+	{
+		D.WallMode = 1;
+		D.WallLX = BoxHalf.X - Params.Radius;
+		D.WallLY = BoxHalf.Y - Params.Radius;
+		D.WallActiveMask = 4u | 8u;
+		if (!Tilt.bOpenDownhill) { D.WallActiveMask |= 1u; if (!Tilt.bOpenXPlus) { D.WallActiveMask |= 2u; } }
+	}
+	else if (bWallsActive)
+	{
+		D.WallMode  = 2;
+		D.WallLimit = WallRadius - Params.Radius;
+		D.WallLiftZ = WallLiftZ;
+	}
+
+	const double T1 = FPlatformTime::Seconds();
+	SandGpu::Solve(D);
+	const double T2 = FPlatformTime::Seconds();
+
+	// --- 내려받기 ---
+	for (int32 i = 0; i < N; ++i)
+	{
+		Pos[i] = FVector3f(D.Pos[i]);
+		Vel[i] = FVector3f(D.Vel[i]);
+		WallLambda[i] = D.WallLambda[i];
+	}
+	GroundLambdaN = D.GroundLambda;
+	for (int32 k = 0; k < NumC; ++k)
+	{
+		const FVector4f& L = D.ContactLambda[GpuSlot[k]];
+		Contacts[k].LambdaN   = L.W;
+		Contacts[k].LambdaTan = FVector3f(L);
+	}
+	if (D.bBondsActive)
+	{
+		for (int32 b = 0; b < Bonds.Num(); ++b) { Bonds[b].Lambda = D.BondData[b].Y; }
+	}
+
+	GpuMs     += (float)((T2 - T1) * 1000.0);
+	GpuPrepMs += (float)((T1 - T0 + FPlatformTime::Seconds() - T2) * 1000.0);
 }
 
 void FSandSpike::ApplyGatheredVelocityDeltas(float StepDt)
@@ -1264,6 +1442,7 @@ void FSandSpike::Step(float Dt)
 	const double T0 = FPlatformTime::Seconds();
 
 	BuildContacts(Dt);   // ★ 프레임당 1회 (논문 §3.5)
+	GpuMs = GpuPrepMs = 0.f;
 
 	const float SubDt = Dt / (float)Params.Substeps;
 	for (int32 s = 0; s < Params.Substeps; ++s)
@@ -1380,7 +1559,11 @@ void FSandSpike::Step(float Dt)
 			{
 				UE_LOG(LogTemp, Display, TEXT("[trace] f%d ss%d 예측 후  %s"), Frame, s, *DescribeParticle(DebugTraceIndex));
 			}
-			for (int32 it = 0; it < Params.Iterations; ++it)
+			if (Params.bGpuSolve)
+			{
+				SolveIterationsGpu(SubDt);
+			}
+			else for (int32 it = 0; it < Params.Iterations; ++it)
 			{
 				SolveContactsSP(SubDt, it, Params.Iterations);
 				SolveBondsSP(SubDt);

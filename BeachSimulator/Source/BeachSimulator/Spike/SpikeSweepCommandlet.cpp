@@ -8,6 +8,19 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogSpikeSweep, Log, All);
 
+// -gpu 면 스윕을 게임 스레드에서 직렬로 돈다 — GPU 경로는 렌더 명령을 플러시해야 해서 워커 스레드에서 못 부른다
+static bool GSpikeSerial = false;
+template <typename BodyType>
+static void SpikeParallelFor(int32 Num, BodyType&& Body)
+{
+	if (GSpikeSerial)
+	{
+		for (int32 i = 0; i < Num; ++i) { Body(i); }
+		return;
+	}
+	ParallelFor(Num, Body);
+}
+
 namespace
 {
 	// 앵커 셀 — 실시간 뷰에서 26.5° 가 나온 설정. 배치가 이걸 재현해야 나머지를 믿는다
@@ -184,7 +197,7 @@ namespace
 		TArray<FTiltRunResult> Results;
 		Results.SetNum(Configs.Num());
 		const double T0 = FPlatformTime::Seconds();
-		ParallelFor(Configs.Num(), [&](int32 i)
+		SpikeParallelFor(Configs.Num(), [&](int32 i)
 		{
 			Results[i] = SpikeBatch::RunTiltStatic(Configs[i], Setup, MaxDeg, HoldFrames);
 		});
@@ -247,6 +260,8 @@ namespace
 		float Mb = 0.6f; FParse::Value(*Params, TEXT("mb="), Mb);
 		const bool bGather = FParse::Param(*Params, TEXT("gather"));                       // m0b-spike §3-1 ①
 		const bool bMassSplit = FParse::Param(*Params, TEXT("masssplit"));                 // A′ 질량 분할 (Tonge 2012)
+		const bool bGpu = FParse::Param(*Params, TEXT("gpu"));                             // 3-1 ② 반복 루프를 GPU 로
+		float PourBlock = 0.f; FParse::Value(*Params, TEXT("block="), PourBlock);          // ①-b 블록 (cm)
 
 		TArray<FSandParams> Cfgs;
 		TArray<FPourSetup>  Setups;
@@ -279,6 +294,9 @@ namespace
 			P.MomentumB  = Mb;
 			P.bGatherApply = bGather;
 			P.bMassSplit   = bMassSplit;
+			P.bGpuSolve    = bGpu;
+			P.BlockSize    = PourBlock;
+			P.bBlockShift  = FParse::Param(*Params, TEXT("blockshift"));
 			Cfgs.Add(P);
 
 			FPourSetup S;
@@ -298,7 +316,7 @@ namespace
 		TArray<FPourResult> Results;
 		Results.SetNum(Cfgs.Num());
 		const double T0 = FPlatformTime::Seconds();
-		ParallelFor(Cfgs.Num(), [&](int32 i)
+		SpikeParallelFor(Cfgs.Num(), [&](int32 i)
 		{
 			Results[i] = SpikeBatch::RunPour(Cfgs[i], Setups[i], SettleCap);
 		});
@@ -405,7 +423,7 @@ namespace
 		TArray<FConeLiftResult> Results;
 		Results.SetNum(Configs.Num());
 		const double T0 = FPlatformTime::Seconds();
-		ParallelFor(Configs.Num(), [&](int32 i)
+		SpikeParallelFor(Configs.Num(), [&](int32 i)
 		{
 			Results[i] = SpikeBatch::RunConeLift(Configs[i], C, Steps[i], MaxFrames);
 		});
@@ -661,6 +679,8 @@ namespace
 		P.bMassSplitBonds = FParse::Param(*Params, TEXT("splitbonds"));
 		P.bGatherContacts = !FParse::Param(*Params, TEXT("seqcontacts"));  // 거울 진단
 		FParse::Value(*Params, TEXT("block="), P.BlockSize);   // ①-b 블록 GS 모사 (cm)
+		P.bGpuSolve = FParse::Param(*Params, TEXT("gpu"));       // 3-1 ② 반복 루프를 GPU 로
+		P.bBlockShift = FParse::Param(*Params, TEXT("blockshift"));
 		FParse::Value(*Params, TEXT("sor="), P.SorOmega);
 		FParse::Value(*Params, TEXT("ma="),  P.MomentumA);
 		FParse::Value(*Params, TEXT("mb="),  P.MomentumB);
@@ -686,7 +706,7 @@ namespace
 		}
 		TArray<FTunnelResult> Results;
 		Results.SetNum(Setups.Num());
-		ParallelFor(Setups.Num(), [&](int32 i) { Results[i] = SpikeBatch::RunTunnel(P, Setups[i]); });
+		SpikeParallelFor(Setups.Num(), [&](int32 i) { Results[i] = SpikeBatch::RunTunnel(P, Setups[i]); });
 
 		UE_LOG(LogSpikeSweep, Display, TEXT("터널 — 블록 %.0f×%.0f×%.0f  W %.2f  BondStrength %.1f  Form %.2f  μ %.2f  반복 %d  (판정: 천장 이동비 < 5%% · 관통 반경 안 0개)"),
 			2.f * BoxX, 2.f * BoxY, Height, W, Strength, Form, Mu, Iterations);
@@ -759,6 +779,8 @@ namespace
 		P.bMassSplitBonds = FParse::Param(*Params, TEXT("splitbonds"));
 		P.bGatherContacts = !FParse::Param(*Params, TEXT("seqcontacts"));  // 거울 진단
 		FParse::Value(*Params, TEXT("block="), P.BlockSize);   // ①-b 블록 GS 모사 (cm)
+		P.bGpuSolve = FParse::Param(*Params, TEXT("gpu"));       // 3-1 ② 반복 루프를 GPU 로
+		P.bBlockShift = FParse::Param(*Params, TEXT("blockshift"));
 		FParse::Value(*Params, TEXT("sor="), P.SorOmega);
 		FParse::Value(*Params, TEXT("ma="),  P.MomentumA);
 		FParse::Value(*Params, TEXT("mb="),  P.MomentumB);
@@ -777,12 +799,12 @@ namespace
 			TArray<int32> Counts;
 			for (float H : HeightList) { Counts.Add(FMath::RoundToInt(Area * H * 0.59f / Vp)); }
 			Results.SetNum(Counts.Num());
-			ParallelFor(Counts.Num(), [&](int32 i) { Results[i] = SpikeBatch::RunCutFacePour(P, Counts[i], BoxHalf, SettleCap, Hold, bOpen, CutBaseJitter); Results[i].Layers = FMath::RoundToInt(HeightList[i]); });
+			SpikeParallelFor(Counts.Num(), [&](int32 i) { Results[i] = SpikeBatch::RunCutFacePour(P, Counts[i], BoxHalf, SettleCap, Hold, bOpen, CutBaseJitter); Results[i].Layers = FMath::RoundToInt(HeightList[i]); });
 		}
 		else
 		{
 			Results.SetNum(LayerList.Num());
-			ParallelFor(LayerList.Num(), [&](int32 i) { Results[i] = SpikeBatch::RunCutFace(P, LayerList[i], Side, SettleCap, Hold, bOpen); });
+			SpikeParallelFor(LayerList.Num(), [&](int32 i) { Results[i] = SpikeBatch::RunCutFace(P, LayerList[i], Side, SettleCap, Hold, bOpen); });
 		}
 
 		// 시각 프리뷰 덤프 — 오프라인 메시화로 "5cm 입자가 모래로 보이는가" 를 보기 위한 것. 판정과 무관하다
@@ -906,6 +928,7 @@ USpikeSweepCommandlet::USpikeSweepCommandlet()
 
 int32 USpikeSweepCommandlet::Main(const FString& Params)
 {
+	GSpikeSerial = FParse::Param(*Params, TEXT("gpu"));
 	if (FParse::Param(*Params, TEXT("creeptest")))
 	{
 		return RunCreepTest(Params);
@@ -990,7 +1013,7 @@ int32 USpikeSweepCommandlet::Main(const FString& Params)
 	const double T0 = FPlatformTime::Seconds();
 	TArray<FSpikeRunResult> Results;
 	Results.SetNum(Configs.Num());
-	ParallelFor(Configs.Num(), [&](int32 i)
+	SpikeParallelFor(Configs.Num(), [&](int32 i)
 	{
 		Results[i] = SpikeBatch::RunOne(Configs[i], Column, MaxFrames, bWriteCsv);
 	});

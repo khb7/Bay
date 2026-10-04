@@ -11,5 +11,6 @@ public class BeachSimulatorTarget : TargetRules
 		DefaultBuildSettings = BuildSettingsVersion.V7;
 		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_8;
 		ExtraModuleNames.Add("BeachSimulator");
+		ExtraModuleNames.Add("SandGpu");
 	}
 }

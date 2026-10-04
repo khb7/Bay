@@ -1,0 +1,393 @@
+// M0-b 3-1 ② — 솔버 반복 루프의 GPU 판. 수식은 FSandSpike::SolveContactsSP / SolveBondsSP / SolveGroundSP / SolveWallsSP 와 줄 단위로 같다.
+// 상세는 Docs/design/m0b-spike.md §2-2-a ⑦⑧⑨.
+//
+// 반복당 패스 여섯:
+//   SolveBlocksCS      블록 안 접촉 — 스레드 하나가 블록 하나를 순차(GS)로. 제 블록 입자만 쓰므로 블록끼리 경합이 없다
+//   CountBoundaryCS    입자별 활성 경계 접촉 수 (질량 분할의 n_i)
+//   SolveBoundaryCS    경계 접촉 — 스냅샷을 읽고 Δλ 만 낸다 (Jacobi)
+//   ApplyBoundaryCS    입자별 gather
+//   SolveBondsCS       결합 — Δλ 만 낸다
+//   ApplyBondsCS       입자별 gather + 지면 + 벽 (지면·벽은 입자 하나짜리라 같은 스레드에서 순차로 이어 풀어도 CPU 와 같다)
+
+#include "/Engine/Public/Platform.ush"
+
+#define SMALL 1.e-4f   // UE_KINDA_SMALL_NUMBER
+
+uint  NumParticles;
+uint  NumInternal;      // 접촉 버퍼 앞쪽 = 블록 안 접촉 (블록 순으로 정렬), 뒤쪽 = 경계 접촉
+uint  NumBoundary;
+uint  NumBlocks;
+uint  NumBonds;
+
+float Radius;
+float StepDt;
+float Kv;
+float Kc;
+float SorOmega;
+float Friction;
+uint  bMassSplit;
+
+float BondAlphaTilde;
+float BondLambdaMax;
+float BondOmega;
+
+uint  WallMode;         // 0 없음 · 1 상자 · 2 원통
+uint  WallActiveMask;   // 상자: 비트 K = 벽 K 활성
+float WallLX;
+float WallLY;
+float WallLimit;        // 원통: WallRadius − Radius
+float WallLiftZ;
+float WallFriction;
+
+StructuredBuffer<float4>   PosRO;            // xyz 위치 · w 역질량
+RWStructuredBuffer<float4> PosRW;
+StructuredBuffer<float4>   VelRO;
+RWStructuredBuffer<float4> VelRW;
+StructuredBuffer<float4>   PrevPos;
+
+StructuredBuffer<uint>     ContactIJ;        // 2k = i, 2k+1 = j
+StructuredBuffer<float4>   ContactLambdaRO;  // xyz λtan(월드) · w λn
+RWStructuredBuffer<float4> ContactLambdaRW;
+StructuredBuffer<uint>     BlockRange;       // 2b = 시작, 2b+1 = 개수
+RWStructuredBuffer<float4> BoundaryImpulseRW;
+StructuredBuffer<float4>   BoundaryImpulseRO;
+StructuredBuffer<uint>     BoundaryAdjOffset; // 입자 → BoundaryAdj 구간 (N+1)
+StructuredBuffer<uint>     BoundaryAdj;       // (경계 접촉 순번 << 1) | (이 입자가 j 면 1)
+RWStructuredBuffer<uint>   CountRW;
+StructuredBuffer<uint>     CountRO;
+
+StructuredBuffer<uint>     BondIJ;
+RWStructuredBuffer<float4> BondDataRW;       // x 휴지 길이 · y λ
+RWStructuredBuffer<float4> BondImpulseRW;
+StructuredBuffer<float4>   BondImpulseRO;
+StructuredBuffer<uint>     BondAdjOffset;
+StructuredBuffer<uint>     BondAdj;
+
+RWStructuredBuffer<float>  GroundLambdaRW;
+RWStructuredBuffer<float4> WallLambdaRW;
+
+// 접촉 하나의 임펄스. λ 는 InOutL 에서 갱신한다. 놓아준 접촉이면 0 을 돌려준다
+float3 ContactImpulse(inout float4 InOutL, float WSum, float3 Pi, float3 Pj, float3 Vi, float3 Vj, float3 PPi, float3 PPj)
+{
+	const float D    = 2.f * Radius;
+	const float InvH = 1.f / StepDt;
+
+	const float3 Diff = Pi - Pj;
+	const float  Dist = length(Diff);
+	if (Dist < SMALL)
+	{
+		return 0;
+	}
+	const float3 N   = Diff / Dist;
+	const float  Gap = Dist - D;
+
+	// 단방향 제약 — 떨어져 있고 임펄스도 없으면 놓아준다
+	if (Gap > 0.f && InOutL.w <= 0.f)
+	{
+		InOutL = 0;
+		return 0;
+	}
+
+	const float3 RelV = Vi - Vj;
+
+	// 법선
+	const float NuN  = dot(RelV, N);
+	const float ResN = Kv * NuN + (Kc * InvH) * Gap;
+	float DLambdaN   = -(SorOmega / WSum) * ResN;
+	const float OldN = InOutL.w;
+	const float NewN = max(0.f, OldN + DLambdaN);
+	DLambdaN = NewN - OldN;
+
+	// 접선 — 스텝 시작 이후의 접선 상대변위
+	const float3 Drift  = (Pi - PPi) - (Pj - PPj);
+	const float3 DriftT = Drift - N * dot(Drift, N);
+	const float3 NuT    = RelV - N * dot(RelV, N);
+	const float3 ResT   = NuT * Kv + DriftT * (Kc * InvH);
+	const float3 OldTan = InOutL.xyz;
+	float3 NewTan = OldTan + ResT * (-(SorOmega / WSum));
+
+	// 원뿔 투영
+	const float MaxTan = Friction * NewN;
+	const float TanLen = length(NewTan);
+	if (TanLen > MaxTan)
+	{
+		NewTan = (TanLen > SMALL) ? NewTan * (MaxTan / TanLen) : float3(0, 0, 0);
+	}
+
+	InOutL = float4(NewTan, NewN);
+	return N * DLambdaN + (NewTan - OldTan);
+}
+
+[numthreads(32, 1, 1)]
+void SolveBlocksCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint b = Tid.x;
+	if (b >= NumBlocks)
+	{
+		return;
+	}
+	const uint Start = BlockRange[2 * b];
+	const uint End   = Start + BlockRange[2 * b + 1];
+	for (uint k = Start; k < End; ++k)
+	{
+		const uint i = ContactIJ[2 * k];
+		const uint j = ContactIJ[2 * k + 1];
+		float4 Pi = PosRW[i];
+		float4 Pj = PosRW[j];
+		const float WSum = Pi.w + Pj.w;
+		if (WSum <= 0.f)
+		{
+			continue;
+		}
+		float4 Vi = VelRW[i];
+		float4 Vj = VelRW[j];
+		float4 L  = ContactLambdaRW[k];
+		const float3 Impulse = ContactImpulse(L, WSum, Pi.xyz, Pj.xyz, Vi.xyz, Vj.xyz, PrevPos[i].xyz, PrevPos[j].xyz);
+		ContactLambdaRW[k] = L;
+
+		Vi.xyz += Impulse * Pi.w;
+		Vj.xyz -= Impulse * Pj.w;
+		Pi.xyz += Impulse * (Pi.w * StepDt);
+		Pj.xyz -= Impulse * (Pj.w * StepDt);
+		VelRW[i] = Vi;
+		VelRW[j] = Vj;
+		PosRW[i] = Pi;
+		PosRW[j] = Pj;
+	}
+}
+
+[numthreads(64, 1, 1)]
+void CountBoundaryCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint p = Tid.x;
+	if (p >= NumParticles)
+	{
+		return;
+	}
+	const float D = 2.f * Radius;
+	uint n = 0;
+	for (uint e = BoundaryAdjOffset[p]; e < BoundaryAdjOffset[p + 1]; ++e)
+	{
+		const uint k = NumInternal + (BoundaryAdj[e] >> 1);
+		const float Gap = distance(PosRO[ContactIJ[2 * k]].xyz, PosRO[ContactIJ[2 * k + 1]].xyz) - D;
+		if (Gap > 0.f && ContactLambdaRO[k].w <= 0.f)
+		{
+			continue;
+		}
+		++n;
+	}
+	CountRW[p] = n;
+}
+
+[numthreads(64, 1, 1)]
+void SolveBoundaryCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint c = Tid.x;
+	if (c >= NumBoundary)
+	{
+		return;
+	}
+	const uint k = NumInternal + c;
+	const uint i = ContactIJ[2 * k];
+	const uint j = ContactIJ[2 * k + 1];
+	const float4 Pi = PosRO[i];
+	const float4 Pj = PosRO[j];
+	// 질량 분할 (Tonge 2012) — 유효 질량은 n 배 가벼운 부분체로, 적용은 전체 w 로
+	const float WSum = bMassSplit
+		? Pi.w * max(1u, CountRO[i]) + Pj.w * max(1u, CountRO[j])
+		: Pi.w + Pj.w;
+	float3 Impulse = 0;
+	if (WSum > 0.f)
+	{
+		float4 L = ContactLambdaRW[k];
+		Impulse = ContactImpulse(L, WSum, Pi.xyz, Pj.xyz, VelRO[i].xyz, VelRO[j].xyz, PrevPos[i].xyz, PrevPos[j].xyz);
+		ContactLambdaRW[k] = L;
+	}
+	BoundaryImpulseRW[c] = float4(Impulse, 0);
+}
+
+[numthreads(64, 1, 1)]
+void ApplyBoundaryCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint p = Tid.x;
+	if (p >= NumParticles)
+	{
+		return;
+	}
+	float4 P = PosRW[p];
+	if (P.w <= 0.f)
+	{
+		return;
+	}
+	float3 Delta = 0;
+	for (uint e = BoundaryAdjOffset[p]; e < BoundaryAdjOffset[p + 1]; ++e)
+	{
+		const uint A = BoundaryAdj[e];
+		const float3 Imp = BoundaryImpulseRO[A >> 1].xyz;
+		Delta += (A & 1u) ? -Imp : Imp;
+	}
+	Delta *= P.w;
+	float4 V = VelRW[p];
+	V.xyz += Delta;
+	P.xyz += Delta * StepDt;
+	VelRW[p] = V;
+	PosRW[p] = P;
+}
+
+[numthreads(64, 1, 1)]
+void SolveBondsCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint b = Tid.x;
+	if (b >= NumBonds)
+	{
+		return;
+	}
+	const uint i = BondIJ[2 * b];
+	const uint j = BondIJ[2 * b + 1];
+	const float4 Pi = PosRO[i];
+	const float4 Pj = PosRO[j];
+	const float WSum = Pi.w + Pj.w;
+	float3 Corr = 0;
+	const float3 Diff = Pi.xyz - Pj.xyz;
+	const float  Dist = length(Diff);
+	if (WSum > 0.f && Dist >= SMALL)
+	{
+		float4 B = BondDataRW[b];
+		const float C = Dist - B.x;
+		// XPBD 컴플라이언스, 인장만(λ ≤ 0) · 고원(−λmax)
+		const float DLambda   = -BondOmega * (C + BondAlphaTilde * B.y) / (WSum + BondAlphaTilde);
+		const float NewLambda = clamp(B.y + DLambda, -BondLambdaMax, 0.f);
+		Corr = (Diff / Dist) * (NewLambda - B.y);
+		B.y = NewLambda;
+		BondDataRW[b] = B;
+	}
+	BondImpulseRW[b] = float4(Corr, 0);
+}
+
+// 마찰 없는(또는 WallFriction) 단방향 벽 하나. SolveWallsSP 의 Push
+void PushWall(inout float3 P, inout float3 V, inout float LambdaN, float Wi, float3 PP, float3 N, float Gap)
+{
+	if (Gap > 0.f && LambdaN <= 0.f)
+	{
+		LambdaN = 0.f;
+		return;
+	}
+	const float InvH = 1.f / StepDt;
+	const float ResN = Kv * dot(V, N) + (Kc * InvH) * Gap;
+	float DLambdaN   = -(SorOmega / Wi) * ResN;
+	const float OldN = LambdaN;
+	LambdaN  = max(0.f, LambdaN + DLambdaN);
+	DLambdaN = LambdaN - OldN;
+
+	V += N * (DLambdaN * Wi);
+	P += N * (DLambdaN * Wi * StepDt);
+
+	if (WallFriction > 0.f && LambdaN > 0.f)
+	{
+		float3 DriftT = P - PP;
+		DriftT -= N * dot(DriftT, N);
+		float3 NuT = V;
+		NuT -= N * dot(NuT, N);
+		float3 DLambdaTan = (NuT * Kv + DriftT * (Kc * InvH)) * (-(SorOmega / Wi));
+		const float MaxTan = WallFriction * LambdaN;
+		const float L = length(DLambdaTan);
+		if (L > MaxTan)
+		{
+			DLambdaTan = (L > SMALL) ? DLambdaTan * (MaxTan / L) : float3(0, 0, 0);
+		}
+		V += DLambdaTan * Wi;
+		P += DLambdaTan * (Wi * StepDt);
+	}
+}
+
+[numthreads(64, 1, 1)]
+void ApplyBondsCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint p = Tid.x;
+	if (p >= NumParticles)
+	{
+		return;
+	}
+	float4 P4 = PosRW[p];
+	const float Wi = P4.w;
+	if (Wi <= 0.f)
+	{
+		return;   // 고정 입자 — 결합·지면·벽 어느 것도 움직이지 않는다
+	}
+	float3 P = P4.xyz;
+	float3 V = VelRW[p].xyz;
+	const float3 PP = PrevPos[p].xyz;
+	const float InvH = 1.f / StepDt;
+
+	// --- 결합 gather ---
+	float3 Corr = 0;
+	for (uint e = BondAdjOffset[p]; e < BondAdjOffset[p + 1]; ++e)
+	{
+		const uint A = BondAdj[e];
+		const float3 C = BondImpulseRO[A >> 1].xyz;
+		Corr += (A & 1u) ? -C : C;
+	}
+	Corr *= Wi;
+	V += Corr * InvH;
+	P += Corr;
+
+	// --- 지면 (무한 질량) ---
+	{
+		float LambdaN = GroundLambdaRW[p];
+		const float Gap = P.z - Radius;
+		if (Gap > 0.f && LambdaN <= 0.f)
+		{
+			LambdaN = 0.f;
+		}
+		else
+		{
+			const float ResN = Kv * V.z + (Kc * InvH) * Gap;
+			float DLambdaN   = -(SorOmega / Wi) * ResN;
+			const float OldN = LambdaN;
+			LambdaN  = max(0.f, LambdaN + DLambdaN);
+			DLambdaN = LambdaN - OldN;
+
+			const float3 DriftT = float3(P.xy - PP.xy, 0.f);
+			const float3 NuT    = float3(V.xy, 0.f);
+			float3 DLambdaTan = (NuT * Kv + DriftT * (Kc * InvH)) * (-(SorOmega / Wi));
+			const float MaxTan = Friction * LambdaN;
+			const float L = length(DLambdaTan);
+			if (L > MaxTan)
+			{
+				DLambdaTan = (L > SMALL) ? DLambdaTan * (MaxTan / L) : float3(0, 0, 0);
+			}
+			const float3 Impulse = float3(0, 0, DLambdaN) + DLambdaTan;
+			V += Impulse * Wi;
+			P += Impulse * (Wi * StepDt);
+		}
+		GroundLambdaRW[p] = LambdaN;
+	}
+
+	// --- 벽 ---
+	if (WallMode == 1)
+	{
+		const float4 WL = WallLambdaRW[p];
+		float L0 = WL.x, L1 = WL.y, L2 = WL.z, L3 = WL.w;
+		if (WallActiveMask & 1u) { PushWall(P, V, L0, Wi, PP, float3( 1, 0, 0), P.x + WallLX); }
+		if (WallActiveMask & 2u) { PushWall(P, V, L1, Wi, PP, float3(-1, 0, 0), WallLX - P.x); }
+		if (WallActiveMask & 4u) { PushWall(P, V, L2, Wi, PP, float3(0,  1, 0), P.y + WallLY); }
+		if (WallActiveMask & 8u) { PushWall(P, V, L3, Wi, PP, float3(0, -1, 0), WallLY - P.y); }
+		WallLambdaRW[p] = float4(L0, L1, L2, L3);
+	}
+	else if (WallMode == 2)
+	{
+		// 원통 — 들어올린 높이 아래는 벽이 없다
+		const float Rad2 = dot(P.xy, P.xy);
+		if (P.z >= WallLiftZ && Rad2 >= SMALL)
+		{
+			const float Rad = sqrt(Rad2);
+			const float4 WL = WallLambdaRW[p];
+			float L0 = WL.x;
+			PushWall(P, V, L0, Wi, PP, float3(-P.x / Rad, -P.y / Rad, 0.f), WallLimit - Rad);
+			WallLambdaRW[p] = float4(L0, WL.yzw);
+		}
+	}
+
+	PosRW[p] = float4(P, Wi);
+	VelRW[p] = float4(V, 0);
+}
