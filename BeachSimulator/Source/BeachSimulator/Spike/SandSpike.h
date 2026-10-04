@@ -55,6 +55,12 @@ struct FSandParams
 	bool   bGatherBonds = true;
 	/** 거울 진단: 접촉은 순차(즉시 적용), 결합만 gather. 3단계·큐3 이 결합 순차로도 무너져 접촉 gather 가 범인인지 가른다 */
 	bool   bGatherContacts = true;
+	/**
+	 * ①-b 블록 GS 모사 (m0b-spike §3-1). 0 = 끔. > 0 이면 접촉을 공간 블록(한 변 cm)으로 나눠
+	 * **블록 안 접촉은 순차(즉시 적용)**, **블록 경계를 넘는 접촉은 gather**. GPU 워크그룹 = 블록의 CPU 판.
+	 * 블록끼리는 서로의 갱신을 못 보므로 단일 스레드 순차 처리가 병렬 블록 처리와 같은 답을 낸다.
+	 */
+	float  BlockSize = 0.f;
 	/** gather 결합의 완화 계수. XPBD Δλ 에 곱한다 (1 = 완화 없음). 접촉의 SorOmega 와 같은 자리 — 결합 9개가 한 입자를 동시에 밀 때의 과보정 억제 */
 	float  BondOmega = 1.f;
 	/** 질량 분할을 결합에도 거는가. 컴플라이언스 제약은 WSum 을 키우면 α̃ 대비 물러지므로(#36 가설) 기본 false 로 두고 시험한다 */
@@ -383,7 +389,12 @@ private:
 	void SolveWallsSP(float StepDt);
 	void ApplyDeltas();
 	void ApplyGatheredVelocityDeltas(float StepDt);   // gather 패스 2 (SP 경로)
-	void CountConstraintsPerParticle();               // 질량 분할용 n_i (DeltaCount 재사용)
+	void CountConstraintsPerParticle(bool bBoundaryOnly = false);   // 질량 분할용 n_i (DeltaCount 재사용). 블록 모드면 경계 접촉만
+	void AssignBlocks();                                             // BlockSize 격자로 BlockId 부여
+public:
+	/** 마지막 접촉 패스에서 블록 경계를 넘은 활성 접촉 비율 (블록 모드 계측) */
+	float BoundaryContactFrac() const { return LastBoundaryFrac; }
+private:
 	void CommitLambdas();       // 실제 적용 비율로 λ 를 갱신
 	void SolveWalls();          // 형틀(원통) 또는 상자. 마찰 없는 단순 투영
 	void SolveGround();
@@ -403,6 +414,8 @@ private:
 
 	// Jacobi 누적 버퍼. 훑는 동안 Pos 는 읽기 전용이라 모든 접촉이 같은 스냅샷을 본다
 	TArray<FVector3f> Delta;
+	TArray<int64>     BlockId;          // ①-b 블록 모사용. 셀 좌표를 21비트씩 묶은 정확한 키
+	float LastBoundaryFrac = 0.f;
 	TArray<int32>     DeltaCount;
 	TArray<float>     DeltaScale;   // 입자별 ω/접촉수. 장부를 맞추는 데 쓴다
 

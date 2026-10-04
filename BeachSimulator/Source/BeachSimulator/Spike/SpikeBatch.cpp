@@ -1024,6 +1024,7 @@ FTunnelResult SpikeBatch::RunTunnel(const FSandParams& Params, const FTunnelSetu
 		}
 	}
 
+	R.BoundaryContactFrac = Sim.BoundaryContactFrac();
 	R.WallSeconds = FPlatformTime::Seconds() - T0;
 	return R;
 }

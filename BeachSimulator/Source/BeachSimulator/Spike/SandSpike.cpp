@@ -722,13 +722,18 @@ void FSandSpike::SolveContactsSP(float StepDt, int32 Iter, int32 MaxIter)
 		: 0.f;
 
 	// gather: 이 패스 동안 v·x 를 건드리지 않고 Δv 를 모았다가 끝에 한 번 적용한다 (m0b-spike §3-1 갈래 A)
-	const bool bGatherC = Params.bGatherApply && Params.bGatherContacts;   // 거울 진단: bGatherContacts=false 면 접촉은 순차
-	if (bGatherC)
+	// 블록 모드(①-b): 블록 안 접촉은 즉시(순차), 경계 접촉만 gather
+	const bool bBlock     = Params.bGatherApply && Params.bGatherContacts && Params.BlockSize > 0.f;
+	const bool bGatherAll = Params.bGatherApply && Params.bGatherContacts && !bBlock;   // 거울 진단: bGatherContacts=false 면 접촉은 순차
+	const bool bAnyGather = bGatherAll || bBlock;
+	if (bAnyGather)
 	{
 		FMemory::Memzero(Delta.GetData(), Delta.Num() * sizeof(FVector3f));
-		if (Params.bMassSplit) { CountConstraintsPerParticle(); }
+		if (bBlock) { AssignBlocks(); }
+		if (Params.bMassSplit) { CountConstraintsPerParticle(bBlock); }
 	}
-	const bool bSplit = bGatherC && Params.bMassSplit;
+	const bool bSplit = bAnyGather && Params.bMassSplit;
+	int32 BoundaryN = 0, ActiveN = 0;
 
 	for (FSandContact& C : Contacts)
 	{
@@ -736,8 +741,10 @@ void FSandSpike::SolveContactsSP(float StepDt, int32 Iter, int32 MaxIter)
 		const int32 j = C.J;
 		const float Wi = InvMass[i];
 		const float Wj = InvMass[j];
-		// 질량 분할: 유효 질량은 n 배 가벼운 부분체로(역질량 n·w), 적용은 전체 w 로 (Tonge 2012)
-		const float WSum = bSplit
+		// 이 접촉을 모아서 적용하나(gather) — 전부 gather 이거나, 블록 모드에서 경계를 넘는 쌍
+		const bool bGatherThis = bGatherAll || (bBlock && BlockId[i] != BlockId[j]);
+		// 질량 분할: 유효 질량은 n 배 가벼운 부분체로(역질량 n·w), 적용은 전체 w 로 (Tonge 2012). gather 되는 쌍에만
+		const float WSum = (bSplit && bGatherThis)
 			? Wi * FMath::Max(1, DeltaCount[i]) + Wj * FMath::Max(1, DeltaCount[j])
 			: Wi + Wj;
 		if (WSum <= 0.f)
@@ -761,6 +768,7 @@ void FSandSpike::SolveContactsSP(float StepDt, int32 Iter, int32 MaxIter)
 			C.LambdaTan = FVector3f::ZeroVector;
 			continue;
 		}
+		++ActiveN; if (bBlock && BlockId[i] != BlockId[j]) { ++BoundaryN; }
 
 		const FVector3f RelV = Vel[i] - Vel[j];
 
@@ -802,7 +810,7 @@ void FSandSpike::SolveContactsSP(float StepDt, int32 Iter, int32 MaxIter)
 
 		// --- 적용: v 와 x 를 같은 임펄스로 ---
 		const FVector3f Impulse = N * DLambdaN + DLambdaTan;
-		if (bGatherC)
+		if (bGatherThis)
 		{
 			Delta[i] += Impulse * Wi;      // Δv 단위. x 는 h 배 — 패스 2 에서
 			Delta[j] -= Impulse * Wj;
@@ -814,24 +822,42 @@ void FSandSpike::SolveContactsSP(float StepDt, int32 Iter, int32 MaxIter)
 		Pos[j] -= Impulse * (Wj * StepDt);
 	}
 
-	if (bGatherC)
+	if (bAnyGather)
 	{
 		ApplyGatheredVelocityDeltas(StepDt);
 	}
+	if (bBlock && Iter == 0) { LastBoundaryFrac = ActiveN > 0 ? (float)BoundaryN / ActiveN : 0.f; }
 }
 
-void FSandSpike::CountConstraintsPerParticle()
+void FSandSpike::CountConstraintsPerParticle(bool bBoundaryOnly)
 {
-	// 활성 접촉(닿았거나 λ 를 들고 있는 쌍) + 결합. 지면·벽은 입자 하나짜리라 과보정이 없어 세지 않는다
+	// 활성 접촉(닿았거나 λ 를 들고 있는 쌍) + 결합. 지면·벽은 입자 하나짜리라 과보정이 없어 세지 않는다.
+	// 블록 모드(bBoundaryOnly)면 gather 되는 것은 경계 접촉뿐이므로 그것만 센다 — 안 그러면 경계 접촉이 과소완화된다
 	FMemory::Memzero(DeltaCount.GetData(), DeltaCount.Num() * sizeof(int32));
 	const float D = 2.f * Params.Radius;
 	for (const FSandContact& C : Contacts)
 	{
 		const float Gap = FVector3f::Dist(Pos[C.I], Pos[C.J]) - D;
 		if (Gap > 0.f && C.LambdaN <= 0.f) { continue; }
+		if (bBoundaryOnly && BlockId[C.I] == BlockId[C.J]) { continue; }
 		++DeltaCount[C.I]; ++DeltaCount[C.J];
 	}
-	for (const FSandBond& B : Bonds) { ++DeltaCount[B.I]; ++DeltaCount[B.J]; }
+	if (!bBoundaryOnly) { for (const FSandBond& B : Bonds) { ++DeltaCount[B.I]; ++DeltaCount[B.J]; } }
+}
+
+void FSandSpike::AssignBlocks()
+{
+	// 위치를 BlockSize 격자로 양자화한 정확한 키. 이웃 셀끼리만 비교하므로 21비트 좌표면 충분하다
+	BlockId.SetNum(Pos.Num(), EAllowShrinking::No);
+	const float InvB = 1.f / Params.BlockSize;
+	const int64 Bias = 1048576;   // 2^20
+	for (int32 i = 0; i < Pos.Num(); ++i)
+	{
+		const int64 bx = (int64)FMath::FloorToInt(Pos[i].X * InvB) + Bias;
+		const int64 by = (int64)FMath::FloorToInt(Pos[i].Y * InvB) + Bias;
+		const int64 bz = (int64)FMath::FloorToInt(Pos[i].Z * InvB) + Bias;
+		BlockId[i] = (bx * 4398046511104LL) + (by * 2097152LL) + bz;   // bx<<42 | by<<21 | bz
+	}
 }
 
 void FSandSpike::ApplyGatheredVelocityDeltas(float StepDt)

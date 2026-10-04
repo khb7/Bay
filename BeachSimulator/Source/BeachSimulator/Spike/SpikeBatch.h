@@ -194,6 +194,7 @@ struct FTunnelResult
 	TArray<int32> InTunnelSeries;
 	bool  bSettledAfter = false;
 	double WallSeconds = 0.0;
+	float BoundaryContactFrac = 0.f;   // ①-b 블록 모드: 경계를 넘는 활성 접촉 비율
 
 	// --- 3-2 덩어리 붕괴 (CollapseRampFrames > 0) ---
 	TArray<float> CW;          // 창(300프레임)별 W

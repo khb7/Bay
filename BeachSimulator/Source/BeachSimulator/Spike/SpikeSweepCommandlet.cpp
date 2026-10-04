@@ -660,6 +660,7 @@ namespace
 		FParse::Value(*Params, TEXT("bondomega="), P.BondOmega);
 		P.bMassSplitBonds = FParse::Param(*Params, TEXT("splitbonds"));
 		P.bGatherContacts = !FParse::Param(*Params, TEXT("seqcontacts"));  // 거울 진단
+		FParse::Value(*Params, TEXT("block="), P.BlockSize);   // ①-b 블록 GS 모사 (cm)
 		FParse::Value(*Params, TEXT("sor="), P.SorOmega);
 		FParse::Value(*Params, TEXT("ma="),  P.MomentumA);
 		FParse::Value(*Params, TEXT("mb="),  P.MomentumB);
@@ -695,10 +696,10 @@ namespace
 			const bool bCeil = R.CeilingMovedFrac < 0.05f;
 			// 관통: 문서는 "0개"지만 한 알이 통로를 막지는 않는다 — 제거 수의 1% 까지 허용, 개수는 그대로 적는다
 			const bool bOpen = R.InTunnel <= FMath::Max(2, R.Removed / 100);
-			UE_LOG(LogSpikeSweep, Display, TEXT("   %-6s %4.0fcm | %4d %5d | %5d / %5d | %s | %5.1f→%5.1f | %3d개: %5.1f%%  %5.1fcm | %5d | %s | %5.0f | %s"),
+			UE_LOG(LogSpikeSweep, Display, TEXT("   %-6s %4.0fcm | %4d %5d | %5d / %5d | %s | %5.1f→%5.1f | %3d개: %5.1f%%  %5.1fcm | %5d | %s | %5.0f | 경계 %3.0f%% | %s"),
 				R.bRound ? TEXT("원형") : TEXT("사각"), R.Diameter, R.FreeCount, R.Removed, R.BondsMade, R.BondsBroken,
 				R.bReady ? TEXT("○") : TEXT("✗"), R.HeightBefore, R.HeightAfter, R.CeilingCount, R.CeilingMovedFrac * 100.f, R.CeilingSag, R.InTunnel,
-				R.bSettledAfter ? TEXT("○") : TEXT("✗"), R.WallSeconds,
+				R.bSettledAfter ? TEXT("○") : TEXT("✗"), R.WallSeconds, R.BoundaryContactFrac * 100.f,
 				(bCeil && bOpen) ? TEXT("★선다") : (bCeil ? TEXT("천장은 서나 막힘") : TEXT("붕괴")));
 			FString Ser;
 			for (int32 k = 0; k < R.CeilingSeries.Num(); ++k) { Ser += FString::Printf(TEXT(" %4.1f%%/%d"), R.CeilingSeries[k] * 100.f, R.InTunnelSeries[k]); }
@@ -757,6 +758,7 @@ namespace
 		FParse::Value(*Params, TEXT("bondomega="), P.BondOmega);
 		P.bMassSplitBonds = FParse::Param(*Params, TEXT("splitbonds"));
 		P.bGatherContacts = !FParse::Param(*Params, TEXT("seqcontacts"));  // 거울 진단
+		FParse::Value(*Params, TEXT("block="), P.BlockSize);   // ①-b 블록 GS 모사 (cm)
 		FParse::Value(*Params, TEXT("sor="), P.SorOmega);
 		FParse::Value(*Params, TEXT("ma="),  P.MomentumA);
 		FParse::Value(*Params, TEXT("mb="),  P.MomentumB);
