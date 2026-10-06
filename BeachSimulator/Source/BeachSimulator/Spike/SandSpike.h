@@ -10,6 +10,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "SandGpuSolver.h"
 
 /**
  * 솔버 상수.
@@ -69,6 +70,12 @@ struct FSandParams
 	 * RHI 가 없으면(커맨드릿에 -AllowCommandletRendering 누락) CPU 로 떨어지지 않고 멈춘다 — 조용히 대조군을 재면 안 된다.
 	 */
 	bool   bGpuSolve = false;
+	/**
+	 * M0-b 3-1 ② 2단계 — 스텝 전체를 GPU 에서 (FSandGpuSim). 상태가 GPU 에 상주하고 CPU 배열은 읽을 때만 내려받는다.
+	 * 이웃 탐색·쌍 생성·워밍·예측·파단·통계가 전부 GPU 패스. 3-4 성능은 이 경로로 잰다. Substeps 1 만 지원.
+	 * 입자 추가/제거·FormBonds·RestoreState 뒤에는 전량 다시 올린다 (접촉 λ 는 버린다 — 한 프레임 차가운 시작).
+	 */
+	bool   bGpuResident = false;
 	/** gather 결합의 완화 계수. XPBD Δλ 에 곱한다 (1 = 완화 없음). 접촉의 SorOmega 와 같은 자리 — 결합 9개가 한 입자를 동시에 밀 때의 과보정 억제 */
 	float  BondOmega = 1.f;
 	/** 질량 분할을 결합에도 거는가. 컴플라이언스 제약은 WSum 을 키우면 α̃ 대비 물러지므로(#36 가설) 기본 false 로 두고 시험한다 */
@@ -332,14 +339,14 @@ public:
 	float GetWallLift() const { return WallLiftZ; }
 
 	// --- 관측 ---
-	const TArray<FVector3f>& GetPositions() const { return Pos; }
+	const TArray<FVector3f>& GetPositions() const { SyncFromGpu(); return Pos; }
 	int32   Num()          const { return Pos.Num(); }
-	const TArray<FVector3f>& GetVelocities() const { return Vel; }
-	const TArray<FSandContact>& GetContacts() const { return Contacts; }
+	const TArray<FVector3f>& GetVelocities() const { SyncFromGpu(); return Vel; }
+	const TArray<FSandContact>& GetContacts() const { SyncFromGpu(); return Contacts; }
 	const TArray<float>&     GetInvMass()    const { return InvMass; }
 	FVector3f GetBoxHalf() const { return BoxHalf; }
 	int32   NumPairs()     const { return Contacts.Num(); }
-	const TArray<FSandBond>& GetBonds() const { return Bonds; }
+	const TArray<FSandBond>& GetBonds() const { SyncFromGpu(); return Bonds; }
 	int32   BondsBroken()  const { return BondsBrokenTotal; }
 	int32   BondOverflow() const { return BondSlotOverflow; }
 	bool    WallsActive()  const { return bWallsActive; }
@@ -399,7 +406,13 @@ private:
 	void ApplyGatheredVelocityDeltas(float StepDt);   // gather 패스 2 (SP 경로)
 	void CountConstraintsPerParticle(bool bBoundaryOnly = false);   // 질량 분할용 n_i (DeltaCount 재사용). 블록 모드면 경계 접촉만
 	void AssignBlocks(float Offset = 0.f);                                          // BlockSize 격자로 BlockId 부여
-	void SolveIterationsGpu(float StepDt);                           // 반복 루프 전체를 GPU 로 (bGpuSolve)
+	void SolveIterationsGpu(float StepDt);                           // 1단계: 반복 루프 전체를 GPU 로 (bGpuSolve)
+	void StepGpuResident(float Dt);                                  // 2단계: 스텝 전체 (bGpuResident)
+	void SyncToGpu();                                                // CPU → GPU 전량 (bGpuDirty 일 때)
+	void SyncFromGpu() const;                                        // GPU → CPU 전량 (bGpuStale 일 때). 읽기 접근자가 부른다
+	void BuildBondUpload(TArray<uint32>& IJ, TArray<FVector4f>& Data, TArray<uint32>& AdjOffset, TArray<uint32>& Adj) const;
+	void BuildWallParams(int32& Mode, uint32& Mask, float& LX, float& LY, float& Limit, float& LiftZ) const;
+	void ApplyFrameStats(double SumSpeed, float MaxSpeed, int32 Free, double SumLambda);
 public:
 	/** GPU 경로의 마지막 프레임 벽시계 (올리기 + 반복 + 내려받기) · CPU 쪽 포장(블록 분류·인접) 시간 */
 	float LastGpuMs() const { return GpuMs; }
@@ -430,6 +443,11 @@ private:
 	float LastBoundaryFrac = 0.f;
 	float GpuMs = 0.f;
 	float GpuPrepMs = 0.f;
+	TUniquePtr<FSandGpuSim> GpuSim;   // 2단계. bGpuResident 일 때만
+	TArray<FSandBond> GpuBondsUploaded;   // GPU 결합 번호 = 이 배열의 순서. 내려받을 때 산 것만 Bonds 로
+	bool bGpuDirty = true;            // CPU 가 상태를 바꿨다 → 다음 Step 전에 올린다
+	mutable bool bGpuStale = false;   // GPU 가 스텝을 돌았다 → CPU 배열이 낡았다
+	bool bGpuPairsValid = false;      // GPU 의 쌍 목록(접촉 λ)이 현재 입자 번호와 맞는다 — 덧붙임·결합 변경은 유지, 제거·초기화·복원은 무효
 	TArray<int32>     DeltaCount;
 	TArray<float>     DeltaScale;   // 입자별 ω/접촉수. 장부를 맞추는 데 쓴다
 

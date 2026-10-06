@@ -1,0 +1,547 @@
+// M0-b 3-1 ② 2단계 — 프레임 앞뒤의 GPU 패스 (m0b-spike.md §2-2-a ①~⑥ · ⑩).
+// 상태(위치·속도·λ·결합)는 GPU 에 상주한다. CPU 는 매개변수만 보내고 통계(평균·최대 속력 · Σλ)만 받는다.
+//
+// 프레임 하나:
+//   ClearCounts(UAV clear)                                  셀 카운트 · 블록 카운트 · 인접 카운트 · 카운터
+//   CellKeyCS         입자 → 셀 키 · 셀 안 순번(atomic) · 블록 키
+//   Scan(CellCount)   → CellStart
+//   ScatterCS         SortedIdx
+//   PairCountCS       입자별 27칸 순회, j > i 쌍 수
+//   Scan(PairCount)   → PairStart
+//   PairFillCS        쌍 (i,j) 생성 · 지난 프레임 λ 조회(워밍) · 블록 분류 카운트 · 인접 카운트
+//   Scan(BlockPairCount) → BlockStart   /   Scan(AdjCount) → AdjStart
+//   BuildArgsCS       간접 디스패치 인자 + 프레임 카운트 (쌍 수 · 블록 안 쌍 수)
+//   PairScatterCS     풀이 순서(블록별 → 경계)로 쌍 재배치 · 워밍 λ 재투영 → 쌍 임펄스 · 인접 채움
+//   BondWarmCS        결합 λ 워밍 임펄스
+//   WarmPredictCS     입자별: 워밍 임펄스 gather(쌍·결합·지면·벽) → 예측 (PrevPos = Pos, v += g h, x += v h)
+//   … 반복 (SandSolver.usf) …
+//   BreakBondsCS      파단 표시 (RestLen < 0) · 끊김 카운트
+//   StatsCS           감쇠 · 그룹별 부분합 (Σ|v| · max|v| · 자유 수 · Σ|λn|)
+
+#include "/Engine/Public/Platform.ush"
+
+#define SMALL 1.e-4f
+#define SCAN_GROUP 1024          // 그룹당 2048 원소
+
+uint  NumParticles;
+uint  TableSize;                 // 셀 해시 표 크기 (2의 거듭제곱)
+uint  BlockTable;                // 블록 해시 표 크기 (2의 거듭제곱)
+uint  MaxPairs;
+uint  NumBonds;
+uint  ScanCount;                 // 스캔 대상 원소 수
+uint  FillFrom;                  // FillTailCS: [FillFrom, FillTo) 에 FillValue
+uint  FillTo;
+uint  FillValue;
+
+float CellSize;                  // = 접촉 탐색 반경 (D + 여유)
+float Radius;
+float StepDt;
+float BlockSize;
+float WarmStart;
+float WarmGapTol;                // 반경 배수
+uint  bWarmTangent;
+float Friction;
+float3 Gravity;                  // 방향 × 크기 × 배율
+float BondStretchBreak;          // RestLen × BreakStretch
+uint  bBondsDry;                 // cohesion(W) = 0 → 전부 끊는다
+float VelocityDamping;
+
+uint  WallMode;
+uint  WallActiveMask;
+float WallLX;
+float WallLY;
+float WallLimit;
+float WallLiftZ;
+
+RWStructuredBuffer<float4> PosRW;
+StructuredBuffer<float4>   PosRO;
+RWStructuredBuffer<float4> VelRW;
+StructuredBuffer<float4>   VelRO;
+RWStructuredBuffer<float4> PrevPosRW;
+
+RWStructuredBuffer<uint>   CellKeyRW;        // 입자별 셀 키
+StructuredBuffer<uint>     CellKeyRO;
+RWStructuredBuffer<uint>   CellSlotRW;       // 셀 안 순번
+StructuredBuffer<uint>     CellSlotRO;
+RWStructuredBuffer<uint>   CellCountRW;
+StructuredBuffer<uint>     CellStart;        // TableSize + 1
+RWStructuredBuffer<uint>   SortedIdxRW;
+StructuredBuffer<uint>     SortedIdxRO;
+RWStructuredBuffer<uint>   BlockKeyRW;
+StructuredBuffer<uint>     BlockKeyRO;
+
+RWStructuredBuffer<uint>   PairCountRW;      // 입자별 (j > i) 쌍 수
+StructuredBuffer<uint>     PairStart;        // N + 1
+RWStructuredBuffer<uint>   PairIJRW;         // 생성 순서. 2k, 2k+1
+StructuredBuffer<uint>     PairIJRO;
+RWStructuredBuffer<float4> PairWarmRW;       // 생성 순서의 워밍 λ (xyz tan · w n). 미스면 0
+StructuredBuffer<float4>   PairWarmRO;
+RWStructuredBuffer<uint>   PairBlockRW;      // 생성 순서: 블록 키(내부) 또는 0xFFFFFFFF(경계)
+StructuredBuffer<uint>     PairBlockRO;
+RWStructuredBuffer<uint>   PairLocalRW;      // 생성 순서: 블록 안 / 경계 안 순번
+StructuredBuffer<uint>     PairLocalRO;
+RWStructuredBuffer<uint>   BlockPairCountRW; // BlockTable
+StructuredBuffer<uint>     BlockStart;       // BlockTable + 1 — [BlockTable] = 블록 안 쌍 총수
+RWStructuredBuffer<uint>   CountersRW;       // [0] 경계 쌍 수 · [1] 끊긴 결합 · [2] 쌍 넘침 · [3] 인접 넘침
+StructuredBuffer<uint>     CountersRO;
+
+StructuredBuffer<uint>     OldPairStart;     // 지난 프레임
+StructuredBuffer<uint>     OldPairIJ;
+StructuredBuffer<uint>     OldPermInv;       // 지난 프레임 생성 순서 → 풀이 자리
+StructuredBuffer<float4>   OldLambda;        // 지난 프레임 풀이 순서의 λ
+
+RWStructuredBuffer<uint>   SortedIJRW;       // 풀이 순서
+RWStructuredBuffer<float4> LambdaRW;         // 풀이 순서
+RWStructuredBuffer<uint>   PermInvRW;
+RWStructuredBuffer<float4> PairImpulseRW;    // 풀이 순서 — 워밍 임펄스
+StructuredBuffer<float4>   PairImpulseRO;
+RWStructuredBuffer<uint>   AdjCountRW;       // 입자별 (모든 쌍)
+StructuredBuffer<uint>     AdjStart;         // N + 1
+RWStructuredBuffer<uint>   AdjRW;            // (풀이 자리 << 1) | j 쪽
+StructuredBuffer<uint>     AdjRO;
+RWStructuredBuffer<uint>   AdjCursorRW;      // 채움 커서 (N)
+
+StructuredBuffer<uint>     BondIJ;
+RWStructuredBuffer<float4> BondDataRW;       // x 휴지 길이(음수 = 죽음) · y λ
+StructuredBuffer<float4>   BondDataRO;
+RWStructuredBuffer<float4> BondImpulseRW;
+StructuredBuffer<float4>   BondImpulseRO;
+StructuredBuffer<uint>     BondAdjOffset;
+StructuredBuffer<uint>     BondAdj;
+
+RWStructuredBuffer<float>  GroundLambdaRW;
+RWStructuredBuffer<float4> WallLambdaRW;
+
+StructuredBuffer<uint>     ScanIn;
+RWStructuredBuffer<uint>   ScanOut;          // ScanCount + 1 (마지막 = 총합)
+RWStructuredBuffer<uint>   ScanSumsRW;       // 그룹 합
+StructuredBuffer<uint>     ScanSumsRO;
+
+RWBuffer<uint>             IndirectArgsRW;   // [0..2] 쌍 전체 · [3..5] 경계 쌍 · [6..8] 결합(고정). 간접 버퍼라 typed
+RWStructuredBuffer<uint>   FrameCountsRW;    // [0] 쌍 수 · [1] 블록 안 쌍 수 · [2] 경계 쌍 수
+StructuredBuffer<uint>     FrameCountsRO;
+RWStructuredBuffer<float4> StatsRW;          // 그룹별 (Σ|v| · max|v| · 자유 수 · Σ|λn|)
+RWStructuredBuffer<uint>   FillTarget;
+
+// 입자를 덧붙인 뒤 옛 쌍 목록의 PairStart 꼬리를 총수로 채운다 — 새 입자의 옛 쌍 구간은 비어 있어야 한다
+[numthreads(64, 1, 1)]
+void FillTailCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = FillFrom + Tid.x;
+	if (i < FillTo) { FillTarget[i] = FillValue; }
+}
+
+// ------------------------------------------------------------------------------------------------
+// 해시 — CPU 의 HashCell (Teschner 2003) 과 같다
+
+uint HashCell(int3 C, uint Table)
+{
+	const uint H = ((uint)(C.x * 73856093)) ^ ((uint)(C.y * 19349663)) ^ ((uint)(C.z * 83492791));
+	return H & (Table - 1u);
+}
+
+int3 CellOf(float3 P, float Size)
+{
+	return int3(floor(P / Size));
+}
+
+// ------------------------------------------------------------------------------------------------
+// 스캔 (배타 접두합) — 3패스. 2048 × 2048 = 4M 원소까지
+
+groupshared uint ScanTemp[2 * SCAN_GROUP];
+
+uint2 LoadPair(uint Base, uint Count, StructuredBuffer<uint> Src)
+{
+	const uint a = Base;
+	const uint b = Base + 1;
+	return uint2(a < Count ? Src[a] : 0u, b < Count ? Src[b] : 0u);
+}
+
+// 그룹 안 배타 스캔. 돌아오는 값은 그룹 총합
+uint GroupScan(uint Tid, inout uint A, inout uint B)
+{
+	ScanTemp[2 * Tid]     = A;
+	ScanTemp[2 * Tid + 1] = B;
+	GroupMemoryBarrierWithGroupSync();
+	// Hillis-Steele 포함 스캔
+	for (uint Offset = 1; Offset < 2 * SCAN_GROUP; Offset <<= 1)
+	{
+		uint v0 = 0, v1 = 0;
+		const uint i0 = 2 * Tid, i1 = 2 * Tid + 1;
+		if (i0 >= Offset) { v0 = ScanTemp[i0 - Offset]; }
+		if (i1 >= Offset) { v1 = ScanTemp[i1 - Offset]; }
+		GroupMemoryBarrierWithGroupSync();
+		ScanTemp[i0] += v0;
+		ScanTemp[i1] += v1;
+		GroupMemoryBarrierWithGroupSync();
+	}
+	const uint Total = ScanTemp[2 * SCAN_GROUP - 1];
+	const uint IncA = ScanTemp[2 * Tid];
+	const uint IncB = ScanTemp[2 * Tid + 1];
+	const uint OutA = IncA - A;
+	const uint OutB = IncB - B;
+	A = OutA;
+	B = OutB;
+	return Total;
+}
+
+[numthreads(SCAN_GROUP, 1, 1)]
+void ScanBlocksCS(uint3 GTid : SV_GroupThreadID, uint3 Gid : SV_GroupID)
+{
+	const uint Base = Gid.x * 2 * SCAN_GROUP + 2 * GTid.x;
+	uint2 V = LoadPair(Base, ScanCount, ScanIn);
+	uint A = V.x, B = V.y;
+	const uint Total = GroupScan(GTid.x, A, B);
+	if (Base < ScanCount)     { ScanOut[Base] = A; }
+	if (Base + 1 < ScanCount) { ScanOut[Base + 1] = B; }
+	if (GTid.x == 0) { ScanSumsRW[Gid.x] = Total; }
+}
+
+[numthreads(SCAN_GROUP, 1, 1)]
+void ScanTopCS(uint3 GTid : SV_GroupThreadID)
+{
+	// 그룹 합을 제자리에서 스캔. 그룹 수 ≤ 2048
+	const uint NumGroups = (ScanCount + 2 * SCAN_GROUP - 1) / (2 * SCAN_GROUP);
+	const uint Base = 2 * GTid.x;
+	uint A = Base < NumGroups ? ScanSumsRW[Base] : 0u;
+	uint B = Base + 1 < NumGroups ? ScanSumsRW[Base + 1] : 0u;
+	const uint Total = GroupScan(GTid.x, A, B);
+	if (Base < NumGroups)     { ScanSumsRW[Base] = A; }
+	if (Base + 1 < NumGroups) { ScanSumsRW[Base + 1] = B; }
+	if (GTid.x == 0) { ScanOut[ScanCount] = Total; }   // 총합
+}
+
+[numthreads(SCAN_GROUP, 1, 1)]
+void ScanAddCS(uint3 GTid : SV_GroupThreadID, uint3 Gid : SV_GroupID)
+{
+	const uint Add = ScanSumsRO[Gid.x];
+	const uint Base = Gid.x * 2 * SCAN_GROUP + 2 * GTid.x;
+	if (Base < ScanCount)     { ScanOut[Base] += Add; }
+	if (Base + 1 < ScanCount) { ScanOut[Base + 1] += Add; }
+}
+
+// ------------------------------------------------------------------------------------------------
+
+[numthreads(64, 1, 1)]
+void CellKeyCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x;
+	if (i >= NumParticles) { return; }
+	const float3 P = PosRO[i].xyz;
+	const uint Key = HashCell(CellOf(P, CellSize), TableSize);
+	CellKeyRW[i] = Key;
+	uint Slot;
+	InterlockedAdd(CellCountRW[Key], 1u, Slot);
+	CellSlotRW[i] = Slot;
+	BlockKeyRW[i] = HashCell(CellOf(P, BlockSize), BlockTable);
+}
+
+[numthreads(64, 1, 1)]
+void ScatterCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x;
+	if (i >= NumParticles) { return; }
+	SortedIdxRW[CellStart[CellKeyRO[i]] + CellSlotRO[i]] = i;
+}
+
+// 27칸 이웃 순회 — 해시 충돌로 같은 버킷을 두 번 도는 것만 막는다 (CPU 와 같다)
+#define FOR_NEIGHBORS(P, BODY) \
+{ \
+	const int3 C0 = CellOf(P, CellSize); \
+	uint Keys[27]; uint NumKeys = 0; \
+	for (int dz = -1; dz <= 1; ++dz) for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) \
+	{ \
+		const uint K = HashCell(C0 + int3(dx, dy, dz), TableSize); \
+		bool bSeen = false; \
+		for (uint q = 0; q < NumKeys; ++q) { if (Keys[q] == K) { bSeen = true; break; } } \
+		if (!bSeen) { Keys[NumKeys++] = K; } \
+	} \
+	for (uint q = 0; q < NumKeys; ++q) \
+	{ \
+		const uint End = CellStart[Keys[q] + 1]; \
+		for (uint s = CellStart[Keys[q]]; s < End; ++s) \
+		{ \
+			const uint j = SortedIdxRO[s]; \
+			if (j <= i) { continue; } \
+			BODY \
+		} \
+	} \
+}
+
+[numthreads(64, 1, 1)]
+void PairCountCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x;
+	if (i >= NumParticles) { return; }
+	const float3 Pi = PosRO[i].xyz;
+	const float Range2 = CellSize * CellSize;
+	uint n = 0;
+	FOR_NEIGHBORS(Pi,
+		const float3 d = Pi - PosRO[j].xyz;
+		if (dot(d, d) < Range2) { ++n; }
+	)
+	PairCountRW[i] = n;
+}
+
+[numthreads(64, 1, 1)]
+void PairFillCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x;
+	if (i >= NumParticles) { return; }
+	const float3 Pi = PosRO[i].xyz;
+	const float Range2 = CellSize * CellSize;
+	const uint Begin = PairStart[i];
+	const uint OldBegin = OldPairStart[i];
+	const uint OldEnd   = OldPairStart[i + 1];
+	const uint BKi = BlockKeyRO[i];
+	uint k = Begin;
+	FOR_NEIGHBORS(Pi,
+		const float3 d = Pi - PosRO[j].xyz;
+		if (dot(d, d) < Range2)
+		{
+			if (k < MaxPairs)
+			{
+				PairIJRW[2 * k]     = i;
+				PairIJRW[2 * k + 1] = j;
+				// 워밍 — 지난 프레임의 같은 쌍. i 의 옛 쌍은 연속 구간이라 선형 탐색이면 된다 (입자당 ~10)
+				float4 Warm = 0;
+				for (uint o = OldBegin; o < OldEnd; ++o)
+				{
+					if (OldPairIJ[2 * o + 1] == j) { Warm = OldLambda[OldPermInv[o]]; break; }
+				}
+				PairWarmRW[k] = Warm;
+				// 블록 분류
+				uint Local;
+				if (BKi == BlockKeyRO[j])
+				{
+					InterlockedAdd(BlockPairCountRW[BKi], 1u, Local);
+					PairBlockRW[k] = BKi;
+				}
+				else
+				{
+					InterlockedAdd(CountersRW[0], 1u, Local);
+					PairBlockRW[k] = 0xFFFFFFFFu;
+				}
+				PairLocalRW[k] = Local;
+				InterlockedAdd(AdjCountRW[i], 1u);
+				InterlockedAdd(AdjCountRW[j], 1u);
+			}
+			else
+			{
+				InterlockedAdd(CountersRW[2], 1u);   // 넘침
+			}
+			++k;
+		}
+	)
+}
+
+[numthreads(1, 1, 1)]
+void BuildArgsCS()
+{
+	const uint NumPairs = min(PairStart[NumParticles], MaxPairs);
+	const uint NumInternal = BlockStart[BlockTable];
+	const uint NumBoundary = NumPairs - min(NumInternal, NumPairs);
+	FrameCountsRW[0] = NumPairs;
+	FrameCountsRW[1] = NumInternal;
+	FrameCountsRW[2] = NumBoundary;
+	IndirectArgsRW[0] = (NumPairs + 63) / 64;    IndirectArgsRW[1] = 1; IndirectArgsRW[2] = 1;
+	IndirectArgsRW[3] = (NumBoundary + 63) / 64; IndirectArgsRW[4] = 1; IndirectArgsRW[5] = 1;
+	IndirectArgsRW[6] = (NumBonds + 63) / 64;    IndirectArgsRW[7] = 1; IndirectArgsRW[8] = 1;
+}
+
+[numthreads(64, 1, 1)]
+void PairScatterCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint k = Tid.x;
+	if (k >= FrameCountsRO[0]) { return; }
+	const uint i = PairIJRO[2 * k];
+	const uint j = PairIJRO[2 * k + 1];
+	const uint BK = PairBlockRO[k];
+	const uint Slot = (BK != 0xFFFFFFFFu) ? BlockStart[BK] + PairLocalRO[k] : FrameCountsRO[1] + PairLocalRO[k];
+	SortedIJRW[2 * Slot]     = i;
+	SortedIJRW[2 * Slot + 1] = j;
+	PermInvRW[k] = Slot;
+
+	// 인접 — 순서는 atomic 이라 실행마다 다를 수 있다 (합산 순서 → 비트 재현 없음, 2-1 이 허용)
+	uint c;
+	InterlockedAdd(AdjCursorRW[i], 1u, c); AdjRW[AdjStart[i] + c] = (Slot << 1);
+	InterlockedAdd(AdjCursorRW[j], 1u, c); AdjRW[AdjStart[j] + c] = (Slot << 1) | 1u;
+
+	// 워밍 λ — Step() 의 워밍 블록과 같다: 비율을 곱하고, 닿아 있는 쌍만, 접선은 현재 접평면에 재투영 후 원뿔로 다시 자른다
+	float4 L = PairWarmRO[k] * WarmStart;
+	float3 Impulse = 0;
+	const float3 Diff = PosRO[i].xyz - PosRO[j].xyz;
+	const float Dist = length(Diff);
+	if (L.w <= 0.f || Dist < SMALL || Dist > 2.f * Radius + WarmGapTol * Radius)
+	{
+		L = 0;
+	}
+	else
+	{
+		const float3 N = Diff / Dist;
+		float3 Tan = bWarmTangent ? (L.xyz - N * dot(L.xyz, N)) : float3(0, 0, 0);
+		const float MaxTan = Friction * L.w;
+		const float TanLen = length(Tan);
+		if (TanLen > MaxTan) { Tan = (TanLen > SMALL) ? Tan * (MaxTan / TanLen) : float3(0, 0, 0); }
+		L.xyz = Tan;
+		Impulse = N * L.w + Tan;
+	}
+	LambdaRW[Slot] = L;
+	PairImpulseRW[Slot] = float4(Impulse, 0);
+}
+
+[numthreads(64, 1, 1)]
+void BondWarmCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint b = Tid.x;
+	if (b >= NumBonds) { return; }
+	float4 B = BondDataRW[b];
+	float3 Corr = 0;
+	if (B.x >= 0.f)
+	{
+		B.y *= WarmStart;
+		if (B.y != 0.f)
+		{
+			const uint i = BondIJ[2 * b], j = BondIJ[2 * b + 1];
+			const float3 Diff = PosRO[i].xyz - PosRO[j].xyz;
+			const float Dist = length(Diff);
+			if (Dist < SMALL) { B.y = 0.f; }
+			else { Corr = (Diff / Dist) * (B.y / StepDt); }   // Δx = λ·w·∇C 를 속도로
+		}
+		BondDataRW[b] = B;
+	}
+	BondImpulseRW[b] = float4(Corr, 0);
+}
+
+[numthreads(64, 1, 1)]
+void WarmPredictCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint p = Tid.x;
+	if (p >= NumParticles) { return; }
+	float4 P4 = PosRW[p];
+	const float Wi = P4.w;
+	float3 P = P4.xyz;
+	float3 V = VelRW[p].xyz;
+
+	if (Wi > 0.f)
+	{
+		// 접촉 워밍 임펄스 gather
+		float3 Imp = 0;
+		for (uint e = AdjStart[p]; e < AdjStart[p + 1]; ++e)
+		{
+			const uint A = AdjRO[e];
+			const float3 I3 = PairImpulseRO[A >> 1].xyz;
+			Imp += (A & 1u) ? -I3 : I3;
+		}
+		// 결합
+		for (uint e2 = BondAdjOffset[p]; e2 < BondAdjOffset[p + 1]; ++e2)
+		{
+			const uint A = BondAdj[e2];
+			const float3 C3 = BondImpulseRO[A >> 1].xyz;
+			Imp += (A & 1u) ? -C3 : C3;
+		}
+		V += Imp * Wi;
+
+		// 지면
+		float GL = (P.z <= Radius) ? max(0.f, GroundLambdaRW[p] * WarmStart) : 0.f;
+		GroundLambdaRW[p] = GL;
+		V.z += GL * Wi;
+
+		// 벽 — 상자만 워밍한다 (CPU 와 같다. 원통은 0)
+		float4 WL = 0;
+		if (WallMode == 1)
+		{
+			const float4 Old = WallLambdaRW[p] * WarmStart;
+			const float Tol = WarmGapTol * Radius;
+			const float Gaps[4] = { P.x + WallLX, WallLX - P.x, P.y + WallLY, WallLY - P.y };
+			const float3 Ns[4] = { float3(1, 0, 0), float3(-1, 0, 0), float3(0, 1, 0), float3(0, -1, 0) };
+			const float Olds[4] = { Old.x, Old.y, Old.z, Old.w };
+			float News[4] = { 0, 0, 0, 0 };
+			[unroll] for (uint K = 0; K < 4; ++K)
+			{
+				if ((WallActiveMask & (1u << K)) && Gaps[K] <= Tol && Olds[K] > 0.f)
+				{
+					News[K] = Olds[K];
+					V += Ns[K] * (Olds[K] * Wi);
+				}
+			}
+			WL = float4(News[0], News[1], News[2], News[3]);
+		}
+		WallLambdaRW[p] = WL;
+
+		// 예측
+		PrevPosRW[p] = float4(P, 0);
+		V += Gravity * StepDt;
+		P += V * StepDt;
+		PosRW[p] = float4(P, Wi);
+		VelRW[p] = float4(V, 0);
+	}
+	else
+	{
+		PrevPosRW[p] = float4(P, 0);
+		GroundLambdaRW[p] = (P.z <= Radius) ? max(0.f, GroundLambdaRW[p] * WarmStart) : 0.f;   // CPU 는 고정 입자도 λ 를 든다 (적용은 w=0 이라 없음)
+		WallLambdaRW[p] = 0;
+	}
+}
+
+[numthreads(64, 1, 1)]
+void BreakBondsCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint b = Tid.x;
+	if (b >= NumBonds) { return; }
+	float4 B = BondDataRW[b];
+	if (B.x < 0.f) { return; }
+	const uint i = BondIJ[2 * b], j = BondIJ[2 * b + 1];
+	const float Dist = distance(PosRO[i].xyz, PosRO[j].xyz);
+	if (bBondsDry || Dist > B.x * BondStretchBreak)
+	{
+		B.x = -1.f;
+		B.y = 0.f;
+		BondDataRW[b] = B;
+		InterlockedAdd(CountersRW[1], 1u);
+	}
+}
+
+groupshared float  StatSum[256];
+groupshared float  StatMax[256];
+groupshared uint   StatFree[256];
+groupshared float  StatLambda[256];
+
+[numthreads(256, 1, 1)]
+void StatsCS(uint3 Tid : SV_DispatchThreadID, uint3 GTid : SV_GroupThreadID, uint3 Gid : SV_GroupID)
+{
+	const uint p = Tid.x;
+	float Speed = 0, LamSum = 0;
+	uint Free = 0;
+	if (p < NumParticles)
+	{
+		float4 V = VelRW[p];
+		const float Wi = PosRO[p].w;
+		if (Wi > 0.f)
+		{
+			if (VelocityDamping > 0.f) { V.xyz *= (1.f - VelocityDamping); VelRW[p] = V; }
+			Speed = length(V.xyz);
+			Free = 1;
+		}
+		// Σ|λn| — 쌍은 양쪽에서 한 번씩 세므로 절반, 지면은 한 번
+		for (uint e = AdjStart[p]; e < AdjStart[p + 1]; ++e) { LamSum += 0.5f * abs(LambdaRW[AdjRO[e] >> 1].w); }
+		LamSum += abs(GroundLambdaRW[p]);
+	}
+	StatSum[GTid.x] = Speed;
+	StatMax[GTid.x] = Speed;
+	StatFree[GTid.x] = Free;
+	StatLambda[GTid.x] = LamSum;
+	GroupMemoryBarrierWithGroupSync();
+	for (uint s = 128; s > 0; s >>= 1)
+	{
+		if (GTid.x < s)
+		{
+			StatSum[GTid.x] += StatSum[GTid.x + s];
+			StatMax[GTid.x] = max(StatMax[GTid.x], StatMax[GTid.x + s]);
+			StatFree[GTid.x] += StatFree[GTid.x + s];
+			StatLambda[GTid.x] += StatLambda[GTid.x + s];
+		}
+		GroupMemoryBarrierWithGroupSync();
+	}
+	if (GTid.x == 0) { StatsRW[Gid.x] = float4(StatSum[0], StatMax[0], asfloat(StatFree[0]), StatLambda[0]); }
+}

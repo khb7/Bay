@@ -261,6 +261,7 @@ namespace
 		const bool bGather = FParse::Param(*Params, TEXT("gather"));                       // m0b-spike §3-1 ①
 		const bool bMassSplit = FParse::Param(*Params, TEXT("masssplit"));                 // A′ 질량 분할 (Tonge 2012)
 		const bool bGpu = FParse::Param(*Params, TEXT("gpu"));                             // 3-1 ② 반복 루프를 GPU 로
+		const bool bGpu2 = FParse::Param(*Params, TEXT("gpu2"));                           // 2단계 — 스텝 전체 GPU 상주
 		float PourBlock = 0.f; FParse::Value(*Params, TEXT("block="), PourBlock);          // ①-b 블록 (cm)
 
 		TArray<FSandParams> Cfgs;
@@ -295,6 +296,7 @@ namespace
 			P.bGatherApply = bGather;
 			P.bMassSplit   = bMassSplit;
 			P.bGpuSolve    = bGpu;
+			P.bGpuResident = bGpu2;
 			P.BlockSize    = PourBlock;
 			P.bBlockShift  = FParse::Param(*Params, TEXT("blockshift"));
 			Cfgs.Add(P);
@@ -490,6 +492,58 @@ namespace
 		return 0;
 	}
 
+	/**
+	 * 3-4 성능 — 입자 수 스윕. 닫힌 상자에 정육면체 꼴로 즉시 채우고(붓기 없음) 프레임을 돌리며 ms/프레임을 잰다.
+	 *   -perf -particles=20000,50000,100000,150000 -frames=100 [-gpu2] [-iterations=] [-mu=]
+	 * 앞 WarmupFrames 는 버린다 (낙하·다짐 중이라 접촉 수가 요동). 정지 상태 측정은 아니다 — 다짐 중 상태라 접촉 수는 정지보다 많다 (보수적)
+	 */
+	int32 RunPerf(const FString& Params)
+	{
+		const TArray<int32> CountList = ParseList<int32>(Params, TEXT("particles="), { 20000 });
+		int32 Frames = 100; FParse::Value(*Params, TEXT("frames="), Frames);
+		int32 Iterations = 120; FParse::Value(*Params, TEXT("iterations="), Iterations);
+		float Mu = 0.17f; FParse::Value(*Params, TEXT("mu="), Mu);
+		const int32 WarmupFrames = 20;
+
+		UE_LOG(LogSpikeSweep, Display, TEXT("성능 — 반복 %d  μ %.2f  프레임 %d (앞 %d 버림)  %s"), Iterations, Mu, Frames, WarmupFrames,
+			FParse::Param(*Params, TEXT("gpu2")) ? TEXT("GPU 상주") : (FParse::Param(*Params, TEXT("gpu")) ? TEXT("GPU 반복만") : TEXT("CPU")));
+		UE_LOG(LogSpikeSweep, Display, TEXT("   입자 | 층 | ms/프레임 평균  최소  최대 | GPU ms 평균 | 쌍/입자 | 경계 | 끝 평균|v|"));
+
+		for (int32 Count : CountList)
+		{
+			FSandParams P;
+			P.Friction = Mu; P.Substeps = 1; P.Iterations = Iterations;
+			P.WarmStart = 1.f; P.WarmGapTol = 0.05f; P.SorOmega = 1.f;
+			P.bGatherApply = true; P.bMassSplit = true; P.BlockSize = 30.f;
+			FParse::Value(*Params, TEXT("block="), P.BlockSize);
+			P.bGpuSolve = FParse::Param(*Params, TEXT("gpu"));
+			P.bGpuResident = FParse::Param(*Params, TEXT("gpu2"));
+
+			FTiltSetup S;
+			S.TargetCount = Count;
+			S.Layers = FMath::Max(3, FMath::RoundToInt(FMath::Pow((float)Count, 1.f / 3.f)));
+			S.FixedLayers = 1;
+			S.BaseJitter = 0.3f;
+			S.bOpenDownhill = false;
+
+			FSandSpike Sim;
+			Sim.InitTiltBox(P, S);
+			double Sum = 0.0, SumGpu = 0.0; float MinMs = FLT_MAX, MaxMs = 0.f; int32 Measured = 0;
+			for (int32 f = 0; f < Frames; ++f)
+			{
+				Sim.Step(1.f / 60.f);
+				if (f < WarmupFrames) { continue; }
+				const float Ms = Sim.LastStepMs();
+				Sum += Ms; SumGpu += Sim.LastGpuMs(); MinMs = FMath::Min(MinMs, Ms); MaxMs = FMath::Max(MaxMs, Ms); ++Measured;
+			}
+			const int32 NumC = Sim.GetContacts().Num();
+			UE_LOG(LogSpikeSweep, Display, TEXT("%7d | %2d | %8.1f  %8.1f  %8.1f | %8.1f | %5.1f | %3.0f%% | %.3f"),
+				Sim.Num(), S.Layers, Sum / FMath::Max(1, Measured), MinMs, MaxMs, SumGpu / FMath::Max(1, Measured),
+				(float)NumC / FMath::Max(1, Sim.Num()), Sim.BoundaryContactFrac() * 100.f, Sim.AvgSpeed());
+		}
+		return 0;
+	}
+
 	/** 임계 이하에서 붙잡고 있을 때 실제로 기어가는가. */
 	int32 RunCreepTest(const FString& Params)
 	{
@@ -680,6 +734,7 @@ namespace
 		P.bGatherContacts = !FParse::Param(*Params, TEXT("seqcontacts"));  // 거울 진단
 		FParse::Value(*Params, TEXT("block="), P.BlockSize);   // ①-b 블록 GS 모사 (cm)
 		P.bGpuSolve = FParse::Param(*Params, TEXT("gpu"));       // 3-1 ② 반복 루프를 GPU 로
+		P.bGpuResident = FParse::Param(*Params, TEXT("gpu2"));   // 3-1 ② 2단계 — 스텝 전체 GPU 상주
 		P.bBlockShift = FParse::Param(*Params, TEXT("blockshift"));
 		FParse::Value(*Params, TEXT("sor="), P.SorOmega);
 		FParse::Value(*Params, TEXT("ma="),  P.MomentumA);
@@ -780,6 +835,7 @@ namespace
 		P.bGatherContacts = !FParse::Param(*Params, TEXT("seqcontacts"));  // 거울 진단
 		FParse::Value(*Params, TEXT("block="), P.BlockSize);   // ①-b 블록 GS 모사 (cm)
 		P.bGpuSolve = FParse::Param(*Params, TEXT("gpu"));       // 3-1 ② 반복 루프를 GPU 로
+		P.bGpuResident = FParse::Param(*Params, TEXT("gpu2"));   // 3-1 ② 2단계 — 스텝 전체 GPU 상주
 		P.bBlockShift = FParse::Param(*Params, TEXT("blockshift"));
 		FParse::Value(*Params, TEXT("sor="), P.SorOmega);
 		FParse::Value(*Params, TEXT("ma="),  P.MomentumA);
@@ -928,10 +984,14 @@ USpikeSweepCommandlet::USpikeSweepCommandlet()
 
 int32 USpikeSweepCommandlet::Main(const FString& Params)
 {
-	GSpikeSerial = FParse::Param(*Params, TEXT("gpu"));
+	GSpikeSerial = FParse::Param(*Params, TEXT("gpu")) || FParse::Param(*Params, TEXT("gpu2"));
 	if (FParse::Param(*Params, TEXT("creeptest")))
 	{
 		return RunCreepTest(Params);
+	}
+	if (FParse::Param(*Params, TEXT("perf")))
+	{
+		return RunPerf(Params);
 	}
 	if (FParse::Param(*Params, TEXT("lambdaprofile")))
 	{

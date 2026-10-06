@@ -12,6 +12,9 @@
 
 IMPLEMENT_MODULE(FDefaultModuleImpl, SandGpu);
 
+// ================================================================================================
+// 반복 루프 (SandSolver.usf) — 1·2단계 공용
+//
 // 여섯 패스가 한 파라미터 구조를 나눠 쓴다. 같은 버퍼의 SRV(…RO)와 UAV(…RW)가 함께 들어 있지만
 // 셰이더가 안 쓰는 쪽은 FComputeShaderUtils::AddPass 의 ClearUnusedGraphResources 가 패스마다 비운다.
 BEGIN_SHADER_PARAMETER_STRUCT(FSandSolverParams, )
@@ -20,6 +23,8 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandSolverParams, )
 	SHADER_PARAMETER(uint32, NumBoundary)
 	SHADER_PARAMETER(uint32, NumBlocks)
 	SHADER_PARAMETER(uint32, NumBonds)
+	SHADER_PARAMETER(uint32, bUseFrameCounts)
+	SHADER_PARAMETER(uint32, bBondsActive)
 	SHADER_PARAMETER(float, Radius)
 	SHADER_PARAMETER(float, StepDt)
 	SHADER_PARAMETER(float, Kv)
@@ -52,6 +57,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandSolverParams, )
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, BoundaryImpulseRO)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BoundaryAdjOffset)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BoundaryAdj)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FrameCounts)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, CountRW)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, CountRO)
 
@@ -64,13 +70,15 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandSolverParams, )
 
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, GroundLambdaRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, WallLambdaRW)
+
+	RDG_BUFFER_ACCESS(IndirectArgs, ERHIAccess::IndirectArgs)
 END_SHADER_PARAMETER_STRUCT()
 
-#define SAND_SOLVER_SHADER(ClassName, EntryPoint) \
+#define SAND_SHADER(ClassName, ParamsType, File, EntryPoint) \
 	class ClassName : public FGlobalShader \
 	{ \
 	public: \
-		using FParameters = FSandSolverParams; \
+		using FParameters = ParamsType; \
 		DECLARE_GLOBAL_SHADER(ClassName); \
 		SHADER_USE_PARAMETER_STRUCT(ClassName, FGlobalShader); \
 		static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) \
@@ -78,19 +86,145 @@ END_SHADER_PARAMETER_STRUCT()
 			return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5); \
 		} \
 	}; \
-	IMPLEMENT_GLOBAL_SHADER(ClassName, "/Project/Private/SandSolver.usf", EntryPoint, SF_Compute);
+	IMPLEMENT_GLOBAL_SHADER(ClassName, File, EntryPoint, SF_Compute);
 
-SAND_SOLVER_SHADER(FSandSolveBlocksCS,   "SolveBlocksCS")
-SAND_SOLVER_SHADER(FSandCountBoundaryCS, "CountBoundaryCS")
-SAND_SOLVER_SHADER(FSandSolveBoundaryCS, "SolveBoundaryCS")
-SAND_SOLVER_SHADER(FSandApplyBoundaryCS, "ApplyBoundaryCS")
-SAND_SOLVER_SHADER(FSandSolveBondsCS,    "SolveBondsCS")
-SAND_SOLVER_SHADER(FSandApplyBondsCS,    "ApplyBondsCS")
+#define SOLVER_USF "/Project/Private/SandSolver.usf"
+SAND_SHADER(FSandSolveBlocksCS,   FSandSolverParams, SOLVER_USF, "SolveBlocksCS")
+SAND_SHADER(FSandCountBoundaryCS, FSandSolverParams, SOLVER_USF, "CountBoundaryCS")
+SAND_SHADER(FSandSolveBoundaryCS, FSandSolverParams, SOLVER_USF, "SolveBoundaryCS")
+SAND_SHADER(FSandApplyBoundaryCS, FSandSolverParams, SOLVER_USF, "ApplyBoundaryCS")
+SAND_SHADER(FSandSolveBondsCS,    FSandSolverParams, SOLVER_USF, "SolveBondsCS")
+SAND_SHADER(FSandApplyBondsCS,    FSandSolverParams, SOLVER_USF, "ApplyBondsCS")
 
-#undef SAND_SOLVER_SHADER
+// ================================================================================================
+// 프레임 앞뒤 (SandFrame.usf) — 2단계
+
+BEGIN_SHADER_PARAMETER_STRUCT(FSandFrameParams, )
+	SHADER_PARAMETER(uint32, NumParticles)
+	SHADER_PARAMETER(uint32, TableSize)
+	SHADER_PARAMETER(uint32, BlockTable)
+	SHADER_PARAMETER(uint32, MaxPairs)
+	SHADER_PARAMETER(uint32, NumBonds)
+	SHADER_PARAMETER(uint32, ScanCount)
+	SHADER_PARAMETER(uint32, FillFrom)
+	SHADER_PARAMETER(uint32, FillTo)
+	SHADER_PARAMETER(uint32, FillValue)
+	SHADER_PARAMETER(float, CellSize)
+	SHADER_PARAMETER(float, Radius)
+	SHADER_PARAMETER(float, StepDt)
+	SHADER_PARAMETER(float, BlockSize)
+	SHADER_PARAMETER(float, WarmStart)
+	SHADER_PARAMETER(float, WarmGapTol)
+	SHADER_PARAMETER(uint32, bWarmTangent)
+	SHADER_PARAMETER(float, Friction)
+	SHADER_PARAMETER(FVector3f, Gravity)
+	SHADER_PARAMETER(float, BondStretchBreak)
+	SHADER_PARAMETER(uint32, bBondsDry)
+	SHADER_PARAMETER(float, VelocityDamping)
+	SHADER_PARAMETER(uint32, WallMode)
+	SHADER_PARAMETER(uint32, WallActiveMask)
+	SHADER_PARAMETER(float, WallLX)
+	SHADER_PARAMETER(float, WallLY)
+	SHADER_PARAMETER(float, WallLimit)
+	SHADER_PARAMETER(float, WallLiftZ)
+
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, PosRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, PosRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, VelRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, VelRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, PrevPosRW)
+
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, CellKeyRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, CellKeyRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, CellSlotRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, CellSlotRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, CellCountRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, CellStart)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, SortedIdxRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, SortedIdxRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BlockKeyRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BlockKeyRO)
+
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, PairCountRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, PairStart)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, PairIJRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, PairIJRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, PairWarmRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, PairWarmRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, PairBlockRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, PairBlockRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, PairLocalRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, PairLocalRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BlockPairCountRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BlockStart)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, CountersRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, CountersRO)
+
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, OldPairStart)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, OldPairIJ)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, OldPermInv)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, OldLambda)
+
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, SortedIJRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, LambdaRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, PermInvRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, PairImpulseRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, PairImpulseRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, AdjCountRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, AdjStart)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, AdjRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, AdjRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, AdjCursorRW)
+
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BondIJ)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, BondDataRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, BondDataRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, BondImpulseRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, BondImpulseRO)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BondAdjOffset)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BondAdj)
+
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, GroundLambdaRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, WallLambdaRW)
+
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ScanIn)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ScanOut)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ScanSumsRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ScanSumsRO)
+
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, IndirectArgsRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, FrameCountsRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FrameCountsRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, StatsRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, FillTarget)
+
+	RDG_BUFFER_ACCESS(IndirectArgs, ERHIAccess::IndirectArgs)
+END_SHADER_PARAMETER_STRUCT()
+
+#define FRAME_USF "/Project/Private/SandFrame.usf"
+SAND_SHADER(FSandScanBlocksCS,  FSandFrameParams, FRAME_USF, "ScanBlocksCS")
+SAND_SHADER(FSandScanTopCS,     FSandFrameParams, FRAME_USF, "ScanTopCS")
+SAND_SHADER(FSandScanAddCS,     FSandFrameParams, FRAME_USF, "ScanAddCS")
+SAND_SHADER(FSandCellKeyCS,     FSandFrameParams, FRAME_USF, "CellKeyCS")
+SAND_SHADER(FSandScatterCS,     FSandFrameParams, FRAME_USF, "ScatterCS")
+SAND_SHADER(FSandPairCountCS,   FSandFrameParams, FRAME_USF, "PairCountCS")
+SAND_SHADER(FSandPairFillCS,    FSandFrameParams, FRAME_USF, "PairFillCS")
+SAND_SHADER(FSandBuildArgsCS,   FSandFrameParams, FRAME_USF, "BuildArgsCS")
+SAND_SHADER(FSandPairScatterCS, FSandFrameParams, FRAME_USF, "PairScatterCS")
+SAND_SHADER(FSandBondWarmCS,    FSandFrameParams, FRAME_USF, "BondWarmCS")
+SAND_SHADER(FSandWarmPredictCS, FSandFrameParams, FRAME_USF, "WarmPredictCS")
+SAND_SHADER(FSandBreakBondsCS,  FSandFrameParams, FRAME_USF, "BreakBondsCS")
+SAND_SHADER(FSandStatsCS,       FSandFrameParams, FRAME_USF, "StatsCS")
+SAND_SHADER(FSandFillTailCS,    FSandFrameParams, FRAME_USF, "FillTailCS")
+
+#undef SAND_SHADER
 
 namespace
 {
+	constexpr int32 ScanGroupElems = 2048;   // SandFrame.usf SCAN_GROUP × 2
+	constexpr int32 StatsGroup = 256;
+	constexpr uint32 BlockTableSize = 8192;  // 블록 해시 표. 충돌은 무해하다 — 멀리 떨어진 두 블록이 한 스레드에 묶일 뿐
+
 	// 버퍼 크기를 2의 거듭제곱으로 올린다 — 접촉 수가 프레임마다 달라도 RDG 풀이 같은 버퍼를 다시 쓴다
 	template <typename T>
 	FRDGBufferRef UploadBuffer(FRDGBuilder& GraphBuilder, const TCHAR* Name, const TArray<T>& Data)
@@ -116,16 +250,107 @@ namespace
 		return GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(Stride, Capacity), Name);
 	}
 
-	template <typename TShader>
-	void AddSolverPass(FRDGBuilder& GraphBuilder, FRDGEventName&& Name, const FGlobalShaderMap* ShaderMap,
-		const FSandSolverParams& Template, int32 ThreadCount, int32 GroupSize)
+	template <typename TShader, typename TParams>
+	void AddDirectPass(FRDGBuilder& GraphBuilder, FRDGEventName&& Name, const FGlobalShaderMap* ShaderMap,
+		const TParams& Template, int32 ThreadCount, int32 GroupSize)
 	{
-		FSandSolverParams* Params = GraphBuilder.AllocParameters<FSandSolverParams>();
+		TParams* Params = GraphBuilder.AllocParameters<TParams>();
 		*Params = Template;
 		TShaderMapRef<TShader> Shader(ShaderMap);
-		FComputeShaderUtils::AddPass(GraphBuilder, MoveTemp(Name), Shader, Params, FComputeShaderUtils::GetGroupCount(ThreadCount, GroupSize));
+		FComputeShaderUtils::AddPass(GraphBuilder, MoveTemp(Name), Shader, Params, FComputeShaderUtils::GetGroupCount(FMath::Max(1, ThreadCount), GroupSize));
 	}
 
+	template <typename TShader, typename TParams>
+	void AddIndirectPass(FRDGBuilder& GraphBuilder, FRDGEventName&& Name, const FGlobalShaderMap* ShaderMap,
+		const TParams& Template, FRDGBufferRef Args, uint32 ArgsOffset)
+	{
+		TParams* Params = GraphBuilder.AllocParameters<TParams>();
+		*Params = Template;
+		Params->IndirectArgs = Args;
+		TShaderMapRef<TShader> Shader(ShaderMap);
+		FComputeShaderUtils::AddPass(GraphBuilder, MoveTemp(Name), ERDGPassFlags::Compute, Shader, Params, Args, ArgsOffset);
+	}
+
+	/** 배타 접두합. Out 은 Count + 1 원소 — 마지막이 총합 */
+	void AddScan(FRDGBuilder& GraphBuilder, const FGlobalShaderMap* ShaderMap, const FSandFrameParams& Template,
+		FRDGBufferRef In, FRDGBufferRef Out, uint32 Count)
+	{
+		const int32 NumGroups = FMath::DivideAndRoundUp((int32)Count, ScanGroupElems);
+		checkf(NumGroups <= ScanGroupElems, TEXT("스캔 상한 4M 원소 초과 (%u)"), Count);
+		FRDGBufferRef Sums = ScratchBuffer(GraphBuilder, TEXT("SandGpu.ScanSums"), sizeof(uint32), ScanGroupElems);
+
+		FSandFrameParams T = Template;
+		T.ScanCount  = Count;
+		T.ScanIn     = GraphBuilder.CreateSRV(In);
+		T.ScanOut    = GraphBuilder.CreateUAV(Out);
+		T.ScanSumsRW = GraphBuilder.CreateUAV(Sums);
+		T.ScanSumsRO = GraphBuilder.CreateSRV(Sums);
+		AddDirectPass<FSandScanBlocksCS>(GraphBuilder, RDG_EVENT_NAME("SandScanBlocks"), ShaderMap, T, NumGroups * (ScanGroupElems / 2), ScanGroupElems / 2);
+		AddDirectPass<FSandScanTopCS>(GraphBuilder, RDG_EVENT_NAME("SandScanTop"), ShaderMap, T, ScanGroupElems / 2, ScanGroupElems / 2);
+		AddDirectPass<FSandScanAddCS>(GraphBuilder, RDG_EVENT_NAME("SandScanAdd"), ShaderMap, T, NumGroups * (ScanGroupElems / 2), ScanGroupElems / 2);
+	}
+
+	/** 반복 루프 — 1·2단계가 같은 패스 열을 쓴다. IndirectArgs 가 있으면 경계 패스는 간접(GPU 가 센 쌍 수), 없으면 NumBoundaryDirect */
+	void AddSolverIterations(FRDGBuilder& GraphBuilder, const FGlobalShaderMap* ShaderMap, const FSandSolverParams& T,
+		int32 Iterations, int32 N, int32 NumBlocks, int32 NumBonds, bool bMassSplit, FRDGBufferRef IndirectArgs, int32 NumBoundaryDirect)
+	{
+		for (int32 It = 0; It < Iterations; ++It)
+		{
+			if (NumBlocks > 0)
+			{
+				AddDirectPass<FSandSolveBlocksCS>(GraphBuilder, RDG_EVENT_NAME("SandBlocks"), ShaderMap, T, NumBlocks, 32);
+			}
+			if (IndirectArgs || NumBoundaryDirect > 0)
+			{
+				if (bMassSplit)
+				{
+					AddDirectPass<FSandCountBoundaryCS>(GraphBuilder, RDG_EVENT_NAME("SandCountBoundary"), ShaderMap, T, N, 64);
+				}
+				if (IndirectArgs)
+				{
+					AddIndirectPass<FSandSolveBoundaryCS>(GraphBuilder, RDG_EVENT_NAME("SandBoundary"), ShaderMap, T, IndirectArgs, 3 * sizeof(uint32));
+				}
+				else
+				{
+					AddDirectPass<FSandSolveBoundaryCS>(GraphBuilder, RDG_EVENT_NAME("SandBoundary"), ShaderMap, T, NumBoundaryDirect, 64);
+				}
+				AddDirectPass<FSandApplyBoundaryCS>(GraphBuilder, RDG_EVENT_NAME("SandApplyBoundary"), ShaderMap, T, N, 64);
+			}
+			if (NumBonds > 0)
+			{
+				AddDirectPass<FSandSolveBondsCS>(GraphBuilder, RDG_EVENT_NAME("SandBonds"), ShaderMap, T, NumBonds, 64);
+			}
+			AddDirectPass<FSandApplyBondsCS>(GraphBuilder, RDG_EVENT_NAME("SandApplyBonds"), ShaderMap, T, N, 64);
+		}
+	}
+
+	void FetchReadback(FRHIGPUBufferReadback& Readback, void* Dst, uint32 NumBytes)
+	{
+		if (NumBytes == 0)
+		{
+			return;
+		}
+		if (const void* Src = Readback.Lock(NumBytes))
+		{
+			FMemory::Memcpy(Dst, Src, NumBytes);
+		}
+		Readback.Unlock();
+	}
+
+	// 프레임 틱이 없는 커맨드릿에서는 RDG 풀도 RHI 프레임도 스스로 안 넘어간다. RHI 프레임을 안 닫으면
+	// 올리기용 임시 메모리와 지연 삭제가 쌓이다가 수천 스텝 뒤 GPU 페이지 폴트로 죽는다 (stage11 첫 실행, 8분째)
+	void EndGpuFrame(FRHICommandListImmediate& RHICmdList)
+	{
+		FRDGBuilder::TickPoolElements();
+		RHICmdList.EndFrame();
+	}
+}
+
+// ================================================================================================
+// 1단계
+
+namespace
+{
 	struct FReadbacks
 	{
 		FRHIGPUBufferReadback Pos{ TEXT("SandGpu.Pos") };
@@ -143,7 +368,7 @@ namespace
 		const int32 N         = D.Pos.Num();
 		const int32 NumC      = D.ContactLambda.Num();
 		const int32 NumBound  = NumC - D.NumInternal;
-		const int32 NumBlocks = D.BlockRange.Num() / 2;
+		const int32 NumBlocks = FMath::Max(0, D.BlockRange.Num() - 1);
 		const int32 NumBonds  = D.bBondsActive ? D.BondData.Num() : 0;
 
 		{
@@ -163,6 +388,7 @@ namespace
 			FRDGBufferRef BondAdj        = UploadBuffer(GraphBuilder, TEXT("SandGpu.BondAdj"), D.BondAdj);
 			FRDGBufferRef GroundLambda   = UploadBuffer(GraphBuilder, TEXT("SandGpu.GroundLambda"), D.GroundLambda);
 			FRDGBufferRef WallLambda     = UploadBuffer(GraphBuilder, TEXT("SandGpu.WallLambda"), D.WallLambda);
+			FRDGBufferRef FrameCounts    = UploadBuffer(GraphBuilder, TEXT("SandGpu.FrameCounts"), TArray<uint32>());   // 1단계는 상수를 쓴다
 
 			FRDGBufferRef BoundaryImpulse = ScratchBuffer(GraphBuilder, TEXT("SandGpu.BoundaryImpulse"), sizeof(FVector4f), NumBound);
 			FRDGBufferRef Count           = ScratchBuffer(GraphBuilder, TEXT("SandGpu.Count"), sizeof(uint32), N);
@@ -177,6 +403,8 @@ namespace
 			T.NumBoundary  = NumBound;
 			T.NumBlocks    = NumBlocks;
 			T.NumBonds     = NumBonds;
+			T.bUseFrameCounts = 0;
+			T.bBondsActive = NumBonds > 0 ? 1 : 0;
 			T.Radius   = D.Radius;
 			T.StepDt   = D.StepDt;
 			T.Kv       = D.Kv;
@@ -208,6 +436,7 @@ namespace
 			T.BoundaryImpulseRO = GraphBuilder.CreateSRV(BoundaryImpulse);
 			T.BoundaryAdjOffset = GraphBuilder.CreateSRV(BoundAdjOffset);
 			T.BoundaryAdj       = GraphBuilder.CreateSRV(BoundAdj);
+			T.FrameCounts       = GraphBuilder.CreateSRV(FrameCounts);
 			T.CountRW = GraphBuilder.CreateUAV(Count);
 			T.CountRO = GraphBuilder.CreateSRV(Count);
 			T.BondIJ        = GraphBuilder.CreateSRV(BondIJ);
@@ -220,27 +449,7 @@ namespace
 			T.WallLambdaRW   = GraphBuilder.CreateUAV(WallLambda);
 
 			const FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
-			for (int32 It = 0; It < D.Iterations; ++It)
-			{
-				if (NumBlocks > 0)
-				{
-					AddSolverPass<FSandSolveBlocksCS>(GraphBuilder, RDG_EVENT_NAME("SandBlocks"), ShaderMap, T, NumBlocks, 32);
-				}
-				if (NumBound > 0)
-				{
-					if (D.bMassSplit)
-					{
-						AddSolverPass<FSandCountBoundaryCS>(GraphBuilder, RDG_EVENT_NAME("SandCountBoundary"), ShaderMap, T, N, 64);
-					}
-					AddSolverPass<FSandSolveBoundaryCS>(GraphBuilder, RDG_EVENT_NAME("SandBoundary"), ShaderMap, T, NumBound, 64);
-					AddSolverPass<FSandApplyBoundaryCS>(GraphBuilder, RDG_EVENT_NAME("SandApplyBoundary"), ShaderMap, T, N, 64);
-				}
-				if (NumBonds > 0)
-				{
-					AddSolverPass<FSandSolveBondsCS>(GraphBuilder, RDG_EVENT_NAME("SandBonds"), ShaderMap, T, NumBonds, 64);
-				}
-				AddSolverPass<FSandApplyBondsCS>(GraphBuilder, RDG_EVENT_NAME("SandApplyBonds"), ShaderMap, T, N, 64);
-			}
+			AddSolverIterations(GraphBuilder, ShaderMap, T, D.Iterations, N, NumBlocks, NumBonds, D.bMassSplit, nullptr, NumBound);
 
 			AddEnqueueCopyPass(GraphBuilder, &Readbacks->Pos, Pos, N * sizeof(FVector4f));
 			AddEnqueueCopyPass(GraphBuilder, &Readbacks->Vel, Vel, N * sizeof(FVector4f));
@@ -261,29 +470,14 @@ namespace
 		// 계측용 전량 리드백 — 프레임 지연 없이 여기서 기다린다 (출하 경로는 M1 의 비동기 36KB)
 		RHICmdList.SubmitAndBlockUntilGPUIdle();
 
-		auto Fetch = [](FRHIGPUBufferReadback& Readback, void* Dst, uint32 NumBytes)
-		{
-			if (NumBytes == 0)
-			{
-				return;
-			}
-			if (const void* Src = Readback.Lock(NumBytes))
-			{
-				FMemory::Memcpy(Dst, Src, NumBytes);
-			}
-			Readback.Unlock();
-		};
-		Fetch(Readbacks->Pos, D.Pos.GetData(), N * sizeof(FVector4f));
-		Fetch(Readbacks->Vel, D.Vel.GetData(), N * sizeof(FVector4f));
-		Fetch(Readbacks->GroundLambda, D.GroundLambda.GetData(), N * sizeof(float));
-		Fetch(Readbacks->WallLambda, D.WallLambda.GetData(), N * sizeof(FVector4f));
-		Fetch(Readbacks->ContactLambda, D.ContactLambda.GetData(), NumC * sizeof(FVector4f));
-		Fetch(Readbacks->BondData, D.BondData.GetData(), NumBonds * sizeof(FVector4f));
+		FetchReadback(Readbacks->Pos, D.Pos.GetData(), N * sizeof(FVector4f));
+		FetchReadback(Readbacks->Vel, D.Vel.GetData(), N * sizeof(FVector4f));
+		FetchReadback(Readbacks->GroundLambda, D.GroundLambda.GetData(), N * sizeof(float));
+		FetchReadback(Readbacks->WallLambda, D.WallLambda.GetData(), N * sizeof(FVector4f));
+		FetchReadback(Readbacks->ContactLambda, D.ContactLambda.GetData(), NumC * sizeof(FVector4f));
+		FetchReadback(Readbacks->BondData, D.BondData.GetData(), NumBonds * sizeof(FVector4f));
 
-		// 프레임 틱이 없는 커맨드릿에서는 RDG 풀도 RHI 프레임도 스스로 안 넘어간다. RHI 프레임을 안 닫으면
-		// 올리기용 임시 메모리와 지연 삭제가 쌓이다가 수천 스텝 뒤 GPU 페이지 폴트로 죽는다 (stage11 첫 실행, 8분째)
-		FRDGBuilder::TickPoolElements();
-		RHICmdList.EndFrame();
+		EndGpuFrame(RHICmdList);
 	}
 }
 
@@ -306,4 +500,457 @@ void SandGpu::Solve(FSandGpuSolveData& Data)
 	});
 	FlushRenderingCommands();
 	Data.GpuMs = (FPlatformTime::Seconds() - T0) * 1000.0;
+}
+
+// ================================================================================================
+// 2단계 — GPU 상주
+
+struct FSandGpuSim::FState
+{
+	// 영구 (입자 수 N)
+	TRefCountPtr<FRDGPooledBuffer> Pos, Vel, PrevPos, GroundLambda, WallLambda;
+	// 영구 (결합)
+	TRefCountPtr<FRDGPooledBuffer> BondIJ, BondData, BondAdjOffset, BondAdj;
+	// 쌍 목록 두 벌 — [Cur] 이번 프레임 · [1-Cur] 지난 프레임 (워밍 조회)
+	TRefCountPtr<FRDGPooledBuffer> PairStart[2], PairIJ[2], PermInv[2], Lambda[2], SortedIJ[2];
+	int32 Cur = 0;
+	int32 CapN = 0, CapB = 0, CapPairs = 0;   // 버퍼 용량. 입자를 덧붙여도 용량 안이면 재할당 없이 쌍 목록(워밍)을 유지한다
+
+	FRHIGPUBufferReadback StatsRB{ TEXT("SandGpu.Stats") };
+	FRHIGPUBufferReadback CountersRB{ TEXT("SandGpu.Counters") };
+	FRHIGPUBufferReadback FrameCountsRB{ TEXT("SandGpu.FrameCounts") };
+	FRHIGPUBufferReadback DlPos{ TEXT("SandGpu.DlPos") }, DlVel{ TEXT("SandGpu.DlVel") }, DlPairIJ{ TEXT("SandGpu.DlPairIJ") },
+		DlLambda{ TEXT("SandGpu.DlLambda") }, DlBond{ TEXT("SandGpu.DlBond") }, DlGround{ TEXT("SandGpu.DlGround") }, DlWall{ TEXT("SandGpu.DlWall") };
+
+	TArray<FVector4f> StatsPartial;
+};
+
+FSandGpuSim::FSandGpuSim()
+{
+	State = new FState();
+}
+
+FSandGpuSim::~FSandGpuSim()
+{
+	// 버퍼는 렌더 스레드가 들고 있다 — 거기서 놓는다
+	FState* S = State;
+	ENQUEUE_RENDER_COMMAND(SandGpuSimDestroy)([S](FRHICommandListImmediate&) { delete S; });
+	FlushRenderingCommands();
+}
+
+void FSandGpuSim::Upload(const FSandGpuUpload& In, bool bKeepPairs)
+{
+	check(IsInGameThread());
+	const int32 OldN = N;
+	const int32 OldPairs = LastNumPairs;
+	N = In.Pos.Num();
+	NumB = In.BondData.Num();
+	if (N == 0)
+	{
+		return;
+	}
+	FState* S = State;
+	// 쌍 목록을 지키는 조건 — 이전 올리기가 있고, 입자가 덧붙기만 했다 (제거·재배치는 호출 측이 false 를 준다)
+	bKeepPairs = bKeepPairs && S->CapN > 0 && N >= OldN && OldN > 0;
+	if (!bKeepPairs) { LastNumPairs = 0; }
+	const bool bGrowN = N > S->CapN || S->CapN == 0;
+	const bool bGrowB = NumB > S->CapB || S->CapB == 0;   // 결합 0개여도 버퍼는 있어야 한다 (등록이 유효한 버퍼를 요구한다)
+	const int32 NewCapN = bGrowN ? (int32)FMath::RoundUpToPowerOfTwo((uint32)FMath::Max(1024, N)) : S->CapN;
+	const int32 NewCapB = bGrowB ? (int32)FMath::RoundUpToPowerOfTwo((uint32)FMath::Max(1024, NumB)) : S->CapB;
+	const int32 NewCapPairs = NewCapN * 32;   // 탐색 반경 상한 2R(= 지름 2배)에서 입자당 ≈ 19쌍, 여유 포함
+	MaxPairCount = NewCapPairs;
+	const int32 LN = N, LB = NumB;
+
+	ENQUEUE_RENDER_COMMAND(SandGpuSimUpload)([S, &In, LN, LB, OldN, OldPairs, bKeepPairs, bGrowN, bGrowB, NewCapN, NewCapB, NewCapPairs](FRHICommandListImmediate& RHICmdList)
+	{
+		const FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+		auto Persist = [&](uint32 Stride, int32 Num, const TCHAR* Name)
+		{
+			return AllocatePooledBuffer(FRDGBufferDesc::CreateStructuredDesc(Stride, FMath::Max(1, Num)), Name);
+		};
+		FRDGBuilder GraphBuilder(RHICmdList, RDG_EVENT_NAME("SandGpuSimUpload"));
+
+		// 마지막으로 쓴 쌍 목록 벌 — Step 이 끝마다 Cur 를 넘기므로 1 − Cur. 지킬 때는 이것만 옮긴다 (Cur 벌은 다음 Step 이 통째로 다시 쓴다)
+		const int32 Last = 1 - S->Cur;
+		if (bGrowN)
+		{
+			TRefCountPtr<FRDGPooledBuffer> OldStart = S->PairStart[Last], OldIJ = S->PairIJ[Last], OldPerm = S->PermInv[Last], OldLam = S->Lambda[Last], OldSorted = S->SortedIJ[Last];
+			S->Pos          = Persist(sizeof(FVector4f), NewCapN, TEXT("SandSim.Pos"));
+			S->Vel          = Persist(sizeof(FVector4f), NewCapN, TEXT("SandSim.Vel"));
+			S->PrevPos      = Persist(sizeof(FVector4f), NewCapN, TEXT("SandSim.PrevPos"));
+			S->GroundLambda = Persist(sizeof(float), NewCapN, TEXT("SandSim.GroundLambda"));
+			S->WallLambda   = Persist(sizeof(FVector4f), NewCapN, TEXT("SandSim.WallLambda"));
+			S->BondAdjOffset = Persist(sizeof(uint32), NewCapN + 1, TEXT("SandSim.BondAdjOffset"));
+			for (int32 k = 0; k < 2; ++k)
+			{
+				S->PairStart[k] = Persist(sizeof(uint32), NewCapN + 1, TEXT("SandSim.PairStart"));
+				S->PairIJ[k]    = Persist(sizeof(uint32), 2 * NewCapPairs, TEXT("SandSim.PairIJ"));
+				S->PermInv[k]   = Persist(sizeof(uint32), NewCapPairs, TEXT("SandSim.PermInv"));
+				S->Lambda[k]    = Persist(sizeof(FVector4f), NewCapPairs, TEXT("SandSim.Lambda"));
+				S->SortedIJ[k]  = Persist(sizeof(uint32), 2 * NewCapPairs, TEXT("SandSim.SortedIJ"));
+			}
+			if (bKeepPairs && OldStart.IsValid())
+			{
+				auto Copy = [&](const TRefCountPtr<FRDGPooledBuffer>& Dst, const TRefCountPtr<FRDGPooledBuffer>& Src, uint64 Bytes)
+				{
+					if (Bytes > 0) { AddCopyBufferPass(GraphBuilder, GraphBuilder.RegisterExternalBuffer(Dst), 0, GraphBuilder.RegisterExternalBuffer(Src), 0, Bytes); }
+				};
+				Copy(S->PairStart[Last], OldStart, (OldN + 1) * sizeof(uint32));
+				Copy(S->PairIJ[Last], OldIJ, 2 * OldPairs * sizeof(uint32));
+				Copy(S->PermInv[Last], OldPerm, OldPairs * sizeof(uint32));
+				Copy(S->Lambda[Last], OldLam, OldPairs * sizeof(FVector4f));
+				Copy(S->SortedIJ[Last], OldSorted, 2 * OldPairs * sizeof(uint32));
+			}
+			S->CapN = NewCapN;
+			S->CapPairs = NewCapPairs;
+		}
+		if (bGrowB)
+		{
+			S->BondIJ   = Persist(sizeof(uint32), 2 * NewCapB, TEXT("SandSim.BondIJ"));
+			S->BondData = Persist(sizeof(FVector4f), NewCapB, TEXT("SandSim.BondData"));
+			S->BondAdj  = Persist(sizeof(uint32), 2 * NewCapB, TEXT("SandSim.BondAdj"));
+			S->CapB = NewCapB;
+		}
+
+		auto Up = [&](const TRefCountPtr<FRDGPooledBuffer>& PB, const void* Data, uint64 Bytes)
+		{
+			FRDGBufferRef B = GraphBuilder.RegisterExternalBuffer(PB);
+			if (Bytes > 0) { GraphBuilder.QueueBufferUpload(B, Data, Bytes, ERDGInitialDataFlags::NoCopy); }
+			else { AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(B), 0u); }
+		};
+		Up(S->Pos, In.Pos.GetData(), LN * sizeof(FVector4f));
+		Up(S->Vel, In.Vel.GetData(), LN * sizeof(FVector4f));
+		Up(S->PrevPos, In.Pos.GetData(), LN * sizeof(FVector4f));
+		Up(S->GroundLambda, In.GroundLambda.GetData(), LN * sizeof(float));
+		Up(S->WallLambda, In.WallLambda.GetData(), LN * sizeof(FVector4f));
+		Up(S->BondIJ, In.BondIJ.GetData(), In.BondIJ.Num() * sizeof(uint32));
+		Up(S->BondData, In.BondData.GetData(), LB * sizeof(FVector4f));
+		Up(S->BondAdjOffset, In.BondAdjOffset.GetData(), In.BondAdjOffset.Num() * sizeof(uint32));
+		Up(S->BondAdj, In.BondAdj.GetData(), In.BondAdj.Num() * sizeof(uint32));
+
+		if (bKeepPairs)
+		{
+			// 덧붙인 입자의 옛 쌍 구간은 비어 있어야 한다 — PairStart[OldN+1 .. LN] = 옛 총수
+			if (LN > OldN)
+			{
+				FSandFrameParams F;
+				F.FillFrom  = OldN + 1;
+				F.FillTo    = LN + 1;
+				F.FillValue = OldPairs;
+				F.FillTarget = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->PairStart[Last]));
+				AddDirectPass<FSandFillTailCS>(GraphBuilder, RDG_EVENT_NAME("SandFillTail"), ShaderMap, F, LN - OldN, 64);
+			}
+		}
+		else
+		{
+			// 옛 쌍 목록은 비어 있어야 한다 (구간 전부 0) — 첫 프레임은 차가운 시작
+			for (int32 k = 0; k < 2; ++k)
+			{
+				AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->PairStart[k])), 0u);
+			}
+		}
+		GraphBuilder.Execute();
+		RHICmdList.SubmitAndBlockUntilGPUIdle();
+		EndGpuFrame(RHICmdList);
+	});
+	FlushRenderingCommands();
+}
+
+void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
+{
+	check(IsInGameThread());
+	Out = FSandGpuStats();
+	if (N == 0)
+	{
+		return;
+	}
+	const double T0 = FPlatformTime::Seconds();
+	FState* S = State;
+	const int32 LN = N, LB = NumB, LMax = MaxPairCount;
+	uint32 TableSize = 1;
+	while ((int32)TableSize < LN * 2) { TableSize <<= 1; }
+	const int32 NumStatGroups = FMath::DivideAndRoundUp(LN, StatsGroup);
+	S->StatsPartial.SetNumUninitialized(NumStatGroups);
+	uint32 Counters[4] = {};
+	uint32 FrameCounts[4] = {};
+
+	ENQUEUE_RENDER_COMMAND(SandGpuSimStep)([S, &P, LN, LB, LMax, TableSize, NumStatGroups, &Counters, &FrameCounts](FRHICommandListImmediate& RHICmdList)
+	{
+		const int32 Cur = S->Cur, Old = 1 - S->Cur;
+		{
+			FRDGBuilder GraphBuilder(RHICmdList, RDG_EVENT_NAME("SandGpuSimStep"));
+			const FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+
+			// --- 영구 버퍼 ---
+			FRDGBufferRef Pos          = GraphBuilder.RegisterExternalBuffer(S->Pos);
+			FRDGBufferRef Vel          = GraphBuilder.RegisterExternalBuffer(S->Vel);
+			FRDGBufferRef PrevPos      = GraphBuilder.RegisterExternalBuffer(S->PrevPos);
+			FRDGBufferRef GroundLambda = GraphBuilder.RegisterExternalBuffer(S->GroundLambda);
+			FRDGBufferRef WallLambda   = GraphBuilder.RegisterExternalBuffer(S->WallLambda);
+			FRDGBufferRef BondIJ        = GraphBuilder.RegisterExternalBuffer(S->BondIJ);
+			FRDGBufferRef BondData      = GraphBuilder.RegisterExternalBuffer(S->BondData);
+			FRDGBufferRef BondAdjOffset = GraphBuilder.RegisterExternalBuffer(S->BondAdjOffset);
+			FRDGBufferRef BondAdj       = GraphBuilder.RegisterExternalBuffer(S->BondAdj);
+			FRDGBufferRef PairStart    = GraphBuilder.RegisterExternalBuffer(S->PairStart[Cur]);
+			FRDGBufferRef PairIJ       = GraphBuilder.RegisterExternalBuffer(S->PairIJ[Cur]);
+			FRDGBufferRef PermInv      = GraphBuilder.RegisterExternalBuffer(S->PermInv[Cur]);
+			FRDGBufferRef Lambda       = GraphBuilder.RegisterExternalBuffer(S->Lambda[Cur]);
+			FRDGBufferRef SortedIJ     = GraphBuilder.RegisterExternalBuffer(S->SortedIJ[Cur]);
+			FRDGBufferRef OldPairStart = GraphBuilder.RegisterExternalBuffer(S->PairStart[Old]);
+			FRDGBufferRef OldPairIJ    = GraphBuilder.RegisterExternalBuffer(S->PairIJ[Old]);
+			FRDGBufferRef OldPermInv   = GraphBuilder.RegisterExternalBuffer(S->PermInv[Old]);
+			FRDGBufferRef OldLambda    = GraphBuilder.RegisterExternalBuffer(S->Lambda[Old]);
+
+			// --- 프레임 임시 ---
+			FRDGBufferRef CellKey        = ScratchBuffer(GraphBuilder, TEXT("SandSim.CellKey"), sizeof(uint32), LN);
+			FRDGBufferRef CellSlot       = ScratchBuffer(GraphBuilder, TEXT("SandSim.CellSlot"), sizeof(uint32), LN);
+			FRDGBufferRef CellCount      = ScratchBuffer(GraphBuilder, TEXT("SandSim.CellCount"), sizeof(uint32), TableSize);
+			FRDGBufferRef CellStart      = ScratchBuffer(GraphBuilder, TEXT("SandSim.CellStart"), sizeof(uint32), TableSize + 1);
+			FRDGBufferRef SortedIdx      = ScratchBuffer(GraphBuilder, TEXT("SandSim.SortedIdx"), sizeof(uint32), LN);
+			FRDGBufferRef BlockKey       = ScratchBuffer(GraphBuilder, TEXT("SandSim.BlockKey"), sizeof(uint32), LN);
+			FRDGBufferRef PairCount      = ScratchBuffer(GraphBuilder, TEXT("SandSim.PairCount"), sizeof(uint32), LN);
+			FRDGBufferRef PairWarm       = ScratchBuffer(GraphBuilder, TEXT("SandSim.PairWarm"), sizeof(FVector4f), LMax);
+			FRDGBufferRef PairBlock      = ScratchBuffer(GraphBuilder, TEXT("SandSim.PairBlock"), sizeof(uint32), LMax);
+			FRDGBufferRef PairLocal      = ScratchBuffer(GraphBuilder, TEXT("SandSim.PairLocal"), sizeof(uint32), LMax);
+			FRDGBufferRef BlockPairCount = ScratchBuffer(GraphBuilder, TEXT("SandSim.BlockPairCount"), sizeof(uint32), BlockTableSize);
+			FRDGBufferRef BlockStart     = ScratchBuffer(GraphBuilder, TEXT("SandSim.BlockStart"), sizeof(uint32), BlockTableSize + 1);
+			FRDGBufferRef CountersBuf    = ScratchBuffer(GraphBuilder, TEXT("SandSim.Counters"), sizeof(uint32), 4);
+			FRDGBufferRef AdjCount       = ScratchBuffer(GraphBuilder, TEXT("SandSim.AdjCount"), sizeof(uint32), LN);
+			FRDGBufferRef AdjStart       = ScratchBuffer(GraphBuilder, TEXT("SandSim.AdjStart"), sizeof(uint32), LN + 1);
+			FRDGBufferRef Adj            = ScratchBuffer(GraphBuilder, TEXT("SandSim.Adj"), sizeof(uint32), 2 * LMax);
+			FRDGBufferRef AdjCursor      = ScratchBuffer(GraphBuilder, TEXT("SandSim.AdjCursor"), sizeof(uint32), LN);
+			FRDGBufferRef PairImpulse    = ScratchBuffer(GraphBuilder, TEXT("SandSim.PairImpulse"), sizeof(FVector4f), LMax);
+			FRDGBufferRef BondImpulse    = LB > 0 ? ScratchBuffer(GraphBuilder, TEXT("SandSim.BondImpulse"), sizeof(FVector4f), LB)
+			                                      : UploadBuffer(GraphBuilder, TEXT("SandSim.BondImpulse"), TArray<FVector4f>());
+			FRDGBufferRef FrameCountsBuf = ScratchBuffer(GraphBuilder, TEXT("SandSim.FrameCounts"), sizeof(uint32), 4);
+			FRDGBufferRef Stats          = ScratchBuffer(GraphBuilder, TEXT("SandSim.Stats"), sizeof(FVector4f), NumStatGroups);
+			FRDGBufferRef Count          = ScratchBuffer(GraphBuilder, TEXT("SandSim.Count"), sizeof(uint32), LN);
+			FRDGBufferRef BoundaryImpulse = ScratchBuffer(GraphBuilder, TEXT("SandSim.BoundaryImpulse"), sizeof(FVector4f), LMax);
+			FRDGBufferRef IndirectArgs   = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateIndirectDesc(4u, 12), TEXT("SandSim.IndirectArgs"));
+
+			AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(CellCount), 0u);
+			AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(BlockPairCount), 0u);
+			AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(CountersBuf), 0u);
+			AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(AdjCount), 0u);
+			AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(AdjCursor), 0u);
+
+			// --- 프레임 파라미터 ---
+			FSandFrameParams F;
+			F.NumParticles = LN;
+			F.TableSize    = TableSize;
+			F.BlockTable   = BlockTableSize;
+			F.MaxPairs     = LMax;
+			F.NumBonds     = LB;
+			F.ScanCount    = 0;
+			F.CellSize     = P.SearchRange;
+			F.Radius       = P.Radius;
+			F.StepDt       = P.StepDt;
+			F.BlockSize    = P.BlockSize;
+			F.WarmStart    = P.WarmStart;
+			F.WarmGapTol   = P.WarmGapTol;
+			F.bWarmTangent = P.bWarmTangent ? 1 : 0;
+			F.Friction     = P.Friction;
+			F.Gravity      = P.Gravity;
+			F.BondStretchBreak = P.BreakStretch;
+			F.bBondsDry    = P.bBondsDry ? 1 : 0;
+			F.VelocityDamping = P.VelocityDamping;
+			F.WallMode       = P.WallMode;
+			F.WallActiveMask = P.WallActiveMask;
+			F.WallLX    = P.WallLX;
+			F.WallLY    = P.WallLY;
+			F.WallLimit = P.WallLimit;
+			F.WallLiftZ = P.WallLiftZ;
+
+			F.PosRW = GraphBuilder.CreateUAV(Pos);           F.PosRO = GraphBuilder.CreateSRV(Pos);
+			F.VelRW = GraphBuilder.CreateUAV(Vel);           F.VelRO = GraphBuilder.CreateSRV(Vel);
+			F.PrevPosRW = GraphBuilder.CreateUAV(PrevPos);
+			F.CellKeyRW = GraphBuilder.CreateUAV(CellKey);   F.CellKeyRO = GraphBuilder.CreateSRV(CellKey);
+			F.CellSlotRW = GraphBuilder.CreateUAV(CellSlot); F.CellSlotRO = GraphBuilder.CreateSRV(CellSlot);
+			F.CellCountRW = GraphBuilder.CreateUAV(CellCount);
+			F.CellStart = GraphBuilder.CreateSRV(CellStart);
+			F.SortedIdxRW = GraphBuilder.CreateUAV(SortedIdx); F.SortedIdxRO = GraphBuilder.CreateSRV(SortedIdx);
+			F.BlockKeyRW = GraphBuilder.CreateUAV(BlockKey);   F.BlockKeyRO = GraphBuilder.CreateSRV(BlockKey);
+			F.PairCountRW = GraphBuilder.CreateUAV(PairCount);
+			F.PairStart = GraphBuilder.CreateSRV(PairStart);
+			F.PairIJRW = GraphBuilder.CreateUAV(PairIJ);       F.PairIJRO = GraphBuilder.CreateSRV(PairIJ);
+			F.PairWarmRW = GraphBuilder.CreateUAV(PairWarm);   F.PairWarmRO = GraphBuilder.CreateSRV(PairWarm);
+			F.PairBlockRW = GraphBuilder.CreateUAV(PairBlock); F.PairBlockRO = GraphBuilder.CreateSRV(PairBlock);
+			F.PairLocalRW = GraphBuilder.CreateUAV(PairLocal); F.PairLocalRO = GraphBuilder.CreateSRV(PairLocal);
+			F.BlockPairCountRW = GraphBuilder.CreateUAV(BlockPairCount);
+			F.BlockStart = GraphBuilder.CreateSRV(BlockStart);
+			F.CountersRW = GraphBuilder.CreateUAV(CountersBuf);   F.CountersRO = GraphBuilder.CreateSRV(CountersBuf);
+			F.OldPairStart = GraphBuilder.CreateSRV(OldPairStart);
+			F.OldPairIJ    = GraphBuilder.CreateSRV(OldPairIJ);
+			F.OldPermInv   = GraphBuilder.CreateSRV(OldPermInv);
+			F.OldLambda    = GraphBuilder.CreateSRV(OldLambda);
+			F.SortedIJRW = GraphBuilder.CreateUAV(SortedIJ);
+			F.LambdaRW   = GraphBuilder.CreateUAV(Lambda);
+			F.PermInvRW  = GraphBuilder.CreateUAV(PermInv);
+			F.PairImpulseRW = GraphBuilder.CreateUAV(PairImpulse); F.PairImpulseRO = GraphBuilder.CreateSRV(PairImpulse);
+			F.AdjCountRW = GraphBuilder.CreateUAV(AdjCount);
+			F.AdjStart   = GraphBuilder.CreateSRV(AdjStart);
+			F.AdjRW = GraphBuilder.CreateUAV(Adj);             F.AdjRO = GraphBuilder.CreateSRV(Adj);
+			F.AdjCursorRW = GraphBuilder.CreateUAV(AdjCursor);
+			F.BondIJ = GraphBuilder.CreateSRV(BondIJ);
+			F.BondDataRW = GraphBuilder.CreateUAV(BondData);   F.BondDataRO = GraphBuilder.CreateSRV(BondData);
+			F.BondImpulseRW = GraphBuilder.CreateUAV(BondImpulse); F.BondImpulseRO = GraphBuilder.CreateSRV(BondImpulse);
+			F.BondAdjOffset = GraphBuilder.CreateSRV(BondAdjOffset);
+			F.BondAdj = GraphBuilder.CreateSRV(BondAdj);
+			F.GroundLambdaRW = GraphBuilder.CreateUAV(GroundLambda);
+			F.WallLambdaRW   = GraphBuilder.CreateUAV(WallLambda);
+			F.IndirectArgsRW = GraphBuilder.CreateUAV(IndirectArgs, PF_R32_UINT);
+			F.FrameCountsRW = GraphBuilder.CreateUAV(FrameCountsBuf); F.FrameCountsRO = GraphBuilder.CreateSRV(FrameCountsBuf);
+			F.StatsRW = GraphBuilder.CreateUAV(Stats);
+
+			// --- 이웃 탐색 · 쌍 생성 · 워밍 · 예측 ---
+			AddDirectPass<FSandCellKeyCS>(GraphBuilder, RDG_EVENT_NAME("SandCellKey"), ShaderMap, F, LN, 64);
+			AddScan(GraphBuilder, ShaderMap, F, CellCount, CellStart, TableSize);
+			AddDirectPass<FSandScatterCS>(GraphBuilder, RDG_EVENT_NAME("SandScatter"), ShaderMap, F, LN, 64);
+			AddDirectPass<FSandPairCountCS>(GraphBuilder, RDG_EVENT_NAME("SandPairCount"), ShaderMap, F, LN, 64);
+			AddScan(GraphBuilder, ShaderMap, F, PairCount, PairStart, LN);
+			AddDirectPass<FSandPairFillCS>(GraphBuilder, RDG_EVENT_NAME("SandPairFill"), ShaderMap, F, LN, 64);
+			AddScan(GraphBuilder, ShaderMap, F, BlockPairCount, BlockStart, BlockTableSize);
+			AddScan(GraphBuilder, ShaderMap, F, AdjCount, AdjStart, LN);
+			AddDirectPass<FSandBuildArgsCS>(GraphBuilder, RDG_EVENT_NAME("SandBuildArgs"), ShaderMap, F, 1, 1);
+			AddIndirectPass<FSandPairScatterCS>(GraphBuilder, RDG_EVENT_NAME("SandPairScatter"), ShaderMap, F, IndirectArgs, 0);
+			if (LB > 0)
+			{
+				AddDirectPass<FSandBondWarmCS>(GraphBuilder, RDG_EVENT_NAME("SandBondWarm"), ShaderMap, F, LB, 64);
+			}
+			AddDirectPass<FSandWarmPredictCS>(GraphBuilder, RDG_EVENT_NAME("SandWarmPredict"), ShaderMap, F, LN, 64);
+
+			// --- 반복 ---
+			FSandSolverParams T;
+			T.NumParticles = LN;
+			T.NumInternal  = 0;
+			T.NumBoundary  = 0;
+			T.NumBlocks    = BlockTableSize;
+			T.NumBonds     = LB;   // 결합이 있으면 항상 돈다 — 꺼져 있을 땐 임펄스 0 을 써야 ApplyBonds 가 워밍 임펄스를 다시 읽지 않는다
+			T.bUseFrameCounts = 1;
+			T.bBondsActive = P.bBondsActive ? 1 : 0;
+			T.Radius   = P.Radius;
+			T.StepDt   = P.StepDt;
+			T.Kv       = P.Kv;
+			T.Kc       = P.Kc;
+			T.SorOmega = P.SorOmega;
+			T.Friction = P.Friction;
+			T.bMassSplit     = P.bMassSplit ? 1 : 0;
+			T.BondAlphaTilde = P.BondAlphaTilde;
+			T.BondLambdaMax  = P.BondLambdaMax;
+			T.BondOmega      = P.BondOmega;
+			T.WallMode       = P.WallMode;
+			T.WallActiveMask = P.WallActiveMask;
+			T.WallLX       = P.WallLX;
+			T.WallLY       = P.WallLY;
+			T.WallLimit    = P.WallLimit;
+			T.WallLiftZ    = P.WallLiftZ;
+			T.WallFriction = P.WallFriction;
+			T.PosRO = F.PosRO;  T.PosRW = F.PosRW;
+			T.VelRO = F.VelRO;  T.VelRW = F.VelRW;
+			T.PrevPos = GraphBuilder.CreateSRV(PrevPos);
+			T.ContactIJ       = GraphBuilder.CreateSRV(SortedIJ);
+			T.ContactLambdaRO = GraphBuilder.CreateSRV(Lambda);
+			T.ContactLambdaRW = F.LambdaRW;
+			T.BlockRange      = F.BlockStart;
+			T.BoundaryImpulseRW = GraphBuilder.CreateUAV(BoundaryImpulse);
+			T.BoundaryImpulseRO = GraphBuilder.CreateSRV(BoundaryImpulse);
+			T.BoundaryAdjOffset = F.AdjStart;
+			T.BoundaryAdj       = F.AdjRO;
+			T.FrameCounts       = F.FrameCountsRO;
+			T.CountRW = GraphBuilder.CreateUAV(Count);
+			T.CountRO = GraphBuilder.CreateSRV(Count);
+			T.BondIJ        = F.BondIJ;
+			T.BondDataRW    = F.BondDataRW;
+			T.BondImpulseRW = F.BondImpulseRW;
+			T.BondImpulseRO = F.BondImpulseRO;
+			T.BondAdjOffset = F.BondAdjOffset;
+			T.BondAdj       = F.BondAdj;
+			T.GroundLambdaRW = F.GroundLambdaRW;
+			T.WallLambdaRW   = F.WallLambdaRW;
+			AddSolverIterations(GraphBuilder, ShaderMap, T, P.Iterations, LN, BlockTableSize, LB, P.bMassSplit, IndirectArgs, 0);
+
+			// --- 파단 · 통계 ---
+			if (LB > 0)
+			{
+				AddDirectPass<FSandBreakBondsCS>(GraphBuilder, RDG_EVENT_NAME("SandBreakBonds"), ShaderMap, F, LB, 64);
+			}
+			AddDirectPass<FSandStatsCS>(GraphBuilder, RDG_EVENT_NAME("SandStats"), ShaderMap, F, NumStatGroups * StatsGroup, StatsGroup);
+
+			AddEnqueueCopyPass(GraphBuilder, &S->StatsRB, Stats, NumStatGroups * sizeof(FVector4f));
+			AddEnqueueCopyPass(GraphBuilder, &S->CountersRB, CountersBuf, 4 * sizeof(uint32));
+			AddEnqueueCopyPass(GraphBuilder, &S->FrameCountsRB, FrameCountsBuf, 4 * sizeof(uint32));
+			GraphBuilder.Execute();
+		}
+		RHICmdList.SubmitAndBlockUntilGPUIdle();
+		FetchReadback(S->StatsRB, S->StatsPartial.GetData(), NumStatGroups * sizeof(FVector4f));
+		FetchReadback(S->CountersRB, Counters, 4 * sizeof(uint32));
+		FetchReadback(S->FrameCountsRB, FrameCounts, 4 * sizeof(uint32));
+		S->Cur = Old;
+		EndGpuFrame(RHICmdList);
+	});
+	FlushRenderingCommands();
+
+	for (const FVector4f& G : S->StatsPartial)
+	{
+		Out.SumSpeed  += G.X;
+		Out.MaxSpeed   = FMath::Max(Out.MaxSpeed, G.Y);
+		Out.FreeCount += (int32)*reinterpret_cast<const uint32*>(&G.Z);
+		Out.SumLambda += G.W;
+	}
+	Out.BondsBroken  = Counters[1];
+	Out.PairOverflow = Counters[2];
+	Out.NumPairs     = FrameCounts[0];
+	Out.NumInternal  = FrameCounts[1];
+	Out.NumBoundary  = FrameCounts[2];
+	LastNumPairs = Out.NumPairs;
+	Out.GpuMs = (FPlatformTime::Seconds() - T0) * 1000.0;
+}
+
+void FSandGpuSim::Download(FSandGpuDownload& Out) const
+{
+	check(IsInGameThread());
+	Out.Pos.SetNumUninitialized(N);
+	Out.Vel.SetNumUninitialized(N);
+	Out.PairIJ.SetNumUninitialized(2 * LastNumPairs);
+	Out.PairLambda.SetNumUninitialized(LastNumPairs);
+	Out.BondData.SetNumUninitialized(NumB);
+	Out.GroundLambda.SetNumUninitialized(N);
+	Out.WallLambda.SetNumUninitialized(N);
+	if (N == 0)
+	{
+		return;
+	}
+	FState* S = State;
+	const int32 LN = N, LB = NumB, LP = LastNumPairs;
+	ENQUEUE_RENDER_COMMAND(SandGpuSimDownload)([S, &Out, LN, LB, LP](FRHICommandListImmediate& RHICmdList)
+	{
+		const int32 Last = 1 - S->Cur;   // Step 끝에서 Cur 를 넘겼으므로 마지막으로 쓴 벌은 1 − Cur
+		{
+			FRDGBuilder GraphBuilder(RHICmdList, RDG_EVENT_NAME("SandGpuSimDownload"));
+			AddEnqueueCopyPass(GraphBuilder, &S->DlPos, GraphBuilder.RegisterExternalBuffer(S->Pos), LN * sizeof(FVector4f));
+			AddEnqueueCopyPass(GraphBuilder, &S->DlVel, GraphBuilder.RegisterExternalBuffer(S->Vel), LN * sizeof(FVector4f));
+			AddEnqueueCopyPass(GraphBuilder, &S->DlGround, GraphBuilder.RegisterExternalBuffer(S->GroundLambda), LN * sizeof(float));
+			AddEnqueueCopyPass(GraphBuilder, &S->DlWall, GraphBuilder.RegisterExternalBuffer(S->WallLambda), LN * sizeof(FVector4f));
+			if (LP > 0)
+			{
+				AddEnqueueCopyPass(GraphBuilder, &S->DlPairIJ, GraphBuilder.RegisterExternalBuffer(S->SortedIJ[Last]), 2 * LP * sizeof(uint32));
+				AddEnqueueCopyPass(GraphBuilder, &S->DlLambda, GraphBuilder.RegisterExternalBuffer(S->Lambda[Last]), LP * sizeof(FVector4f));
+			}
+			if (LB > 0)
+			{
+				AddEnqueueCopyPass(GraphBuilder, &S->DlBond, GraphBuilder.RegisterExternalBuffer(S->BondData), LB * sizeof(FVector4f));
+			}
+			GraphBuilder.Execute();
+		}
+		RHICmdList.SubmitAndBlockUntilGPUIdle();
+		FetchReadback(S->DlPos, Out.Pos.GetData(), LN * sizeof(FVector4f));
+		FetchReadback(S->DlVel, Out.Vel.GetData(), LN * sizeof(FVector4f));
+		FetchReadback(S->DlGround, Out.GroundLambda.GetData(), LN * sizeof(float));
+		FetchReadback(S->DlWall, Out.WallLambda.GetData(), LN * sizeof(FVector4f));
+		FetchReadback(S->DlPairIJ, Out.PairIJ.GetData(), 2 * LP * sizeof(uint32));
+		FetchReadback(S->DlLambda, Out.PairLambda.GetData(), LP * sizeof(FVector4f));
+		FetchReadback(S->DlBond, Out.BondData.GetData(), LB * sizeof(FVector4f));
+		EndGpuFrame(RHICmdList);
+	});
+	FlushRenderingCommands();
 }

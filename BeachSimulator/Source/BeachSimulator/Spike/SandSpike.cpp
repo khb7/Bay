@@ -41,6 +41,7 @@ void FSandSpike::InitTiltBox(const FSandParams& InParams, const FTiltSetup& InTi
 
 void FSandSpike::SaveState(FSandState& Out) const
 {
+	SyncFromGpu();
 	Out.Pos     = Pos;
 	Out.Vel     = Vel;
 	Out.TiltDeg = TiltDeg;
@@ -48,6 +49,9 @@ void FSandSpike::SaveState(FSandState& Out) const
 
 void FSandSpike::RestoreState(const FSandState& In)
 {
+	bGpuDirty = true;
+	bGpuStale = false;   // 복원이 GPU 쪽 결과를 덮는다
+	bGpuPairsValid = false;
 	Pos     = In.Pos;
 	Vel     = In.Vel;
 	PrevPos = In.Pos;
@@ -66,6 +70,8 @@ void FSandSpike::SetTiltDegrees(float Deg)
 
 void FSandSpike::ResizeBuffers()
 {
+	bGpuDirty = true;         // 입자 수가 바뀌는 길은 전부 여기를 지난다
+	bGpuPairsValid = false;   // AddParticles 만 덧붙임이라 되살린다
 	// 입자 수의 2배 이상인 2의 거듭제곱. 충돌은 거리 검사가 걸러내므로 정확도가 아니라 비용 문제다
 	TableSize = 1;
 	while (TableSize < FMath::Max(1, Pos.Num()) * 2)
@@ -202,6 +208,8 @@ float FSandSpike::BondCompliance() const
 int32 FSandSpike::FormBonds()
 {
 	if (CohesionOfW(Params.WGlobal) <= 0.f) { return 0; }
+	SyncFromGpu();
+	bGpuDirty = true;
 
 	const float D = 2.f * Params.Radius;
 	const float MaxDist = D * Params.BondFormStretch;
@@ -338,6 +346,7 @@ void FSandSpike::BreakBonds()
 
 int32 FSandSpike::RemoveParticles(TFunctionRef<bool(int32)> ShouldRemove)
 {
+	SyncFromGpu();
 	TArray<int32> NewIndex;
 	NewIndex.SetNum(Pos.Num());
 	int32 Kept = 0;
@@ -376,6 +385,8 @@ int32 FSandSpike::RemoveParticles(TFunctionRef<bool(int32)> ShouldRemove)
 
 void FSandSpike::AddParticles(const TArray<FVector3f>& NewPos)
 {
+	SyncFromGpu();
+	const bool bPairsWereValid = bGpuPairsValid;
 	for (const FVector3f& P : NewPos)
 	{
 		Pos.Add(P);
@@ -384,6 +395,7 @@ void FSandSpike::AddParticles(const TArray<FVector3f>& NewPos)
 		InvMass.Add(1.f);
 	}
 	ResizeBuffers();
+	bGpuPairsValid = bPairsWereValid;   // 덧붙이기만 했다 — GPU 쌍 목록(워밍)은 그대로 쓴다
 }
 
 void FSandSpike::SpawnTiltBox()
@@ -907,15 +919,15 @@ void FSandSpike::SolveIterationsGpu(float StepDt)
 		++BlockCount[B];
 	}
 	const int32 NumBlocks = BlockCount.Num();
-	D.BlockRange.SetNumUninitialized(NumBlocks * 2);
+	D.BlockRange.SetNumUninitialized(NumBlocks + 1);
 	int32 NumInternal = 0;
 	for (int32 b = 0; b < NumBlocks; ++b)
 	{
-		D.BlockRange[2 * b]     = NumInternal;
-		D.BlockRange[2 * b + 1] = BlockCount[b];
+		D.BlockRange[b] = NumInternal;
 		NumInternal += BlockCount[b];
-		BlockCount[b] = D.BlockRange[2 * b];   // 이제부터 채움 커서
+		BlockCount[b] = D.BlockRange[b];   // 이제부터 채움 커서
 	}
+	D.BlockRange[NumBlocks] = NumInternal;
 	D.NumInternal = NumInternal;
 
 	TArray<int32> GpuSlot;          // 접촉 → GPU 버퍼 자리
@@ -938,8 +950,8 @@ void FSandSpike::SolveIterationsGpu(float StepDt)
 	const int32 NumBoundary = NumC - NumInternal;
 	LastBoundaryFrac = NumC > 0 ? (float)NumBoundary / NumC : 0.f;
 
-	// 입자별 인접 (CSR). 원소 = (순번 << 1) | (입자가 j 쪽이면 1). Offset 에는 입자별 개수가 [i+1] 에 들어 있다
-	auto FillAdj = [N](TArray<uint32>& Offset, TArray<uint32>& Adj, int32 Count, TFunctionRef<void(int32, int32&, int32&)> PairOf)
+	// 입자별 인접 (CSR). 원소 = ((Base + 순번) << 1) | (입자가 j 쪽이면 1). Offset 에는 입자별 개수가 [i+1] 에 들어 있다
+	auto FillAdj = [N](TArray<uint32>& Offset, TArray<uint32>& Adj, int32 Count, int32 Base, TFunctionRef<void(int32, int32&, int32&)> PairOf)
 	{
 		for (int32 i = 0; i < N; ++i) { Offset[i + 1] += Offset[i]; }
 		Adj.SetNumUninitialized(Offset[N]);
@@ -948,11 +960,11 @@ void FSandSpike::SolveIterationsGpu(float StepDt)
 		{
 			int32 I, J;
 			PairOf(c, I, J);
-			Adj[Cursor[I]++] = ((uint32)c << 1);
-			Adj[Cursor[J]++] = ((uint32)c << 1) | 1u;
+			Adj[Cursor[I]++] = ((uint32)(Base + c) << 1);
+			Adj[Cursor[J]++] = ((uint32)(Base + c) << 1) | 1u;
 		}
 	};
-	FillAdj(D.BoundaryAdjOffset, D.BoundaryAdj, NumBoundary, [&](int32 c, int32& I, int32& J)
+	FillAdj(D.BoundaryAdjOffset, D.BoundaryAdj, NumBoundary, NumInternal, [&](int32 c, int32& I, int32& J)
 	{
 		I = D.ContactIJ[2 * (NumInternal + c)];
 		J = D.ContactIJ[2 * (NumInternal + c) + 1];
@@ -979,7 +991,7 @@ void FSandSpike::SolveIterationsGpu(float StepDt)
 			++D.BondAdjOffset[Bonds[b].I + 1];
 			++D.BondAdjOffset[Bonds[b].J + 1];
 		}
-		FillAdj(D.BondAdjOffset, D.BondAdj, NumB, [&](int32 b, int32& I, int32& J) { I = Bonds[b].I; J = Bonds[b].J; });
+		FillAdj(D.BondAdjOffset, D.BondAdj, NumB, 0, [&](int32 b, int32& I, int32& J) { I = Bonds[b].I; J = Bonds[b].J; });
 		D.BondAlphaTilde = Alpha / (StepDt * StepDt);
 		D.BondLambdaMax  = Params.BondStrength * FMath::Abs(Params.Gravity) * CohesionOfW(Params.WGlobal) * StepDt * StepDt;
 		D.BondOmega      = Params.BondOmega;
@@ -993,23 +1005,8 @@ void FSandSpike::SolveIterationsGpu(float StepDt)
 	D.Friction = Params.Friction;
 	D.bMassSplit = Params.bMassSplit;
 
-	D.WallMode = 0;
-	D.WallActiveMask = 0;
 	D.WallFriction = Params.WallFriction;
-	if (bWallsActive && bBoxScene)
-	{
-		D.WallMode = 1;
-		D.WallLX = BoxHalf.X - Params.Radius;
-		D.WallLY = BoxHalf.Y - Params.Radius;
-		D.WallActiveMask = 4u | 8u;
-		if (!Tilt.bOpenDownhill) { D.WallActiveMask |= 1u; if (!Tilt.bOpenXPlus) { D.WallActiveMask |= 2u; } }
-	}
-	else if (bWallsActive)
-	{
-		D.WallMode  = 2;
-		D.WallLimit = WallRadius - Params.Radius;
-		D.WallLiftZ = WallLiftZ;
-	}
+	BuildWallParams(D.WallMode, D.WallActiveMask, D.WallLX, D.WallLY, D.WallLimit, D.WallLiftZ);
 
 	const double T1 = FPlatformTime::Seconds();
 	SandGpu::Solve(D);
@@ -1036,6 +1033,164 @@ void FSandSpike::SolveIterationsGpu(float StepDt)
 
 	GpuMs     += (float)((T2 - T1) * 1000.0);
 	GpuPrepMs += (float)((T1 - T0 + FPlatformTime::Seconds() - T2) * 1000.0);
+}
+
+void FSandSpike::BuildWallParams(int32& Mode, uint32& Mask, float& LX, float& LY, float& Limit, float& LiftZ) const
+{
+	Mode = 0; Mask = 0; LX = LY = Limit = LiftZ = 0.f;
+	if (bWallsActive && bBoxScene)
+	{
+		Mode = 1;
+		LX = BoxHalf.X - Params.Radius;
+		LY = BoxHalf.Y - Params.Radius;
+		Mask = 4u | 8u;
+		if (!Tilt.bOpenDownhill) { Mask |= 1u; if (!Tilt.bOpenXPlus) { Mask |= 2u; } }
+	}
+	else if (bWallsActive)
+	{
+		Mode  = 2;
+		Limit = WallRadius - Params.Radius;
+		LiftZ = WallLiftZ;
+	}
+}
+
+void FSandSpike::BuildBondUpload(TArray<uint32>& IJ, TArray<FVector4f>& Data, TArray<uint32>& AdjOffset, TArray<uint32>& Adj) const
+{
+	const int32 N = Pos.Num();
+	const int32 NumB = Bonds.Num();
+	IJ.SetNumUninitialized(NumB * 2);
+	Data.SetNumUninitialized(NumB);
+	AdjOffset.SetNumZeroed(N + 1);
+	for (int32 b = 0; b < NumB; ++b)
+	{
+		IJ[2 * b]     = Bonds[b].I;
+		IJ[2 * b + 1] = Bonds[b].J;
+		Data[b]       = FVector4f(Bonds[b].RestLen, Bonds[b].Lambda, 0.f, 0.f);
+		++AdjOffset[Bonds[b].I + 1];
+		++AdjOffset[Bonds[b].J + 1];
+	}
+	for (int32 i = 0; i < N; ++i) { AdjOffset[i + 1] += AdjOffset[i]; }
+	Adj.SetNumUninitialized(AdjOffset[N]);
+	TArray<uint32> Cursor(AdjOffset.GetData(), N);
+	for (int32 b = 0; b < NumB; ++b)
+	{
+		Adj[Cursor[Bonds[b].I]++] = ((uint32)b << 1);
+		Adj[Cursor[Bonds[b].J]++] = ((uint32)b << 1) | 1u;
+	}
+}
+
+void FSandSpike::SyncToGpu()
+{
+	if (!GpuSim) { GpuSim = MakeUnique<FSandGpuSim>(); }
+	FSandGpuUpload U;
+	const int32 N = Pos.Num();
+	U.Pos.SetNumUninitialized(N);
+	U.Vel.SetNumUninitialized(N);
+	for (int32 i = 0; i < N; ++i)
+	{
+		U.Pos[i] = FVector4f(Pos[i], InvMass[i]);
+		U.Vel[i] = FVector4f(Vel[i], 0.f);
+	}
+	U.GroundLambda = GroundLambdaN;
+	U.WallLambda   = WallLambda;
+	BuildBondUpload(U.BondIJ, U.BondData, U.BondAdjOffset, U.BondAdj);
+	GpuSim->Upload(U, bGpuPairsValid);
+	GpuBondsUploaded = Bonds;
+	bGpuDirty = false;
+	bGpuStale = false;
+	if (!bGpuPairsValid) { Contacts.Reset(); }   // 제거·재배치 뒤엔 접촉 λ 를 버린다 — 한 프레임 차가운 시작 (RemoveParticles 의 CPU 규약과 같다)
+	bGpuPairsValid = true;
+	WarmLambda.Reset();
+}
+
+void FSandSpike::SyncFromGpu() const
+{
+	if (!bGpuStale || !GpuSim) { return; }
+	FSandSpike* Self = const_cast<FSandSpike*>(this);
+	FSandGpuDownload D;
+	GpuSim->Download(D);
+	const int32 N = Pos.Num();
+	check(D.Pos.Num() == N);
+	for (int32 i = 0; i < N; ++i)
+	{
+		Self->Pos[i] = FVector3f(D.Pos[i]);
+		Self->Vel[i] = FVector3f(D.Vel[i]);
+	}
+	Self->GroundLambdaN = D.GroundLambda;
+	Self->WallLambda    = D.WallLambda;
+
+	const int32 NumC = D.PairLambda.Num();
+	Self->Contacts.SetNum(NumC);
+	for (int32 k = 0; k < NumC; ++k)
+	{
+		FSandContact& C = Self->Contacts[k];
+		C = FSandContact{};
+		C.I = (int32)D.PairIJ[2 * k];
+		C.J = (int32)D.PairIJ[2 * k + 1];
+		C.LambdaN   = D.PairLambda[k].W;
+		C.LambdaTan = FVector3f(D.PairLambda[k]);
+	}
+
+	// 결합 — GPU 는 죽은 결합을 표시만 한다(x < 0). CPU 목록은 올린 순서(GpuBondsUploaded)에서 산 것만 추린다.
+	// GPU 쪽 번호는 올린 순서 그대로라 다시 올릴 필요가 없다
+	check(D.BondData.Num() == GpuBondsUploaded.Num());
+	Self->Bonds.Reset(GpuBondsUploaded.Num());
+	for (int32 b = 0; b < GpuBondsUploaded.Num(); ++b)
+	{
+		if (D.BondData[b].X < 0.f) { continue; }
+		FSandBond B = GpuBondsUploaded[b];
+		B.Lambda = D.BondData[b].Y;
+		Self->Bonds.Add(B);
+	}
+
+	Self->bGpuStale = false;
+}
+
+void FSandSpike::StepGpuResident(float Dt)
+{
+	checkf(SandGpu::IsAvailable(), TEXT("-gpu2 는 RHI 가 필요하다. 커맨드릿이면 -AllowCommandletRendering 을 붙일 것"));
+	checkf(Params.Substeps == 1 && Params.bSequentialPositions && Params.MomentumA == 0.f && !Params.bMassSplitBonds,
+		TEXT("GPU 상주 경로는 서브스텝 1 · SP · 모멘텀 0 · 결합 질량 분할 없음 만 지원한다"));
+
+	if (bGpuDirty) { SyncToGpu(); }
+
+	// 탐색 반경 — BuildContacts 와 같은 식이되 상한이 8R 이 아니라 2R 이다. 쌍 수는 반경의 세제곱이라 8R(지름 5배)이면
+	// 입자당 300쌍이 되어 GPU 버퍼가 못 받는다. 2R 은 한 프레임에 반경 두 개(150 cm/s)까지의 이동을 놓치지 않는다 — 붓기 낙하(≈100 cm/s)는 안이다
+	const float D = 2.f * Params.Radius;
+	const float Margin = FMath::Clamp(2.f * LastMaxSpeed * Dt, 0.1f * Params.Radius, 2.f * Params.Radius);
+
+	FSandGpuFrameParams P;
+	P.Iterations  = Params.Iterations;
+	P.Radius      = Params.Radius;
+	P.StepDt      = Dt;
+	P.SearchRange = D + Margin;
+	P.BlockSize   = Params.BlockSize > 0.f ? Params.BlockSize : 30.f;
+	P.WarmStart   = Params.WarmStart;
+	P.WarmGapTol  = Params.WarmGapTol;
+	P.bWarmTangent = Params.bWarmTangent;
+	P.Kv = Params.Kv; P.Kc = Params.Kc; P.SorOmega = Params.SorOmega; P.Friction = Params.Friction;
+	P.bMassSplit  = Params.bMassSplit;
+	P.Gravity     = GravityDir * (FMath::Abs(Params.Gravity) * GravityScale);
+	const float Alpha = BondCompliance();
+	P.bBondsActive   = Bonds.Num() > 0 && Alpha > 0.f;
+	P.bBondsDry      = CohesionOfW(Params.WGlobal) <= 0.f;
+	P.BondAlphaTilde = Alpha > 0.f ? Alpha / (Dt * Dt) : 0.f;
+	P.BondLambdaMax  = Params.BondStrength * FMath::Abs(Params.Gravity) * CohesionOfW(Params.WGlobal) * Dt * Dt;
+	P.BondOmega      = Params.BondOmega;
+	P.BreakStretch   = Params.BreakStretch;
+	P.VelocityDamping = VelocityDamping;
+	P.WallFriction   = Params.WallFriction;
+	BuildWallParams(P.WallMode, P.WallActiveMask, P.WallLX, P.WallLY, P.WallLimit, P.WallLiftZ);
+
+	FSandGpuStats S;
+	GpuSim->Step(P, S);
+	checkf(S.PairOverflow == 0, TEXT("GPU 쌍 버퍼 넘침 (%d) — MaxPairs 를 올릴 것"), S.PairOverflow);
+
+	BondsBrokenTotal += S.BondsBroken;
+	LastBoundaryFrac = S.NumPairs > 0 ? (float)S.NumBoundary / S.NumPairs : 0.f;
+	GpuMs = (float)S.GpuMs;
+	ApplyFrameStats(S.SumSpeed, S.MaxSpeed, S.FreeCount, S.SumLambda);
+	bGpuStale = true;
 }
 
 void FSandSpike::ApplyGatheredVelocityDeltas(float StepDt)
@@ -1371,6 +1526,7 @@ void FSandSpike::ApplyDynamicFriction(float SubDt)
 
 int32 FSandSpike::ContactCountOf(int32 i) const
 {
+	SyncFromGpu();
 	int32 N = 0;
 	for (const FSandContact& C : Contacts)
 	{
@@ -1381,6 +1537,7 @@ int32 FSandSpike::ContactCountOf(int32 i) const
 
 FString FSandSpike::DescribeParticle(int32 i) const
 {
+	SyncFromGpu();
 	const float D = 2.f * Params.Radius;
 	FString S = FString::Printf(TEXT("#%d p(%.2f %.2f %.2f) prev(%.2f %.2f %.2f) v(%.1f %.1f %.1f) |v| %.1f gλ %.3f 접촉:"),
 		i, Pos[i].X, Pos[i].Y, Pos[i].Z, PrevPos[i].X, PrevPos[i].Y, PrevPos[i].Z,
@@ -1419,16 +1576,19 @@ void FSandSpike::UpdateSettleState(float Dt)
 		MaxSpeed  = FMath::Max(MaxSpeed, S);
 		++Free;
 	}
+	// 불평형력 비 — 남은 운동량(= 이번 스텝에 못 푼 잔차) 을 접촉이 나른 임펄스로 나눈다. 둘 다 질량·속도 단위
+	double SumLambda = 0.0;
+	for (const FSandContact& C : Contacts) { SumLambda += FMath::Abs(C.LambdaN); }
+	for (int32 i = 0; i < GroundLambdaN.Num(); ++i) { SumLambda += FMath::Abs(GroundLambdaN[i]); }
+
+	ApplyFrameStats(SumSpeed, MaxSpeed, Free, SumLambda);
+}
+
+void FSandSpike::ApplyFrameStats(double SumSpeed, float MaxSpeed, int32 Free, double SumLambda)
+{
 	LastAvgSpeed = Free > 0 ? (float)(SumSpeed / Free) : 0.f;
 	LastMaxSpeed = MaxSpeed;
-
-	// 불평형력 비 — 남은 운동량(= 이번 스텝에 못 푼 잔차) 을 접촉이 나른 임펄스로 나눈다. 둘 다 질량·속도 단위
-	{
-		double SumLambda = 0.0;
-		for (const FSandContact& C : Contacts) { SumLambda += FMath::Abs(C.LambdaN); }
-		for (int32 i = 0; i < GroundLambdaN.Num(); ++i) { SumLambda += FMath::Abs(GroundLambdaN[i]); }
-		LastUnbalanced = SumLambda > 0.0 ? (float)(SumSpeed / SumLambda) : 0.f;   // m = 1
-	}
+	LastUnbalanced = SumLambda > 0.0 ? (float)(SumSpeed / SumLambda) : 0.f;   // m = 1
 
 	// §2-2 — 평균 |v| < ε·√(g·d) 가 60프레임 연속.
 	// dt 가 들어가지 않으므로 시간 조각을 바꿔도 판정선이 안 움직인다
@@ -1440,9 +1600,18 @@ void FSandSpike::UpdateSettleState(float Dt)
 void FSandSpike::Step(float Dt)
 {
 	const double T0 = FPlatformTime::Seconds();
+	GpuMs = GpuPrepMs = 0.f;
+
+	if (Params.bGpuResident)
+	{
+		StepGpuResident(Dt);
+		++Frame;
+		Time  += Dt;
+		StepMs = (float)((FPlatformTime::Seconds() - T0) * 1000.0);
+		return;
+	}
 
 	BuildContacts(Dt);   // ★ 프레임당 1회 (논문 §3.5)
-	GpuMs = GpuPrepMs = 0.f;
 
 	const float SubDt = Dt / (float)Params.Substeps;
 	for (int32 s = 0; s < Params.Substeps; ++s)

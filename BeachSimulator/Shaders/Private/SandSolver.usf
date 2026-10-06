@@ -18,6 +18,8 @@ uint  NumInternal;      // 접촉 버퍼 앞쪽 = 블록 안 접촉 (블록 순�
 uint  NumBoundary;
 uint  NumBlocks;
 uint  NumBonds;
+uint  bUseFrameCounts;  // 2단계(전체 GPU): 쌍 수는 GPU 가 센다 → FrameCounts 버퍼에서 읽는다
+uint  bBondsActive;     // cohesion(W) > 0. 꺼져 있으면 결합 패스는 임펄스 0 만 쓴다 (λ 는 그대로 — CPU 의 조기 반환과 같다)
 
 float Radius;
 float StepDt;
@@ -48,11 +50,15 @@ StructuredBuffer<float4>   PrevPos;
 StructuredBuffer<uint>     ContactIJ;        // 2k = i, 2k+1 = j
 StructuredBuffer<float4>   ContactLambdaRO;  // xyz λtan(월드) · w λn
 RWStructuredBuffer<float4> ContactLambdaRW;
-StructuredBuffer<uint>     BlockRange;       // 2b = 시작, 2b+1 = 개수
-RWStructuredBuffer<float4> BoundaryImpulseRW;
+StructuredBuffer<uint>     BlockRange;       // 블록 b 의 접촉 = [BlockRange[b], BlockRange[b+1])  (NumBlocks + 1)
+RWStructuredBuffer<float4> BoundaryImpulseRW; // 경계 접촉 순번(= 자리 − NumInternal) 으로 인덱스
 StructuredBuffer<float4>   BoundaryImpulseRO;
 StructuredBuffer<uint>     BoundaryAdjOffset; // 입자 → BoundaryAdj 구간 (N+1)
-StructuredBuffer<uint>     BoundaryAdj;       // (경계 접촉 순번 << 1) | (이 입자가 j 면 1)
+StructuredBuffer<uint>     BoundaryAdj;       // (접촉 자리 << 1) | (이 입자가 j 면 1). 블록 안 자리(< NumInternal)는 건너뛴다
+StructuredBuffer<uint>     FrameCounts;      // [0] 쌍 수 · [1] 블록 안 쌍 수 · [2] 경계 쌍 수
+
+uint GetNumInternal() { return bUseFrameCounts ? FrameCounts[1] : NumInternal; }
+uint GetNumBoundary() { return bUseFrameCounts ? FrameCounts[2] : NumBoundary; }
 RWStructuredBuffer<uint>   CountRW;
 StructuredBuffer<uint>     CountRO;
 
@@ -126,8 +132,8 @@ void SolveBlocksCS(uint3 Tid : SV_DispatchThreadID)
 	{
 		return;
 	}
-	const uint Start = BlockRange[2 * b];
-	const uint End   = Start + BlockRange[2 * b + 1];
+	const uint Start = BlockRange[b];
+	const uint End   = BlockRange[b + 1];
 	for (uint k = Start; k < End; ++k)
 	{
 		const uint i = ContactIJ[2 * k];
@@ -165,10 +171,12 @@ void CountBoundaryCS(uint3 Tid : SV_DispatchThreadID)
 		return;
 	}
 	const float D = 2.f * Radius;
+	const uint NI = GetNumInternal();
 	uint n = 0;
 	for (uint e = BoundaryAdjOffset[p]; e < BoundaryAdjOffset[p + 1]; ++e)
 	{
-		const uint k = NumInternal + (BoundaryAdj[e] >> 1);
+		const uint k = BoundaryAdj[e] >> 1;
+		if (k < NI) { continue; }
 		const float Gap = distance(PosRO[ContactIJ[2 * k]].xyz, PosRO[ContactIJ[2 * k + 1]].xyz) - D;
 		if (Gap > 0.f && ContactLambdaRO[k].w <= 0.f)
 		{
@@ -183,11 +191,11 @@ void CountBoundaryCS(uint3 Tid : SV_DispatchThreadID)
 void SolveBoundaryCS(uint3 Tid : SV_DispatchThreadID)
 {
 	const uint c = Tid.x;
-	if (c >= NumBoundary)
+	if (c >= GetNumBoundary())
 	{
 		return;
 	}
-	const uint k = NumInternal + c;
+	const uint k = GetNumInternal() + c;
 	const uint i = ContactIJ[2 * k];
 	const uint j = ContactIJ[2 * k + 1];
 	const float4 Pi = PosRO[i];
@@ -220,10 +228,12 @@ void ApplyBoundaryCS(uint3 Tid : SV_DispatchThreadID)
 		return;
 	}
 	float3 Delta = 0;
+	const uint NI = GetNumInternal();
 	for (uint e = BoundaryAdjOffset[p]; e < BoundaryAdjOffset[p + 1]; ++e)
 	{
 		const uint A = BoundaryAdj[e];
-		const float3 Imp = BoundaryImpulseRO[A >> 1].xyz;
+		if ((A >> 1) < NI) { continue; }
+		const float3 Imp = BoundaryImpulseRO[(A >> 1) - NI].xyz;
 		Delta += (A & 1u) ? -Imp : Imp;
 	}
 	Delta *= P.w;
@@ -250,9 +260,9 @@ void SolveBondsCS(uint3 Tid : SV_DispatchThreadID)
 	float3 Corr = 0;
 	const float3 Diff = Pi.xyz - Pj.xyz;
 	const float  Dist = length(Diff);
-	if (WSum > 0.f && Dist >= SMALL)
+	float4 B = BondDataRW[b];
+	if (bBondsActive && WSum > 0.f && Dist >= SMALL && B.x >= 0.f)
 	{
-		float4 B = BondDataRW[b];
 		const float C = Dist - B.x;
 		// XPBD 컴플라이언스, 인장만(λ ≤ 0) · 고원(−λmax)
 		const float DLambda   = -BondOmega * (C + BondAlphaTilde * B.y) / (WSum + BondAlphaTilde);
