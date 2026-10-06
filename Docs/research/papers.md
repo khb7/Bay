@@ -1176,6 +1176,20 @@ GS의 단점을 "제약 순서 편향 + 병렬화를 위한 배칭(그래프 컬
 **블록 솔버 계보** — Tonge 2012 초록 "접촉을 블록 단위로 풀어 PGS 급 성능"(본문 미열람) · Harada (2011), "A Parallel Constraint Solver for a Rigid-Body Simulation", SIGGRAPH Asia Sketches — GPU 배칭의 초기 형태(Frâncu 의 [Har09] 계열) ·
 Kale & Kry (2024), "Distributed Simulation of Large Multi-body Systems", arXiv 2403.17261 — 파티션 경계 물체를 **겹치게 두고 블렌딩**(Schwarz 식), CPU/네트워크, 안은 PGS. 우리 GPU 워크그룹엔 안 맞지만 "경계 입자를 두 블록이 같이 갖는다"는 처리는 A″ 의 경계 문제에 참고.
 
+**A 안의 원전 — Harada 의 2단계 배칭 (2026-10-07 확인, m0-log #38)**
+- **Harada (2011), "A Parallel Constraint Solver for a Rigid Body Simulation", SIGGRAPH Asia 2011 Sketches 22:1–2** — 스케치 초록은 ACM 벽에 막혀 못 읽었다. 내용은 아래 둘로 확인.
+- **Harada (2014), "Two-Level Constraint Solver and Pipelined Local Batching for Rigid Body Simulation on GPUs", GPU Pro 5, pp. 451–468** — 제목이 곧 방법이다: **1단계 공간 셀 배칭 · 2단계 셀 안 로컬 배칭**.
+- **Bullet 3 OpenCL 파이프라인 (Harada 작성, AMD 2012, zlib)** — `src/Bullet3OpenCL/RigidBody/b3Solver.cpp` · `b3Solver.h` · `kernels/batchingKernels.cl`. 코드가 곧 원전:
+  - 공간을 `N_SPLIT 8×4×8 = 256` 셀로 자르고, **`B3_SOLVER_N_BATCHES = 8`** — 반복마다 셀을 8단계로 나눠 `x,y,z 홀짝`(`cellBatch & 1`, `& 2`, `& 4`)이 같은 셀끼리만 동시에 푼다. **3D 체스판 8색이 그대로 있다.**
+  - 접촉 쌍은 **bodyA 의 위치**가 든 셀에 소속. 셀 하나 = 워크그룹 하나.
+  - 셀 안: `batchingKernels.cl` 이 "사용 중인 물체" 비트마스크(`ldsFixedBuffer`, `atom_or`)로 greedy 배칭 — 두 물체가 다 비어 있는 접촉만 같은 배치에. 정적 물체는 항상 비어 있는 것으로. 배치 최대 `B3_MAX_NUM_BATCHES 128`, 워크그룹 64.
+  - 반복 루프: `for iter: for cellBatch 0..7: 그 색의 셀들을 커널로` — 접촉 패스와 마찰 패스를 따로 두 번.
+- **Coumans (2013), "GPU Rigid Body Simulation", GDC 2013** ([GDC Vault](https://gdcvault.com/play/1017756/GPU-Rigid-Body)) — 위 파이프라인의 발표. "10만 활성 강체 · 안정 적층 · 실시간".
+- **Tonge 2012** 초록의 "block-based contact solving" 도 같은 계보 — 질량 분할은 그 블록의 **경계**를 Jacobi 로 두기 위한 장치였다. 우리 ①-b/② 가 그 변형이고, #38 이 그 경계가 마른 더미를 못 받친다고 쟀다.
+  (⚠ Tonge 의 NVIDIA 특허 US11256835 는 "물체를 접촉 수만큼 부분체로 쪼개 접촉당 스레드 하나" — 질량 분할의 특허판이고 격자 배칭은 아니다.)
+- **Fratarcangeli & Pellacini (2015), "Scalable Partitioning for Parallel Position Based Dynamics", CGF 34(2) 405–413** — 제약 그래프 greedy 컬러링을 GPU 커널 호출 수 줄이기용으로 (phantom 제약을 넣어 q-색으로). 블록 안 2단계의 PBD 판. Vivace(2016)가 접촉까지 확장.
+- 우리 A 안 = Harada 의 2단계 그대로 + 셀 안 배칭을 Fratarcangeli 식 컬러링으로. 다른 점: 입자라 "물체 위치" 가 입자 중심이고, 블록 한 변(30cm) ≥ 탐색 반경(≤10cm) 이 체스판 조건. Harada 가 8색을 쓰고도 Flex 가 Jacobi 로 간 이유(런치 비용 × 반복 수)는 #38 C 안(접촉 30 반복)이 답해야 한다.
+
 **공간 해시의 GPU 원전** — **Green (2010), "Particle Simulation using CUDA", NVIDIA whitepaper** (정렬 기반 균일 격자: 셀 키 → 정렬 → 셀 시작 테이블 → 27칸 순회) ·
 **Hoetzlein (2014), "Fast Fixed-Radius Nearest Neighbors: Interactive Million-Particle Fluids", GTC** (counting sort 격자, 수백만 입자). system-design §4 의 4단계가 이것이다.
 읽은 뒤(2026-09-14): **radix 가 아니라 counting sort** — "셀 순서만 필요하고 셀 안 순서는 무의미하니 자릿수가 아니라 셀 ID 로 1-radix" → 커널 15 → 4, 8M 점 4억 질의/초(Titan).
