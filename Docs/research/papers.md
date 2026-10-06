@@ -1209,6 +1209,21 @@ Kale & Kry (2024), "Distributed Simulation of Large Multi-body Systems", arXiv 2
 - **Fratarcangeli & Pellacini (2015), "Scalable Partitioning for Parallel Position Based Dynamics", CGF 34(2) 405–413** — 제약 그래프 greedy 컬러링을 GPU 커널 호출 수 줄이기용으로 (phantom 제약을 넣어 q-색으로). 블록 안 2단계의 PBD 판. Vivace(2016)가 접촉까지 확장.
 - 우리 A 안 = Harada 의 2단계 그대로 + 셀 안 배칭을 Fratarcangeli 식 컬러링으로. 다른 점: 입자라 "물체 위치" 가 입자 중심이고, 블록 한 변(30cm) ≥ 탐색 반경(≤10cm) 이 체스판 조건. Harada 가 8색을 쓰고도 Flex 가 Jacobi 로 간 이유(런치 비용 × 반복 수)는 #38 C 안(접촉 30 반복)이 답해야 한다.
 
+**D′ 후보 — APGD (Nesterov 가속 투영 경사법) 읽기 (2026-10-07)**
+- **Mazhar, Heyn, Negrut, Tasora (2015), "Using Nesterov's Method to Accelerate Multibody Dynamics with Friction and Contact", ACM TOG 34(3), DOI 10.1145/2735627** — 본문 PDF 는 Parma 저장소가 Cloudflare 벽. 초록: "GS 대비 **1~2자릿수** 빠르고, GS 와 달리 **쉽게 병렬화**되어 수백만 물체". Chrono 엔진의 기본 솔버(`ChSolverAPGD`, 입상체용).
+- **Heyn (2013), PhD thesis, UW-Madison, Ch.4 "Iterative Methods for DVI Formulation"** ([PDF](https://sbel.wisc.edu/wp-content/uploads/sites/569/2018/05/TobyHeynThesis_PhDfinal.pdf)) — APGD 의 원출처. 읽은 것:
+  - 문제: 접촉·마찰을 **원뿔 상보성 문제(CCP, Anitescu·Tasora 의 볼록 완화)** 로 두고, 한 스텝의 임펄스 γ 를 `min ½γᵀNγ + rᵀγ s.t. γ ∈ 마찰 원뿔` 로 푼다. N = DᵀM⁻¹D (접촉 야코비안·질량), r = 자유 속도.
+  - Jacobi·GS 는 이 QP 의 투영 Jacobi/GS 다 (§4.1). "GS 가 보통 낫다, 특히 **중복 접촉**에서. Jacobi 는 병렬이 쉽다. Jacobi 는 ω 1.0 에서 자주 실패해 **ω 0.3** 을 썼다" — 우리 #4 "Jacobi 평균 모드" 와 같은 관찰.
+  - **APGD 알고리즘 (§4.4.4)**: y₀=γ₀, θ₀=1, L 초기 추정 → 반복마다 `g = Ny − r` · `γₖ₊₁ = Π_K(y − g/L)` · 백트래킹(충분 감소 안 되면 L 두 배) · Nesterov 모멘텀 `θₖ₊₁ = (−θ² + θ√(θ²+4))/2`, `β = θ(1−θ)/(θ²+θₖ₊₁)`, `y = γₖ₊₁ + β(γₖ₊₁ − γₖ)` · **적응 재시작**(gᵀ(γₖ₊₁−γₖ) > 0 이면 모멘텀 리셋) · **fall-back**(잔차 최소 해를 기억해 돌려준다 — 조기 종료 안전) · L ← 0.9L 로 스텝 키우기. 수렴 O(1/k²) (투영 경사 O(1/k)).
+  - **실측 (§4.7)**: 1000 구 더미 5초 유동 — JACOBI 49356 s · SOR 11580 s · **APGD 2403 s** (SOR 의 4.8배, Jacobi 의 20배). 4000 구 적층에선 "Jacobi 가 SOR 만큼 빠르고 APGD 가 둘의 9배". **더 높은 더미일수록, μ 가 클수록 APGD 의 이득이 커진다** — Jacobi 가 가장 빨리 망가진다. 동적(접촉 매 스텝 변함)에서도 준정적과 같거나 더 좋다.
+  - 반복당 비용 = **Ny 곱 하나** = 모든 접촉에서 상대속도 한 번 계산 — Jacobi 한 스윕과 같은 완전 병렬 패스 2개(gather 임펄스 → 속도, 속도 → 접촉 잔차). 순서 무관 → 결정성 공짜.
+- **우리에게 뜻하는 것**
+  - #38 의 메모리 바닥(반복당 ≈1 ms @15만)은 패스 구조가 아니라 **반복 수**로만 깎인다. APGD 가 GS 의 1/5~1/10 반복이면 120 → 15~25. **A 안(8색)이 못 건드리는 바닥을 건드리는 유일한 후보.**
+  - 구조가 우리 "전부 gather"(Tonge 식 Jacobi) 와 같은 패스 꼴이라 **지금 GPU 코드에 모멘텀·투영·백트래킹만 얹으면 된다** — 블록·컬러링·8 디스패치가 다 필요 없다. 결정성(3-3)도 그대로.
+  - 결합: 양방향 컴플라이언스 결합은 N 의 대각에 α/h² 가 붙은 정규화 항(XPBD 와 같은 꼴), 인장만(λ ≤ 0)·고원(−λmax) 은 상자 투영 — 같은 QP 안에 들어간다. 파단은 밖에서(지금과 같다).
+  - 대가·불확실: ① 속도 수준 CCP 라 우리 SP(Frâncu: 속도+위치 잔차 섞음)의 위치 항(Kc/h·gap)을 r 에 넣는 꼴로 바꿔야 한다 — 수식은 같은 선형계라 가능하지만 검증 필요. ② 볼록 완화의 알려진 부작용(미끄러질 때 법선 방향 미세 들림) — Chrono 가 입상체에 표준으로 쓰므로 모래엔 수용 범위일 것. ③ 백트래킹의 `½γᵀNγ` 평가는 리덕션(전역 합) → 반복당 리드백 또는 GPU 리덕션 1회. ④ 워밍 스타트와의 궁합(Chrono 는 지원).
+  - **다음 실험 (CPU, 하루)**: `FSandSpike` 에 APGD 반복을 넣고(-apgd) 더미(크리프)·터널·램프·절토를 반복 {20, 30, 60} 으로 돌려 GS 120 과 비교. 통과하면 GPU 는 gather 경로 그대로 + 모멘텀.
+
 **공간 해시의 GPU 원전** — **Green (2010), "Particle Simulation using CUDA", NVIDIA whitepaper** (정렬 기반 균일 격자: 셀 키 → 정렬 → 셀 시작 테이블 → 27칸 순회) ·
 **Hoetzlein (2014), "Fast Fixed-Radius Nearest Neighbors: Interactive Million-Particle Fluids", GTC** (counting sort 격자, 수백만 입자). system-design §4 의 4단계가 이것이다.
 읽은 뒤(2026-09-14): **radix 가 아니라 counting sort** — "셀 순서만 필요하고 셀 안 순서는 무의미하니 자릿수가 아니라 셀 ID 로 1-radix" → 커널 15 → 4, 8M 점 4억 질의/초(Titan).
