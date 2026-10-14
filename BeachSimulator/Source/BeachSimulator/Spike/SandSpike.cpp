@@ -274,6 +274,7 @@ void FSandSpike::SolveBondsSP(float StepDt)
 	}
 	const bool bSplit = bGatherHere && Params.bMassSplit && Params.bMassSplitBonds;
 	const float OmegaB = bGatherHere ? Params.BondOmega : 1.f;
+	const bool bApgdHere = bGatherHere && Params.bApgd && Params.BlockSize <= 0.f;
 
 	for (FSandBond& B : Bonds)
 	{
@@ -297,8 +298,22 @@ void FSandSpike::SolveBondsSP(float StepDt)
 
 		float DLambda = -OmegaB * (C + AlphaTilde * B.Lambda) / (WSum + AlphaTilde);
 		const float NewLambda = FMath::Clamp(B.Lambda + DLambda, -LambdaMax, 0.f);   // 인장만 · 고원
-		DLambda = NewLambda - B.Lambda;
-		B.Lambda = NewLambda;
+		if (bApgdHere)
+		{
+			// γ = Π(y − g/L), y' = γ + β(γ − γ_prev). 상태엔 y' − y 를 적용한다
+			const float DGamma = NewLambda - B.Gamma;
+			ApgdRestartAcc += (double)((C + AlphaTilde * B.Lambda) / StepDt) * DGamma;
+			const float YNew = NewLambda + ApgdBeta * DGamma;
+			B.Gamma = NewLambda;
+			DLambda = YNew - B.Lambda;
+			B.Lambda = YNew;
+		}
+		else
+		{
+			DLambda = NewLambda - B.Lambda;
+			B.Lambda = NewLambda;
+			B.Gamma = NewLambda;   // 순차 결합(진단)과 섞여도 정리가 낡은 γ 로 되돌리지 않게
+		}
 		if (DLambda == 0.f)
 		{
 			continue;
@@ -730,7 +745,7 @@ void FSandSpike::SolveContactsSP(float StepDt, int32 Iter, int32 MaxIter)
 	const float D    = 2.f * Params.Radius;
 	const float InvH = 1.f / StepDt;
 
-	const float Beta = (Params.MomentumA > 0.f && MaxIter > 1)
+	const float Beta = (Params.MomentumA > 0.f && MaxIter > 1 && !Params.bApgd)
 		? FMath::Min(Params.MomentumA * FMath::Pow((float)Iter / (float)MaxIter, Params.MomentumB), 1.f)
 		: 0.f;
 
@@ -746,6 +761,7 @@ void FSandSpike::SolveContactsSP(float StepDt, int32 Iter, int32 MaxIter)
 		if (Params.bMassSplit) { CountConstraintsPerParticle(bBlock); }
 	}
 	const bool bSplit = bAnyGather && Params.bMassSplit;
+	const bool bApgdHere = bGatherAll && Params.bApgd;
 	int32 BoundaryN = 0, ActiveN = 0;
 
 	for (FSandContact& C : Contacts)
@@ -779,6 +795,8 @@ void FSandSpike::SolveContactsSP(float StepDt, int32 Iter, int32 MaxIter)
 		{
 			C.LambdaN = 0.f;
 			C.LambdaTan = FVector3f::ZeroVector;
+			C.GammaN = 0.f;
+			C.GammaTan = FVector3f::ZeroVector;
 			continue;
 		}
 		++ActiveN; if (bBlock && BlockId[i] != BlockId[j]) { ++BoundaryN; }
@@ -795,6 +813,18 @@ void FSandSpike::SolveContactsSP(float StepDt, int32 Iter, int32 MaxIter)
 
 		const float OldN = C.LambdaN;
 		C.LambdaN = FMath::Max(0.f, C.LambdaN + DLambdaN);   // 누적 후 클램프 (Catto 2005)
+		const float GammaNNew = C.LambdaN;                    // APGD: 투영된 해. 원뿔 반경도 이것으로
+		if (bApgdHere)
+		{
+			const float DGammaN = GammaNNew - C.GammaN;
+			ApgdRestartAcc += (double)ResN * DGammaN;
+			C.LambdaN = GammaNNew + ApgdBeta * DGammaN;       // y — 음수일 수 있다(외삽)
+			C.GammaN = GammaNNew;
+		}
+		else
+		{
+			C.GammaN = GammaNNew;
+		}
 		DLambdaN = C.LambdaN - OldN;
 		C.PrevDLambdaN = DLambdaN;
 
@@ -811,11 +841,22 @@ void FSandSpike::SolveContactsSP(float StepDt, int32 Iter, int32 MaxIter)
 		FVector3f NewTan = C.LambdaTan + DLambdaTan;
 
 		// 원뿔 투영 — |lambda_t| <= mu·lambda_n
-		const float MaxTan = Params.Friction * C.LambdaN;
+		const float MaxTan = Params.Friction * GammaNNew;
 		const float TanLen = NewTan.Size();
 		if (TanLen > MaxTan)
 		{
 			NewTan = (TanLen > UE_KINDA_SMALL_NUMBER) ? NewTan * (MaxTan / TanLen) : FVector3f::ZeroVector;
+		}
+		if (bApgdHere)
+		{
+			const FVector3f DGammaT = NewTan - C.GammaTan;
+			ApgdRestartAcc += (double)FVector3f::DotProduct(ResT, DGammaT);
+			C.GammaTan = NewTan;
+			NewTan += DGammaT * ApgdBeta;
+		}
+		else
+		{
+			C.GammaTan = NewTan;
 		}
 		C.LambdaTan = NewTan;
 		DLambdaTan  = NewTan - OldTan;
@@ -1202,6 +1243,39 @@ void FSandSpike::ApplyGatheredVelocityDeltas(float StepDt)
 		Vel[i] += Delta[i];
 		Pos[i] += Delta[i] * StepDt;
 	}
+}
+
+void FSandSpike::ApgdSnapToGamma(float StepDt)
+{
+	// 외삽된 y 를 투영된 γ 로 되돌린다 — 차이를 gather 임펄스로 (v·x 함께). 재시작과 반복 끝에서
+	FMemory::Memzero(Delta.GetData(), Delta.Num() * sizeof(FVector3f));
+	for (FSandContact& C : Contacts)
+	{
+		const float DN = C.GammaN - C.LambdaN;
+		const FVector3f DT = C.GammaTan - C.LambdaTan;
+		C.LambdaN = C.GammaN;
+		C.LambdaTan = C.GammaTan;
+		if (DN == 0.f && DT.IsZero()) { continue; }
+		const FVector3f Diff = Pos[C.I] - Pos[C.J];
+		const float Dist = Diff.Size();
+		if (Dist < UE_KINDA_SMALL_NUMBER) { continue; }
+		const FVector3f Impulse = (Diff / Dist) * DN + DT;
+		Delta[C.I] += Impulse * InvMass[C.I];
+		Delta[C.J] -= Impulse * InvMass[C.J];
+	}
+	for (FSandBond& B : Bonds)
+	{
+		const float DL = B.Gamma - B.Lambda;
+		B.Lambda = B.Gamma;
+		if (DL == 0.f) { continue; }
+		const FVector3f Diff = Pos[B.I] - Pos[B.J];
+		const float Dist = Diff.Size();
+		if (Dist < UE_KINDA_SMALL_NUMBER) { continue; }
+		const FVector3f Corr = (Diff / Dist) * (DL / StepDt);
+		Delta[B.I] += Corr * InvMass[B.I];
+		Delta[B.J] -= Corr * InvMass[B.J];
+	}
+	ApplyGatheredVelocityDeltas(StepDt);
 }
 
 void FSandSpike::SolveWallsSP(float StepDt)
@@ -1612,6 +1686,7 @@ void FSandSpike::Step(float Dt)
 	}
 
 	BuildContacts(Dt);   // ★ 프레임당 1회 (논문 §3.5)
+	ApgdRestarts = 0;
 
 	const float SubDt = Dt / (float)Params.Substeps;
 	for (int32 s = 0; s < Params.Substeps; ++s)
@@ -1723,6 +1798,13 @@ void FSandSpike::Step(float Dt)
 				C.PrevDLambdaTan = FVector3f::ZeroVector;
 			}
 
+			const bool bApgd = Params.bApgd && Params.bGatherApply && Params.bGatherContacts && Params.BlockSize <= 0.f;
+			float ApgdTheta = 1.f;
+			if (bApgd)
+			{
+				for (FSandContact& C : Contacts) { C.GammaN = C.LambdaN; C.GammaTan = C.LambdaTan; }
+				for (FSandBond& B : Bonds) { B.Gamma = B.Lambda; }
+			}
 			const bool bTrace = (Frame == DebugTraceFrame && DebugTraceIndex >= 0 && DebugTraceIndex < Pos.Num());
 			if (bTrace)
 			{
@@ -1734,8 +1816,23 @@ void FSandSpike::Step(float Dt)
 			}
 			else for (int32 it = 0; it < Params.Iterations; ++it)
 			{
+				if (bApgd)
+				{
+					// Nesterov: θ' = (−θ² + θ√(θ²+4))/2, β = θ(1−θ)/(θ²+θ')  (Heyn 2013 Alg. APGD)
+					const float ThetaNew = 0.5f * (-ApgdTheta * ApgdTheta + ApgdTheta * FMath::Sqrt(ApgdTheta * ApgdTheta + 4.f));
+					ApgdBeta = ApgdTheta * (1.f - ApgdTheta) / (ApgdTheta * ApgdTheta + ThetaNew);
+					ApgdTheta = ThetaNew;
+					ApgdRestartAcc = 0.0;
+				}
 				SolveContactsSP(SubDt, it, Params.Iterations);
 				SolveBondsSP(SubDt);
+				if (bApgd && ApgdRestartAcc > 0.0)
+				{
+					// 적응 재시작 (O'Donoghue–Candès) — 모멘텀이 오르막이면 y←γ, θ←1
+					ApgdSnapToGamma(SubDt);
+					ApgdTheta = 1.f;
+					++ApgdRestarts;
+				}
 				SolveGroundSP(SubDt);
 				SolveWallsSP(SubDt);
 				if (bTrace)
@@ -1744,6 +1841,10 @@ void FSandSpike::Step(float Dt)
 					UE_LOG(LogTemp, Display, TEXT("[trace] f%d ss%d it%3d  |v| %9.2f  v(%8.2f %8.2f %8.2f)  z %7.3f  gλ %8.3f"),
 						Frame, s, it, Vel[k].Size(), Vel[k].X, Vel[k].Y, Vel[k].Z, Pos[k].Z, GroundLambdaN[k]);
 				}
+			}
+			if (bApgd && !Params.bGpuSolve)
+			{
+				ApgdSnapToGamma(SubDt);   // 상태·λ 를 실현 가능한 γ 로 — 워밍도 이것을 물려받는다
 			}
 			if (bTrace)
 			{

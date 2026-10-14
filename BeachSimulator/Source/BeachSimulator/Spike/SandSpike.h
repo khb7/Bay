@@ -80,6 +80,12 @@ struct FSandParams
 	float  BondOmega = 1.f;
 	/** 질량 분할을 결합에도 거는가. 컴플라이언스 제약은 WSum 을 키우면 α̃ 대비 물러지므로(#36 가설) 기본 false 로 두고 시험한다 */
 	bool   bMassSplitBonds = false;
+	/**
+	 * D′ — APGD (Heyn 2013 §4.4.4, Mazhar 2015 · papers C5). 전부 gather(접촉·결합) 위에 Nesterov 모멘텀을 얹는다.
+	 * γ = 투영된 해, y = γ + β(γ − γ_prev) 가 상태(v·x)에 적용된 승수. 적응 재시작(Σ g·Δγ > 0 → θ=1, y←γ) · 끝에 y→γ 정리.
+	 * 백트래킹·fall-back 은 없다 — 스텝은 gather 의 ω/W(질량 분할이면 Tonge 대각)가 대신한다. gather 일 때만 의미, 블록 모드와 배타.
+	 */
+	bool   bApgd = false;
 
 	// (38) 모멘텀 항. β_l = min(a·(l/l_max)^b, 1). 접촉(단방향)에서는 a=2 를 시도하라고 논문이 밝힘
 	float  MomentumA = 0.f;   // 0이면 모멘텀 없음 (기본은 꺼둔다 — 단계적으로 켠다)
@@ -254,6 +260,10 @@ struct FSandContact
 	// 이걸 안 맞추면 접촉이 많은 입자일수록 게이트가 일찍 닫혀 마찰이 사라진다.
 	float PendingN = 0.f;
 	float PendingT = 0.f;
+
+	// APGD (bApgd) — 투영된 해 γ. Lambda* 는 외삽된 y
+	float     GammaN = 0.f;
+	FVector3f GammaTan = FVector3f::ZeroVector;
 };
 
 /**
@@ -266,6 +276,7 @@ struct FSandBond
 	int32 J = 0;
 	float RestLen = 0.f;
 	float Lambda  = 0.f;   // XPBD 승수 (길이·질량). 인장이면 음수
+	float Gamma   = 0.f;   // APGD 의 투영된 해 (bApgd). Lambda 는 외삽된 y
 };
 
 /**
@@ -404,6 +415,13 @@ private:
 	void SolveWallsSP(float StepDt);
 	void ApplyDeltas();
 	void ApplyGatheredVelocityDeltas(float StepDt);   // gather 패스 2 (SP 경로)
+	void ApgdSnapToGamma(float StepDt);               // y → γ (재시작·반복 끝). 차이를 임펄스로 적용
+	float ApgdBeta = 0.f;       // 이번 반복의 외삽 계수
+	double ApgdRestartAcc = 0.0; // Σ g·(γ_new − γ_old) — 양수면 모멘텀이 오르막
+	int32 ApgdRestarts = 0;
+public:
+	int32 LastApgdRestarts() const { return ApgdRestarts; }
+private:
 	void CountConstraintsPerParticle(bool bBoundaryOnly = false);   // 질량 분할용 n_i (DeltaCount 재사용). 블록 모드면 경계 접촉만
 	void AssignBlocks(float Offset = 0.f);                                          // BlockSize 격자로 BlockId 부여
 	void SolveIterationsGpu(float StepDt);                           // 1단계: 반복 루프 전체를 GPU 로 (bGpuSolve)

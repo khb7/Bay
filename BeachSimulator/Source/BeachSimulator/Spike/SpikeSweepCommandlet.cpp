@@ -298,6 +298,7 @@ namespace
 			P.bGpuSolve    = bGpu;
 			P.bGpuResident = bGpu2;
 			P.BlockSize    = PourBlock;
+			P.bApgd        = FParse::Param(*Params, TEXT("apgd"));   // D′
 			P.bBlockShift  = FParse::Param(*Params, TEXT("blockshift"));
 			Cfgs.Add(P);
 
@@ -736,6 +737,7 @@ namespace
 		P.bGpuSolve = FParse::Param(*Params, TEXT("gpu"));       // 3-1 ② 반복 루프를 GPU 로
 		P.bGpuResident = FParse::Param(*Params, TEXT("gpu2"));   // 3-1 ② 2단계 — 스텝 전체 GPU 상주
 		P.bBlockShift = FParse::Param(*Params, TEXT("blockshift"));
+		P.bApgd = FParse::Param(*Params, TEXT("apgd"));   // D′ APGD (papers C5)
 		FParse::Value(*Params, TEXT("sor="), P.SorOmega);
 		FParse::Value(*Params, TEXT("ma="),  P.MomentumA);
 		FParse::Value(*Params, TEXT("mb="),  P.MomentumB);
@@ -837,6 +839,7 @@ namespace
 		P.bGpuSolve = FParse::Param(*Params, TEXT("gpu"));       // 3-1 ② 반복 루프를 GPU 로
 		P.bGpuResident = FParse::Param(*Params, TEXT("gpu2"));   // 3-1 ② 2단계 — 스텝 전체 GPU 상주
 		P.bBlockShift = FParse::Param(*Params, TEXT("blockshift"));
+		P.bApgd = FParse::Param(*Params, TEXT("apgd"));   // D′ APGD (papers C5)
 		FParse::Value(*Params, TEXT("sor="), P.SorOmega);
 		FParse::Value(*Params, TEXT("ma="),  P.MomentumA);
 		FParse::Value(*Params, TEXT("mb="),  P.MomentumB);
