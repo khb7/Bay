@@ -86,6 +86,8 @@ struct FSandParams
 	 * 백트래킹·fall-back 은 없다 — 스텝은 gather 의 ω/W(질량 분할이면 Tonge 대각)가 대신한다. gather 일 때만 의미, 블록 모드와 배타.
 	 */
 	bool   bApgd = false;
+	/** APGD 외삽을 결합에도 거는가. #39: 결합 외삽이 그물을 파단 거리 너머로 당기는 의심 — false 면 결합은 평범한 gather */
+	bool   bApgdBonds = true;
 
 	// (38) 모멘텀 항. β_l = min(a·(l/l_max)^b, 1). 접촉(단방향)에서는 a=2 를 시도하라고 논문이 밝힘
 	float  MomentumA = 0.f;   // 0이면 모멘텀 없음 (기본은 꺼둔다 — 단계적으로 켠다)

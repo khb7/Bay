@@ -738,6 +738,7 @@ namespace
 		P.bGpuResident = FParse::Param(*Params, TEXT("gpu2"));   // 3-1 ② 2단계 — 스텝 전체 GPU 상주
 		P.bBlockShift = FParse::Param(*Params, TEXT("blockshift"));
 		P.bApgd = FParse::Param(*Params, TEXT("apgd"));   // D′ APGD (papers C5)
+		P.bApgdBonds = !FParse::Param(*Params, TEXT("apgdnobonds"));   // 결합은 외삽 없이
 		FParse::Value(*Params, TEXT("sor="), P.SorOmega);
 		FParse::Value(*Params, TEXT("ma="),  P.MomentumA);
 		FParse::Value(*Params, TEXT("mb="),  P.MomentumB);
@@ -840,6 +841,7 @@ namespace
 		P.bGpuResident = FParse::Param(*Params, TEXT("gpu2"));   // 3-1 ② 2단계 — 스텝 전체 GPU 상주
 		P.bBlockShift = FParse::Param(*Params, TEXT("blockshift"));
 		P.bApgd = FParse::Param(*Params, TEXT("apgd"));   // D′ APGD (papers C5)
+		P.bApgdBonds = !FParse::Param(*Params, TEXT("apgdnobonds"));   // 결합은 외삽 없이
 		FParse::Value(*Params, TEXT("sor="), P.SorOmega);
 		FParse::Value(*Params, TEXT("ma="),  P.MomentumA);
 		FParse::Value(*Params, TEXT("mb="),  P.MomentumB);

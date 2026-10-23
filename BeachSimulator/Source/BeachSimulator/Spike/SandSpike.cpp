@@ -274,7 +274,7 @@ void FSandSpike::SolveBondsSP(float StepDt)
 	}
 	const bool bSplit = bGatherHere && Params.bMassSplit && Params.bMassSplitBonds;
 	const float OmegaB = bGatherHere ? Params.BondOmega : 1.f;
-	const bool bApgdHere = bGatherHere && Params.bApgd && Params.BlockSize <= 0.f;
+	const bool bApgdHere = bGatherHere && Params.bApgd && Params.bApgdBonds && Params.BlockSize <= 0.f;
 
 	for (FSandBond& B : Bonds)
 	{
