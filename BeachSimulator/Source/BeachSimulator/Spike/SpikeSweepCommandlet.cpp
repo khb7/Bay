@@ -299,6 +299,8 @@ namespace
 			P.bGpuResident = bGpu2;
 			P.BlockSize    = PourBlock;
 			P.bApgd        = FParse::Param(*Params, TEXT("apgd"));   // D′
+			P.bColor8      = FParse::Param(*Params, TEXT("color8"));   // A안 단계 0
+			FParse::Value(*Params, TEXT("colorblock="), P.BlockSize);
 			P.bBlockShift  = FParse::Param(*Params, TEXT("blockshift"));
 			Cfgs.Add(P);
 
@@ -739,6 +741,8 @@ namespace
 		P.bBlockShift = FParse::Param(*Params, TEXT("blockshift"));
 		P.bApgd = FParse::Param(*Params, TEXT("apgd"));   // D′ APGD (papers C5)
 		P.bApgdBonds = !FParse::Param(*Params, TEXT("apgdnobonds"));   // 결합은 외삽 없이
+		P.bColor8 = FParse::Param(*Params, TEXT("color8"));   // A안 단계 0
+		P.bColor8Rotate = FParse::Param(*Params, TEXT("color8rot"));
 		FParse::Value(*Params, TEXT("sor="), P.SorOmega);
 		FParse::Value(*Params, TEXT("ma="),  P.MomentumA);
 		FParse::Value(*Params, TEXT("mb="),  P.MomentumB);
@@ -842,6 +846,8 @@ namespace
 		P.bBlockShift = FParse::Param(*Params, TEXT("blockshift"));
 		P.bApgd = FParse::Param(*Params, TEXT("apgd"));   // D′ APGD (papers C5)
 		P.bApgdBonds = !FParse::Param(*Params, TEXT("apgdnobonds"));   // 결합은 외삽 없이
+		P.bColor8 = FParse::Param(*Params, TEXT("color8"));   // A안 단계 0
+		P.bColor8Rotate = FParse::Param(*Params, TEXT("color8rot"));
 		FParse::Value(*Params, TEXT("sor="), P.SorOmega);
 		FParse::Value(*Params, TEXT("ma="),  P.MomentumA);
 		FParse::Value(*Params, TEXT("mb="),  P.MomentumB);

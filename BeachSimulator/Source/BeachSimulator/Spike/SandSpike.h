@@ -88,6 +88,13 @@ struct FSandParams
 	bool   bApgd = false;
 	/** APGD 외삽을 결합에도 거는가. #39: 결합 외삽이 그물을 파단 거리 너머로 당기는 의심 — false 면 결합은 평범한 gather */
 	bool   bApgdBonds = true;
+	/**
+	 * A안 단계 0 (m0b-plan-a.md) — 8색 블록 GS 의 CPU 모사. 순차(GS) 그대로 두고 접촉 순서만 (블록 색, 블록, 블록 안 배치) 로 바꾼다.
+	 * 블록 = BlockSize (0 이면 30cm), 소유 = min(i,j) 입자의 블록, 배치 = 블록 안 greedy 컬러링(같은 입자를 두 번 안 만진다). gather 와 함께 쓰지 않는다.
+	 */
+	bool   bColor8 = false;
+	/** 색 순서를 프레임마다 한 칸 돌린다 (R5 — 고정 순서의 방향 편향 확인) */
+	bool   bColor8Rotate = false;
 
 	// (38) 모멘텀 항. β_l = min(a·(l/l_max)^b, 1). 접촉(단방향)에서는 a=2 를 시도하라고 논문이 밝힘
 	float  MomentumA = 0.f;   // 0이면 모멘텀 없음 (기본은 꺼둔다 — 단계적으로 켠다)
@@ -425,6 +432,8 @@ public:
 	int32 LastApgdRestarts() const { return ApgdRestarts; }
 private:
 	void CountConstraintsPerParticle(bool bBoundaryOnly = false);   // 질량 분할용 n_i (DeltaCount 재사용). 블록 모드면 경계 접촉만
+	void OrderContactsColor8();                                     // A안 단계 0: 접촉을 (색, 블록, 배치) 순으로
+	int32 LastMaxBatch = 0; float LastAvgBatches = 0.f;
 	void AssignBlocks(float Offset = 0.f);                                          // BlockSize 격자로 BlockId 부여
 	void SolveIterationsGpu(float StepDt);                           // 1단계: 반복 루프 전체를 GPU 로 (bGpuSolve)
 	void StepGpuResident(float Dt);                                  // 2단계: 스텝 전체 (bGpuResident)

@@ -899,6 +899,69 @@ void FSandSpike::CountConstraintsPerParticle(bool bBoundaryOnly)
 	if (!bBoundaryOnly) { for (const FSandBond& B : Bonds) { ++DeltaCount[B.I]; ++DeltaCount[B.J]; } }
 }
 
+void FSandSpike::OrderContactsColor8()
+{
+	// 블록 = 워크그룹, 색 = (bx,by,bz) 의 홀짝 3비트. 같은 색 블록은 입자를 공유하지 않으므로 GPU 에선 동시에 돈다.
+	// CPU 는 순차라 이 순서가 곧 GPU 결과다 (블록 안 배치도 서로 입자를 안 겹치므로 순서 무관)
+	const float SavedB = Params.BlockSize;
+	if (Params.BlockSize <= 0.f) { Params.BlockSize = 30.f; }
+	AssignBlocks();
+	Params.BlockSize = SavedB;
+
+	const int32 NC = Contacts.Num();
+	TArray<int64> BlockOf; BlockOf.SetNumUninitialized(NC);
+	TArray<int32> Idx; Idx.SetNumUninitialized(NC);
+	for (int32 c = 0; c < NC; ++c)
+	{
+		BlockOf[c] = BlockId[FMath::Min(Contacts[c].I, Contacts[c].J)];   // 소유 블록
+		Idx[c] = c;
+	}
+	Idx.Sort([&BlockOf](int32 A, int32 B) { return BlockOf[A] != BlockOf[B] ? BlockOf[A] < BlockOf[B] : A < B; });
+
+	// 블록 안 greedy 배치 — 입자별 사용 배치 비트마스크
+	TArray<uint8> Batch; Batch.SetNumZeroed(NC);
+	TArray<uint64> Mask; Mask.SetNumZeroed(Pos.Num());
+	TArray<int32> Touched;
+	int32 MaxBatch = 0; int64 SumBatches = 0; int32 NumBlocks = 0;
+	for (int32 k = 0; k < NC; )
+	{
+		const int64 Bk = BlockOf[Idx[k]];
+		int32 BlockMax = 0;
+		for (; k < NC && BlockOf[Idx[k]] == Bk; ++k)
+		{
+			const FSandContact& C = Contacts[Idx[k]];
+			const uint64 Used = Mask[C.I] | Mask[C.J];
+			const int32 B = (Used == ~0ull) ? 63 : (int32)FMath::CountTrailingZeros64(~Used);
+			Batch[Idx[k]] = (uint8)B;
+			const uint64 Bit = 1ull << B;
+			if (Mask[C.I] == 0) { Touched.Add(C.I); }
+			if (Mask[C.J] == 0) { Touched.Add(C.J); }
+			Mask[C.I] |= Bit; Mask[C.J] |= Bit;
+			BlockMax = FMath::Max(BlockMax, B + 1);
+		}
+		for (int32 t : Touched) { Mask[t] = 0; }
+		Touched.Reset();
+		MaxBatch = FMath::Max(MaxBatch, BlockMax);
+		SumBatches += BlockMax; ++NumBlocks;
+	}
+	LastMaxBatch = MaxBatch;
+	LastAvgBatches = NumBlocks > 0 ? (float)SumBatches / NumBlocks : 0.f;
+
+	const int32 Rot = Params.bColor8Rotate ? (Frame & 7) : 0;
+	auto ColorOf = [Rot](int64 Id) { return ((int32)(((Id >> 42) & 1) | (((Id >> 21) & 1) << 1) | ((Id & 1) << 2)) + Rot) & 7; };
+	Idx.Sort([&](int32 A, int32 B)
+	{
+		const int32 CA = ColorOf(BlockOf[A]), CB = ColorOf(BlockOf[B]);
+		if (CA != CB) { return CA < CB; }
+		if (BlockOf[A] != BlockOf[B]) { return BlockOf[A] < BlockOf[B]; }
+		if (Batch[A] != Batch[B]) { return Batch[A] < Batch[B]; }
+		return A < B;
+	});
+	TArray<FSandContact> Sorted; Sorted.Reserve(NC);
+	for (int32 c : Idx) { Sorted.Add(Contacts[c]); }
+	Contacts = MoveTemp(Sorted);
+}
+
 void FSandSpike::AssignBlocks(float Offset)
 {
 	// 위치를 BlockSize 격자로 양자화한 정확한 키. 이웃 셀끼리만 비교하므로 21비트 좌표면 충분하다
@@ -1686,6 +1749,14 @@ void FSandSpike::Step(float Dt)
 	}
 
 	BuildContacts(Dt);   // ★ 프레임당 1회 (논문 §3.5)
+	if (Params.bColor8 && !Params.bGatherApply && !Params.bGpuSolve)
+	{
+		OrderContactsColor8();
+		if (Frame % 600 == 0)
+		{
+			UE_LOG(LogTemp, Display, TEXT("[color8] f%d 접촉 %d · 블록 안 배치 최대 %d · 평균 %.1f"), Frame, Contacts.Num(), LastMaxBatch, LastAvgBatches);
+		}
+	}
 	ApgdRestarts = 0;
 
 	const float SubDt = Dt / (float)Params.Substeps;
