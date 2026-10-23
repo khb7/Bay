@@ -60,6 +60,64 @@
 - `SolveColorCS(c)`: 처음엔 **스레드 하나 = 블록 하나 순차** (지금 `SolveBlocksCS` 그대로, 경계 패스만 삭제). 물리 동등성을 먼저 본다.
 - 관문: 단계 0 과 같은 수치 (더미·터널·절토). 2단계 `-gpu2` 경로 위에 얹는다.
 
+#### 단계 1 상세 (2026-10-24, 코드 읽고 확정)
+
+**바탕**: 2단계 `-gpu2` 경로(`FSandGpuSim` · `SandFrame.usf` · `SandSolver.usf`)를 고친다. 1단계 `-gpu` 경로는 건드리지 않는다. 옛 블록 방식은 스위치 뒤에 그대로 두어 대조군으로 쓴다.
+
+**1-0. R1 디스패치 비용 측정 (구현 전, 1~2시간)**
+- 지금 블록 방식으로 `-perf -gpu2 -particles=3000,20000 -frames=60` 을 반복 {1, 30, 120} 으로 돈다.
+- `(T120 − T1) / 119 / 반복당 패스 수` = 패스 1회 비용. 3000개에서 ≫ 10 µs 면 GPU 일이 아니라 RDG·런치 오버헤드다.
+- 판단: 회당 ≤ 10 µs → 그대로 진행. 크면 단계 1 은 그대로 짜되, 1-5 의 완화책을 단계 1 끝에 넣는다.
+
+**1-1. 블록 키에 색을 박는다 — `CellKeyCS`**
+- 지금: `BlockKey = HashCell(CellOf(P, BlockSize), BlockTable)` (8192칸 해시).
+- 바꾼다: 블록 셀 좌표 `c` 의 색 `col = (c.x&1) | (c.y&1)<<1 | (c.z&1)<<2`, `BlockKey = col · (BlockTable/8) + HashCell(c, BlockTable/8)`.
+- 그러면 기존 `Scan(BlockPairCount) → BlockStart` 한 번으로 **색 c 의 블록들이 [c·1024, (c+1)·1024) 연속 구간**에 놓인다. 새 정렬 패스가 필요 없다.
+- 해시 충돌: 같은 색의 먼 두 블록이 한 칸에 묶이면 한 스레드가 순차로 둘 다 푼다 — 안전(지금과 같은 성질). 다른 색끼리는 구간이 달라 충돌하지 않는다.
+
+**1-2. 접촉 소유권 — `PairFillCS`**
+- 지금: `BKi == BKj` 면 블록 안, 아니면 경계(`0xFFFFFFFF`).
+- 바꾼다: 쌍은 항상 `j > i` 로 생성되므로 **소유 블록 = BKi** (= min(i,j) 의 블록, 단계 0 규칙과 같다). 경계 쌍은 0 개.
+- 안전 조건: 같은 색 두 블록 사이엔 최소 한 블록(B)이 끼므로, 한 입자를 두 블록이 동시에 만지려면 접촉 도달거리 `SearchRange` 의 두 배가 B 보다 커야 한다. `SearchRange ≈ D + 여유 ≈ 5~6cm` → **B ≥ 15cm 에서 안전**, 10cm 는 경계(쓰지 않는다). 프레임 중 이동(< 1cm)은 여유에 들어간다.
+
+**1-3. 반복 루프 — `AddSolverIterations`**
+- 색 모드: 반복마다 `for c in 0..7: SolveBlocksCS(BlockBase = ((c + Frame) & 7) · 1024, NumBlocks = 1024)` → `SolveBondsCS` → `ApplyBondsCS`(지면·벽 포함, 그대로).
+- `CountBoundaryCS` · `SolveBoundaryCS` · `ApplyBoundaryCS` 는 건너뛴다. 질량 분할은 경계 gather 에만 쓰였으므로 꺼진다.
+- `SolveBlocksCS` 에 `BlockBase` 매개변수 하나 추가 (`b = BlockBase + Tid.x`). 몸체는 그대로 — 이미 GS 다.
+- 반복당 디스패치: 지금 6 → 10 (색 8 + 결합 2).
+- 색 회전(`(c + Frame) & 7`)은 단계 0 의 R5 결과로 기본 켬. 프레임 번호는 `FSandGpuFrameParams` 에 추가.
+
+**1-4. 배선**
+- `FSandGpuFrameParams` 에 `bColor8` · `FrameIndex`. `FSandSpike::StepGpuResident` 가 `Params.bColor8` 이면 넘기고, `BlockSize` 는 0 이면 15.
+- 커맨드릿: 기존 `-color8` · `-block=` 을 `-gpu2` 와 함께 쓴다. CPU 경로의 `OrderContactsColor8` 은 `bGpuResident` 면 건너뛴다(이미 `bGpuSolve` 조건과 같은 자리).
+- 통계: `NumBoundary` 가 0 이어야 한다 — 색 모드 검증용으로 로그에 찍는다.
+
+**1-5. R1 완화책 (1-0 결과가 나쁠 때만)**
+- 반복 루프 전체를 **RDG 패스 하나** 안에서 `RHICmdList` 로 직접 디스패치 (UAV 배리어만 사이에) → RDG 패스 생성 비용 제거.
+- 그래도 크면 반복 60 으로 내린 수치를 같이 기록한다 (단계 0 에선 120 만 검증 — 60 은 CPU 로 한 번 더 확인 필요).
+
+**1-6. 관문 — 단계 0 과 같은 배치, `-gpu2 -color8 -block=15 -AllowCommandletRendering`**
+
+```
+시험                  통과선                              단계 0 (CPU)         비고
+터널 원형 30cm        이동비 < 5% · 섬                    0.4% · 3.1cm          사각은 GS 도 붕괴 — 판정 안 함
+더미 시드 3 · 1337    침하 0 · 크리프 ≤ 0.005             0.0038 / 0.0034
+절토 60~90            H_c 84~95cm 범위                     ≈ 90                 ⚠ GPU 탐색 상한 2R 때문에 #38 에서 블록이 더 다져졌다 — 절토만 다르면 2R 문제(미결)로 분리
+NumBoundary           0                                   —                    색 모드가 켜졌는지
+```
+
+- 실행은 동시 2개 · BelowNormal (`scratchpad/runq.ps1`).
+- 한 프레임 대조가 필요하면(관문 실패 시) CPU `-color8` 과 같은 시드로 첫 60프레임의 높이·속도 분포를 비교한다 — 비트 재현은 아니다(§2-1).
+
+**1-7. 작업 순서와 커밋 단위**
+
+```
+① R1 측정                       → m0-log #41 에 수치만
+② 1-1 · 1-2 · 1-3 · 1-4 구현     → 커밋 1 (feat: A안 단계 1 — GPU 8색 블록)
+③ 관문 4종                       → m0-log #41 결과 · 커밋 2
+④ (필요 시) 1-5                  → 커밋 3
+```
+
 ### 단계 2 — GPU, 블록 안 병렬 (2~3일)
 
 - 프레임당 1회 `ColorBatchCS`: 블록마다 워크그룹이 접촉을 배치로 나눈다 (groupshared 비트마스크).
