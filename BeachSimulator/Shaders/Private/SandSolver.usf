@@ -17,6 +17,7 @@ uint  NumParticles;
 uint  NumInternal;      // 접촉 버퍼 앞쪽 = 블록 안 접촉 (블록 순으로 정렬), 뒤쪽 = 경계 접촉
 uint  NumBoundary;
 uint  NumBlocks;
+uint  BlockBase;        // A안 색 모드: 이번 디스패치가 맡는 색의 첫 블록 (색 · BlockTable/8). 아니면 0
 uint  NumBonds;
 uint  bUseFrameCounts;  // 2단계(전체 GPU): 쌍 수는 GPU 가 센다 → FrameCounts 버퍼에서 읽는다
 uint  bBondsActive;     // cohesion(W) > 0. 꺼져 있으면 결합 패스는 임펄스 0 만 쓴다 (λ 는 그대로 — CPU 의 조기 반환과 같다)
@@ -127,11 +128,11 @@ float3 ContactImpulse(inout float4 InOutL, float WSum, float3 Pi, float3 Pj, flo
 [numthreads(32, 1, 1)]
 void SolveBlocksCS(uint3 Tid : SV_DispatchThreadID)
 {
-	const uint b = Tid.x;
-	if (b >= NumBlocks)
+	if (Tid.x >= NumBlocks)
 	{
 		return;
 	}
+	const uint b = BlockBase + Tid.x;
 	const uint Start = BlockRange[b];
 	const uint End   = BlockRange[b + 1];
 	for (uint k = Start; k < End; ++k)

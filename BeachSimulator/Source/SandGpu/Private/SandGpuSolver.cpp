@@ -22,6 +22,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandSolverParams, )
 	SHADER_PARAMETER(uint32, NumInternal)
 	SHADER_PARAMETER(uint32, NumBoundary)
 	SHADER_PARAMETER(uint32, NumBlocks)
+	SHADER_PARAMETER(uint32, BlockBase)
 	SHADER_PARAMETER(uint32, NumBonds)
 	SHADER_PARAMETER(uint32, bUseFrameCounts)
 	SHADER_PARAMETER(uint32, bBondsActive)
@@ -113,6 +114,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandFrameParams, )
 	SHADER_PARAMETER(float, Radius)
 	SHADER_PARAMETER(float, StepDt)
 	SHADER_PARAMETER(float, BlockSize)
+	SHADER_PARAMETER(uint32, bColor8)
 	SHADER_PARAMETER(float, WarmStart)
 	SHADER_PARAMETER(float, WarmGapTol)
 	SHADER_PARAMETER(uint32, bWarmTangent)
@@ -292,15 +294,28 @@ namespace
 
 	/** 반복 루프 — 1·2단계가 같은 패스 열을 쓴다. IndirectArgs 가 있으면 경계 패스는 간접(GPU 가 센 쌍 수), 없으면 NumBoundaryDirect */
 	void AddSolverIterations(FRDGBuilder& GraphBuilder, const FGlobalShaderMap* ShaderMap, const FSandSolverParams& T,
-		int32 Iterations, int32 N, int32 NumBlocks, int32 NumBonds, bool bMassSplit, FRDGBufferRef IndirectArgs, int32 NumBoundaryDirect)
+		int32 Iterations, int32 N, int32 NumBlocks, int32 NumBonds, bool bMassSplit, FRDGBufferRef IndirectArgs, int32 NumBoundaryDirect,
+		bool bColor8 = false, int32 FrameIndex = 0)
 	{
 		for (int32 It = 0; It < Iterations; ++It)
 		{
-			if (NumBlocks > 0)
+			if (bColor8)
+			{
+				// A안 — 색 0..7 을 차례로. 같은 색 블록은 입자를 공유하지 않아 동시에, 색 사이는 앞 색의 결과를 본다 (블록 GS). 경계 패스 없음
+				const int32 Sub = NumBlocks / 8;
+				for (int32 c = 0; c < 8; ++c)
+				{
+					FSandSolverParams TC = T;
+					TC.NumBlocks = Sub;
+					TC.BlockBase = ((c + FrameIndex) & 7) * Sub;   // 색 회전 (R5)
+					AddDirectPass<FSandSolveBlocksCS>(GraphBuilder, RDG_EVENT_NAME("SandColor"), ShaderMap, TC, Sub, 32);
+				}
+			}
+			else if (NumBlocks > 0)
 			{
 				AddDirectPass<FSandSolveBlocksCS>(GraphBuilder, RDG_EVENT_NAME("SandBlocks"), ShaderMap, T, NumBlocks, 32);
 			}
-			if (IndirectArgs || NumBoundaryDirect > 0)
+			if (!bColor8 && (IndirectArgs || NumBoundaryDirect > 0))
 			{
 				if (bMassSplit)
 				{
@@ -402,6 +417,7 @@ namespace
 			T.NumInternal  = D.NumInternal;
 			T.NumBoundary  = NumBound;
 			T.NumBlocks    = NumBlocks;
+			T.BlockBase    = 0;
 			T.NumBonds     = NumBonds;
 			T.bUseFrameCounts = 0;
 			T.bBondsActive = NumBonds > 0 ? 1 : 0;
@@ -746,6 +762,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			F.Radius       = P.Radius;
 			F.StepDt       = P.StepDt;
 			F.BlockSize    = P.BlockSize;
+			F.bColor8      = P.bColor8 ? 1 : 0;
 			F.WarmStart    = P.WarmStart;
 			F.WarmGapTol   = P.WarmGapTol;
 			F.bWarmTangent = P.bWarmTangent ? 1 : 0;
@@ -825,6 +842,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			T.NumInternal  = 0;
 			T.NumBoundary  = 0;
 			T.NumBlocks    = BlockTableSize;
+			T.BlockBase    = 0;
 			T.NumBonds     = LB;   // 결합이 있으면 항상 돈다 — 꺼져 있을 땐 임펄스 0 을 써야 ApplyBonds 가 워밍 임펄스를 다시 읽지 않는다
 			T.bUseFrameCounts = 1;
 			T.bBondsActive = P.bBondsActive ? 1 : 0;
@@ -867,7 +885,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			T.BondAdj       = F.BondAdj;
 			T.GroundLambdaRW = F.GroundLambdaRW;
 			T.WallLambdaRW   = F.WallLambdaRW;
-			AddSolverIterations(GraphBuilder, ShaderMap, T, P.Iterations, LN, BlockTableSize, LB, P.bMassSplit, IndirectArgs, 0);
+			AddSolverIterations(GraphBuilder, ShaderMap, T, P.Iterations, LN, BlockTableSize, LB, P.bMassSplit, IndirectArgs, 0, P.bColor8, P.FrameIndex);
 
 			// --- 파단 · 통계 ---
 			if (LB > 0)

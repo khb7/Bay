@@ -1268,7 +1268,9 @@ void FSandSpike::StepGpuResident(float Dt)
 	P.Radius      = Params.Radius;
 	P.StepDt      = Dt;
 	P.SearchRange = D + Margin;
-	P.BlockSize   = Params.BlockSize > 0.f ? Params.BlockSize : 30.f;
+	P.BlockSize   = Params.BlockSize > 0.f ? Params.BlockSize : (Params.bColor8 ? 15.f : 30.f);   // A안: 15cm 확정 (#40)
+	P.bColor8     = Params.bColor8;
+	P.FrameIndex  = Params.bColor8Rotate || Params.bColor8 ? Frame : 0;   // GPU 색 모드는 회전 기본 (#40 R5)
 	P.WarmStart   = Params.WarmStart;
 	P.WarmGapTol  = Params.WarmGapTol;
 	P.bWarmTangent = Params.bWarmTangent;

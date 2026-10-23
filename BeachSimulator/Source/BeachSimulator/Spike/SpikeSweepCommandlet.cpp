@@ -521,6 +521,7 @@ namespace
 			FParse::Value(*Params, TEXT("block="), P.BlockSize);
 			P.bGpuSolve = FParse::Param(*Params, TEXT("gpu"));
 			P.bGpuResident = FParse::Param(*Params, TEXT("gpu2"));
+			P.bColor8 = FParse::Param(*Params, TEXT("color8"));   // A안 단계 1 (GPU 8색)
 
 			FTiltSetup S;
 			S.TargetCount = Count;

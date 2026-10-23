@@ -78,6 +78,8 @@ struct FSandGpuFrameParams
 	float Radius = 2.5f, StepDt = 1.f / 60.f;
 	float SearchRange = 0.f;          // 접촉 탐색 반경 = D + 여유. 셀 크기이기도 하다
 	float BlockSize = 30.f;
+	bool  bColor8 = false;            // A안 단계 1 — 8색 블록 GS (m0b-plan-a.md). 경계 Jacobi 없음
+	int32 FrameIndex = 0;             // 색 회전용
 	float WarmStart = 1.f, WarmGapTol = 0.f;
 	bool  bWarmTangent = true;
 	float Kv = 0.1f, Kc = 1.f, SorOmega = 1.f, Friction = 0.17f;

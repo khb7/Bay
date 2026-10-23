@@ -37,6 +37,7 @@ float CellSize;                  // = 접촉 탐색 반경 (D + 여유)
 float Radius;
 float StepDt;
 float BlockSize;
+uint  bColor8;                   // A안: 블록 키 = 색 · (BlockTable/8) + 해시 · 쌍은 전부 min(i,j) 블록 소유 (경계 0)
 float WarmStart;
 float WarmGapTol;                // 반경 배수
 uint  bWarmTangent;
@@ -233,7 +234,18 @@ void CellKeyCS(uint3 Tid : SV_DispatchThreadID)
 	uint Slot;
 	InterlockedAdd(CellCountRW[Key], 1u, Slot);
 	CellSlotRW[i] = Slot;
-	BlockKeyRW[i] = HashCell(CellOf(P, BlockSize), BlockTable);
+	const int3 BC = CellOf(P, BlockSize);
+	if (bColor8)
+	{
+		// 색 = 블록 좌표 홀짝 3비트. 색마다 BlockTable/8 칸의 연속 구간 → BlockStart 스캔 한 번으로 색별 블록 범위가 나온다
+		const uint Col = (uint)(BC.x & 1) | ((uint)(BC.y & 1) << 1) | ((uint)(BC.z & 1) << 2);
+		const uint Sub = BlockTable >> 3;
+		BlockKeyRW[i] = Col * Sub + HashCell(BC, Sub);
+	}
+	else
+	{
+		BlockKeyRW[i] = HashCell(BC, BlockTable);
+	}
 }
 
 [numthreads(64, 1, 1)]
@@ -312,7 +324,7 @@ void PairFillCS(uint3 Tid : SV_DispatchThreadID)
 				PairWarmRW[k] = Warm;
 				// 블록 분류
 				uint Local;
-				if (BKi == BlockKeyRO[j])
+				if (bColor8 || BKi == BlockKeyRO[j])   // 색 모드: j > i 이므로 소유 = i 의 블록
 				{
 					InterlockedAdd(BlockPairCountRW[BKi], 1u, Local);
 					PairBlockRW[k] = BKi;
