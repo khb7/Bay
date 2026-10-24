@@ -95,6 +95,8 @@ struct FSandParams
 	bool   bColor8 = false;
 	/** 색 순서를 프레임마다 한 칸 돌린다 (R5 — 고정 순서의 방향 편향 확인) */
 	bool   bColor8Rotate = false;
+	/** A안 단계 2 — GPU 블록 안 배치 병렬 (-gpu2 에서만, bColor8 을 함께 켠다) */
+	bool   bColor8Par = false;
 
 	// (38) 모멘텀 항. β_l = min(a·(l/l_max)^b, 1). 접촉(단방향)에서는 a=2 를 시도하라고 논문이 밝힘
 	float  MomentumA = 0.f;   // 0이면 모멘텀 없음 (기본은 꺼둔다 — 단계적으로 켠다)

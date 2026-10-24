@@ -69,6 +69,13 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandSolverParams, )
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BondAdjOffset)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BondAdj)
 
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ContactBatchRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ContactOrderRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ContactOrderRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BatchStartRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BatchStartRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BatchStatsRW)
+
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, GroundLambdaRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, WallLambdaRW)
 
@@ -91,6 +98,8 @@ END_SHADER_PARAMETER_STRUCT()
 
 #define SOLVER_USF "/Project/Private/SandSolver.usf"
 SAND_SHADER(FSandSolveBlocksCS,   FSandSolverParams, SOLVER_USF, "SolveBlocksCS")
+SAND_SHADER(FSandColorBatchCS,   FSandSolverParams, SOLVER_USF, "ColorBatchCS")
+SAND_SHADER(FSandSolveBlocksParCS, FSandSolverParams, SOLVER_USF, "SolveBlocksParCS")
 SAND_SHADER(FSandCountBoundaryCS, FSandSolverParams, SOLVER_USF, "CountBoundaryCS")
 SAND_SHADER(FSandSolveBoundaryCS, FSandSolverParams, SOLVER_USF, "SolveBoundaryCS")
 SAND_SHADER(FSandApplyBoundaryCS, FSandSolverParams, SOLVER_USF, "ApplyBoundaryCS")
@@ -226,6 +235,7 @@ namespace
 	constexpr int32 ScanGroupElems = 2048;   // SandFrame.usf SCAN_GROUP × 2
 	constexpr int32 StatsGroup = 256;
 	constexpr uint32 BlockTableSize = 8192;  // 블록 해시 표. 충돌은 무해하다 — 멀리 떨어진 두 블록이 한 스레드에 묶일 뿐
+	constexpr uint32 BatchStride = 33;       // SandSolver.usf BATCH_STRIDE
 
 	// 버퍼 크기를 2의 거듭제곱으로 올린다 — 접촉 수가 프레임마다 달라도 RDG 풀이 같은 버퍼를 다시 쓴다
 	template <typename T>
@@ -295,7 +305,7 @@ namespace
 	/** 반복 루프 — 1·2단계가 같은 패스 열을 쓴다. IndirectArgs 가 있으면 경계 패스는 간접(GPU 가 센 쌍 수), 없으면 NumBoundaryDirect */
 	void AddSolverIterations(FRDGBuilder& GraphBuilder, const FGlobalShaderMap* ShaderMap, const FSandSolverParams& T,
 		int32 Iterations, int32 N, int32 NumBlocks, int32 NumBonds, bool bMassSplit, FRDGBufferRef IndirectArgs, int32 NumBoundaryDirect,
-		bool bColor8 = false, int32 FrameIndex = 0)
+		bool bColor8 = false, int32 FrameIndex = 0, bool bColor8Par = false)
 	{
 		for (int32 It = 0; It < Iterations; ++It)
 		{
@@ -308,7 +318,15 @@ namespace
 					FSandSolverParams TC = T;
 					TC.NumBlocks = Sub;
 					TC.BlockBase = ((c + FrameIndex) & 7) * Sub;   // 색 회전 (R5)
-					AddDirectPass<FSandSolveBlocksCS>(GraphBuilder, RDG_EVENT_NAME("SandColor"), ShaderMap, TC, Sub, 32);
+					if (bColor8Par)
+					{
+						// 단계 2 — 그룹 = 블록, 블록 안 배치 병렬
+						AddDirectPass<FSandSolveBlocksParCS>(GraphBuilder, RDG_EVENT_NAME("SandColorPar"), ShaderMap, TC, Sub * 64, 64);
+					}
+					else
+					{
+						AddDirectPass<FSandSolveBlocksCS>(GraphBuilder, RDG_EVENT_NAME("SandColor"), ShaderMap, TC, Sub, 32);
+					}
 				}
 			}
 			else if (NumBlocks > 0)
@@ -535,6 +553,7 @@ struct FSandGpuSim::FState
 	FRHIGPUBufferReadback StatsRB{ TEXT("SandGpu.Stats") };
 	FRHIGPUBufferReadback CountersRB{ TEXT("SandGpu.Counters") };
 	FRHIGPUBufferReadback FrameCountsRB{ TEXT("SandGpu.FrameCounts") };
+	FRHIGPUBufferReadback BatchStatsRB{ TEXT("SandGpu.BatchStats") };
 	FRHIGPUBufferReadback DlPos{ TEXT("SandGpu.DlPos") }, DlVel{ TEXT("SandGpu.DlVel") }, DlPairIJ{ TEXT("SandGpu.DlPairIJ") },
 		DlLambda{ TEXT("SandGpu.DlLambda") }, DlBond{ TEXT("SandGpu.DlBond") }, DlGround{ TEXT("SandGpu.DlGround") }, DlWall{ TEXT("SandGpu.DlWall") };
 
@@ -689,8 +708,9 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 	S->StatsPartial.SetNumUninitialized(NumStatGroups);
 	uint32 Counters[4] = {};
 	uint32 FrameCounts[4] = {};
+	uint32 BatchStats[4] = {};
 
-	ENQUEUE_RENDER_COMMAND(SandGpuSimStep)([S, &P, LN, LB, LMax, TableSize, NumStatGroups, &Counters, &FrameCounts](FRHICommandListImmediate& RHICmdList)
+	ENQUEUE_RENDER_COMMAND(SandGpuSimStep)([S, &P, LN, LB, LMax, TableSize, NumStatGroups, &Counters, &FrameCounts, &BatchStats](FRHICommandListImmediate& RHICmdList)
 	{
 		const int32 Cur = S->Cur, Old = 1 - S->Cur;
 		{
@@ -885,7 +905,25 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			T.BondAdj       = F.BondAdj;
 			T.GroundLambdaRW = F.GroundLambdaRW;
 			T.WallLambdaRW   = F.WallLambdaRW;
-			AddSolverIterations(GraphBuilder, ShaderMap, T, P.Iterations, LN, BlockTableSize, LB, P.bMassSplit, IndirectArgs, 0, P.bColor8, P.FrameIndex);
+
+			// 단계 2 — 블록 안 배치 나누기 (프레임당 1회, 반복 앞)
+			const bool bColor8Par = P.bColor8 && P.bColor8Par;
+			FRDGBufferRef BatchStatsBuf = ScratchBuffer(GraphBuilder, TEXT("SandSim.BatchStats"), sizeof(uint32), 4);
+			AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(BatchStatsBuf), 0u);
+			if (bColor8Par)
+			{
+				FRDGBufferRef ContactBatch = ScratchBuffer(GraphBuilder, TEXT("SandSim.ContactBatch"), sizeof(uint32), LMax);
+				FRDGBufferRef ContactOrder = ScratchBuffer(GraphBuilder, TEXT("SandSim.ContactOrder"), sizeof(uint32), LMax);
+				FRDGBufferRef BatchStart   = ScratchBuffer(GraphBuilder, TEXT("SandSim.BatchStart"), sizeof(uint32), BlockTableSize * BatchStride);
+				T.ContactBatchRW = GraphBuilder.CreateUAV(ContactBatch);
+				T.ContactOrderRW = GraphBuilder.CreateUAV(ContactOrder);
+				T.ContactOrderRO = GraphBuilder.CreateSRV(ContactOrder);
+				T.BatchStartRW   = GraphBuilder.CreateUAV(BatchStart);
+				T.BatchStartRO   = GraphBuilder.CreateSRV(BatchStart);
+				T.BatchStatsRW   = GraphBuilder.CreateUAV(BatchStatsBuf);
+				AddDirectPass<FSandColorBatchCS>(GraphBuilder, RDG_EVENT_NAME("SandColorBatch"), ShaderMap, T, BlockTableSize * 64, 64);
+			}
+			AddSolverIterations(GraphBuilder, ShaderMap, T, P.Iterations, LN, BlockTableSize, LB, P.bMassSplit, IndirectArgs, 0, P.bColor8, P.FrameIndex, bColor8Par);
 
 			// --- 파단 · 통계 ---
 			if (LB > 0)
@@ -897,12 +935,14 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			AddEnqueueCopyPass(GraphBuilder, &S->StatsRB, Stats, NumStatGroups * sizeof(FVector4f));
 			AddEnqueueCopyPass(GraphBuilder, &S->CountersRB, CountersBuf, 4 * sizeof(uint32));
 			AddEnqueueCopyPass(GraphBuilder, &S->FrameCountsRB, FrameCountsBuf, 4 * sizeof(uint32));
+			AddEnqueueCopyPass(GraphBuilder, &S->BatchStatsRB, BatchStatsBuf, 4 * sizeof(uint32));
 			GraphBuilder.Execute();
 		}
 		RHICmdList.SubmitAndBlockUntilGPUIdle();
 		FetchReadback(S->StatsRB, S->StatsPartial.GetData(), NumStatGroups * sizeof(FVector4f));
 		FetchReadback(S->CountersRB, Counters, 4 * sizeof(uint32));
 		FetchReadback(S->FrameCountsRB, FrameCounts, 4 * sizeof(uint32));
+		FetchReadback(S->BatchStatsRB, BatchStats, 4 * sizeof(uint32));
 		S->Cur = Old;
 		EndGpuFrame(RHICmdList);
 	});
@@ -920,6 +960,10 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 	Out.NumPairs     = FrameCounts[0];
 	Out.NumInternal  = FrameCounts[1];
 	Out.NumBoundary  = FrameCounts[2];
+	Out.MaxBatch        = (int32)BatchStats[0];
+	Out.SumBatch        = (int32)BatchStats[1];
+	Out.NumBatchBlocks  = (int32)BatchStats[2];
+	Out.BatchOverflow   = (int32)BatchStats[3];
 	LastNumPairs = Out.NumPairs;
 	Out.GpuMs = (FPlatformTime::Seconds() - T0) * 1000.0;
 }

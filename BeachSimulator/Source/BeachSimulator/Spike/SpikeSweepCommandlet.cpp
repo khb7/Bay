@@ -300,6 +300,8 @@ namespace
 			P.BlockSize    = PourBlock;
 			P.bApgd        = FParse::Param(*Params, TEXT("apgd"));   // D′
 			P.bColor8      = FParse::Param(*Params, TEXT("color8"));   // A안 단계 0
+			P.bColor8Par = FParse::Param(*Params, TEXT("color8par"));   // A안 단계 2
+			P.bColor8 = P.bColor8 || P.bColor8Par;
 			FParse::Value(*Params, TEXT("colorblock="), P.BlockSize);
 			P.bBlockShift  = FParse::Param(*Params, TEXT("blockshift"));
 			Cfgs.Add(P);
@@ -522,6 +524,8 @@ namespace
 			P.bGpuSolve = FParse::Param(*Params, TEXT("gpu"));
 			P.bGpuResident = FParse::Param(*Params, TEXT("gpu2"));
 			P.bColor8 = FParse::Param(*Params, TEXT("color8"));   // A안 단계 1 (GPU 8색)
+			P.bColor8Par = FParse::Param(*Params, TEXT("color8par"));   // A안 단계 2
+			P.bColor8 = P.bColor8 || P.bColor8Par;
 
 			FTiltSetup S;
 			S.TargetCount = Count;
@@ -743,6 +747,8 @@ namespace
 		P.bApgd = FParse::Param(*Params, TEXT("apgd"));   // D′ APGD (papers C5)
 		P.bApgdBonds = !FParse::Param(*Params, TEXT("apgdnobonds"));   // 결합은 외삽 없이
 		P.bColor8 = FParse::Param(*Params, TEXT("color8"));   // A안 단계 0
+		P.bColor8Par = FParse::Param(*Params, TEXT("color8par"));   // A안 단계 2
+		P.bColor8 = P.bColor8 || P.bColor8Par;
 		P.bColor8Rotate = FParse::Param(*Params, TEXT("color8rot"));
 		FParse::Value(*Params, TEXT("sor="), P.SorOmega);
 		FParse::Value(*Params, TEXT("ma="),  P.MomentumA);
@@ -848,6 +854,8 @@ namespace
 		P.bApgd = FParse::Param(*Params, TEXT("apgd"));   // D′ APGD (papers C5)
 		P.bApgdBonds = !FParse::Param(*Params, TEXT("apgdnobonds"));   // 결합은 외삽 없이
 		P.bColor8 = FParse::Param(*Params, TEXT("color8"));   // A안 단계 0
+		P.bColor8Par = FParse::Param(*Params, TEXT("color8par"));   // A안 단계 2
+		P.bColor8 = P.bColor8 || P.bColor8Par;
 		P.bColor8Rotate = FParse::Param(*Params, TEXT("color8rot"));
 		FParse::Value(*Params, TEXT("sor="), P.SorOmega);
 		FParse::Value(*Params, TEXT("ma="),  P.MomentumA);

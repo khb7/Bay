@@ -1269,7 +1269,8 @@ void FSandSpike::StepGpuResident(float Dt)
 	P.StepDt      = Dt;
 	P.SearchRange = D + Margin;
 	P.BlockSize   = Params.BlockSize > 0.f ? Params.BlockSize : (Params.bColor8 ? 15.f : 30.f);   // A안: 15cm 확정 (#40)
-	P.bColor8     = Params.bColor8;
+	P.bColor8     = Params.bColor8 || Params.bColor8Par;
+	P.bColor8Par  = Params.bColor8Par;
 	P.FrameIndex  = Params.bColor8Rotate || Params.bColor8 ? Frame : 0;   // GPU 색 모드는 회전 기본 (#40 R5)
 	P.WarmStart   = Params.WarmStart;
 	P.WarmGapTol  = Params.WarmGapTol;
@@ -1291,6 +1292,11 @@ void FSandSpike::StepGpuResident(float Dt)
 	FSandGpuStats S;
 	GpuSim->Step(P, S);
 	checkf(S.PairOverflow == 0, TEXT("GPU 쌍 버퍼 넘침 (%d) — MaxPairs 를 올릴 것"), S.PairOverflow);
+	if (Params.bColor8Par && Frame % 600 == 0)
+	{
+		UE_LOG(LogTemp, Display, TEXT("[color8par] f%d 블록 %d · 배치 최대 %d · 평균 %.1f · 해시 넘침 %d"), Frame, S.NumBatchBlocks, S.MaxBatch,
+			S.NumBatchBlocks > 0 ? (float)S.SumBatch / S.NumBatchBlocks : 0.f, S.BatchOverflow);
+	}
 
 	BondsBrokenTotal += S.BondsBroken;
 	LastBoundaryFrac = S.NumPairs > 0 ? (float)S.NumBoundary / S.NumPairs : 0.f;

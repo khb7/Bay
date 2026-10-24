@@ -70,6 +70,17 @@ StructuredBuffer<float4>   BondImpulseRO;
 StructuredBuffer<uint>     BondAdjOffset;
 StructuredBuffer<uint>     BondAdj;
 
+// A안 단계 2 — 블록 안 배치 (ColorBatchCS 가 프레임당 1회 쓰고 SolveBlocksParCS 가 읽는다)
+#define MAX_BATCH    32u                    // 배치 31 = 넘침 · 순차
+#define BATCH_STRIDE (MAX_BATCH + 1u)       // 블록마다 배치 시작 32 + 끝 1
+#define BATCH_HASH   512u                   // 블록 안 입자 → 마스크 해시 칸 수
+RWStructuredBuffer<uint>   ContactBatchRW;   // 접촉 k 의 배치 (임시)
+RWStructuredBuffer<uint>   ContactOrderRW;   // 블록 구간 안에서 (배치, k) 순 접촉 번호
+StructuredBuffer<uint>     ContactOrderRO;
+RWStructuredBuffer<uint>   BatchStartRW;     // b · BATCH_STRIDE + t
+StructuredBuffer<uint>     BatchStartRO;
+RWStructuredBuffer<uint>   BatchStatsRW;     // [0] 최대 배치 수 · [1] Σ배치 수 · [2] 접촉 있는 블록 · [3] 해시 넘침 블록
+
 RWStructuredBuffer<float>  GroundLambdaRW;
 RWStructuredBuffer<float4> WallLambdaRW;
 
@@ -125,6 +136,34 @@ float3 ContactImpulse(inout float4 InOutL, float WSum, float3 Pi, float3 Pj, flo
 	return N * DLambdaN + (NewTan - OldTan);
 }
 
+// 접촉 k 하나를 풀고 두 입자에 바로 쓴다 (GS). 블록 순차 · 배치 병렬이 같은 몸체를 쓴다
+void SolveContactGS(uint k)
+{
+	const uint i = ContactIJ[2 * k];
+	const uint j = ContactIJ[2 * k + 1];
+	float4 Pi = PosRW[i];
+	float4 Pj = PosRW[j];
+	const float WSum = Pi.w + Pj.w;
+	if (WSum <= 0.f)
+	{
+		return;
+	}
+	float4 Vi = VelRW[i];
+	float4 Vj = VelRW[j];
+	float4 L  = ContactLambdaRW[k];
+	const float3 Impulse = ContactImpulse(L, WSum, Pi.xyz, Pj.xyz, Vi.xyz, Vj.xyz, PrevPos[i].xyz, PrevPos[j].xyz);
+	ContactLambdaRW[k] = L;
+
+	Vi.xyz += Impulse * Pi.w;
+	Vj.xyz -= Impulse * Pj.w;
+	Pi.xyz += Impulse * (Pi.w * StepDt);
+	Pj.xyz -= Impulse * (Pj.w * StepDt);
+	VelRW[i] = Vi;
+	VelRW[j] = Vj;
+	PosRW[i] = Pi;
+	PosRW[j] = Pj;
+}
+
 [numthreads(32, 1, 1)]
 void SolveBlocksCS(uint3 Tid : SV_DispatchThreadID)
 {
@@ -137,29 +176,150 @@ void SolveBlocksCS(uint3 Tid : SV_DispatchThreadID)
 	const uint End   = BlockRange[b + 1];
 	for (uint k = Start; k < End; ++k)
 	{
-		const uint i = ContactIJ[2 * k];
-		const uint j = ContactIJ[2 * k + 1];
-		float4 Pi = PosRW[i];
-		float4 Pj = PosRW[j];
-		const float WSum = Pi.w + Pj.w;
-		if (WSum <= 0.f)
-		{
-			continue;
-		}
-		float4 Vi = VelRW[i];
-		float4 Vj = VelRW[j];
-		float4 L  = ContactLambdaRW[k];
-		const float3 Impulse = ContactImpulse(L, WSum, Pi.xyz, Pj.xyz, Vi.xyz, Vj.xyz, PrevPos[i].xyz, PrevPos[j].xyz);
-		ContactLambdaRW[k] = L;
+		SolveContactGS(k);
+	}
+}
 
-		Vi.xyz += Impulse * Pi.w;
-		Vj.xyz -= Impulse * Pj.w;
-		Pi.xyz += Impulse * (Pi.w * StepDt);
-		Pj.xyz -= Impulse * (Pj.w * StepDt);
-		VelRW[i] = Vi;
-		VelRW[j] = Vj;
-		PosRW[i] = Pi;
-		PosRW[j] = Pj;
+// ------------------------------------------------------------------------------------------------
+// A안 단계 2 — 블록 안 배치 (m0b-plan-a.md 단계 2 상세)
+
+groupshared uint GsHashKey[BATCH_HASH];    // 입자 id + 1 (0 = 빈 칸)
+groupshared uint GsHashMask[BATCH_HASH];   // 그 입자가 이미 든 배치 비트
+groupshared uint GsBatchCursor[MAX_BATCH];
+
+// 입자 p 의 해시 칸. 넘치면 BATCH_HASH
+uint BatchSlot(uint p)
+{
+	uint h = (p * 2654435761u) & (BATCH_HASH - 1u);
+	for (uint Probe = 0; Probe < BATCH_HASH; ++Probe)
+	{
+		if (GsHashKey[h] == p + 1u)
+		{
+			return h;
+		}
+		if (GsHashKey[h] == 0u)
+		{
+			GsHashKey[h]  = p + 1u;
+			GsHashMask[h] = 0u;
+			return h;
+		}
+		h = (h + 1u) & (BATCH_HASH - 1u);
+	}
+	return BATCH_HASH;
+}
+
+// 그룹 = 블록 (전 색 한 번에). 스레드 0 이 순차 greedy — 단계 0 CPU OrderContactsColor8 과 같은 규칙: k 오름차순, 두 입자 마스크의 첫 빈 비트
+[numthreads(64, 1, 1)]
+void ColorBatchCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
+{
+	const uint b = Gid.x;
+	const uint Start = BlockRange[b];
+	const uint End   = BlockRange[b + 1];
+	for (uint s = Gtid.x; s < BATCH_HASH; s += 64u)
+	{
+		GsHashKey[s] = 0u;
+	}
+	GroupMemoryBarrierWithGroupSync();
+	if (Gtid.x != 0u)
+	{
+		return;
+	}
+
+	uint Counts[MAX_BATCH];
+	for (uint t = 0; t < MAX_BATCH; ++t)
+	{
+		Counts[t] = 0u;
+	}
+	bool bOverflow = false;
+	uint NumBatch = 0u;
+	for (uint k = Start; k < End; ++k)
+	{
+		uint Batch = MAX_BATCH - 1u;
+		if (!bOverflow)
+		{
+			const uint Si = BatchSlot(ContactIJ[2 * k]);
+			const uint Sj = BatchSlot(ContactIJ[2 * k + 1]);
+			if (Si == BATCH_HASH || Sj == BATCH_HASH)
+			{
+				bOverflow = true;   // 이 뒤 접촉은 전부 순차 배치로
+			}
+			else
+			{
+				const uint Used = GsHashMask[Si] | GsHashMask[Sj];
+				const uint Free = firstbitlow(~Used);   // 32 비트가 다 차면 0xFFFFFFFF
+				Batch = min(Free, MAX_BATCH - 1u);
+				if (Batch < MAX_BATCH - 1u)
+				{
+					GsHashMask[Si] |= 1u << Batch;
+					GsHashMask[Sj] |= 1u << Batch;
+				}
+			}
+		}
+		ContactBatchRW[k] = Batch;
+		Counts[Batch] += 1u;
+		NumBatch = max(NumBatch, Batch + 1u);
+	}
+
+	// 배치 시작 = 배치별 개수의 접두합
+	uint Cursor = Start;
+	for (uint t2 = 0; t2 < MAX_BATCH; ++t2)
+	{
+		BatchStartRW[b * BATCH_STRIDE + t2] = Cursor;
+		GsBatchCursor[t2] = Cursor;
+		Cursor += Counts[t2];
+	}
+	BatchStartRW[b * BATCH_STRIDE + MAX_BATCH] = Cursor;
+	for (uint k2 = Start; k2 < End; ++k2)
+	{
+		const uint Batch = ContactBatchRW[k2];
+		ContactOrderRW[GsBatchCursor[Batch]] = k2;
+		GsBatchCursor[Batch] += 1u;
+	}
+
+	if (End > Start)
+	{
+		InterlockedMax(BatchStatsRW[0], NumBatch);
+		InterlockedAdd(BatchStatsRW[1], NumBatch);
+		InterlockedAdd(BatchStatsRW[2], 1u);
+		if (bOverflow)
+		{
+			InterlockedAdd(BatchStatsRW[3], 1u);
+		}
+	}
+}
+
+// 그룹 = 블록. 배치 안 접촉은 입자를 공유하지 않아 동시에, 배치 사이는 장치 메모리 배리어 → 순서만 바뀐 GS (단계 1 과 같은 순서)
+[numthreads(64, 1, 1)]
+void SolveBlocksParCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
+{
+	const uint b = BlockBase + Gid.x;
+	const uint Base = b * BATCH_STRIDE;
+	if (BatchStartRO[Base] == BatchStartRO[Base + MAX_BATCH])
+	{
+		return;   // 빈 블록 — 그룹 전체가 같은 값을 읽으므로 배리어 앞 분기가 균일하다
+	}
+	for (uint t = 0; t < MAX_BATCH - 1u; ++t)
+	{
+		const uint S = BatchStartRO[Base + t];
+		const uint E = BatchStartRO[Base + t + 1u];
+		if (S == E)
+		{
+			break;   // greedy 라 빈 배치 뒤는 31(넘침) 말고는 비어 있다
+		}
+		for (uint k = S + Gtid.x; k < E; k += 64u)
+		{
+			SolveContactGS(ContactOrderRO[k]);
+		}
+		DeviceMemoryBarrierWithGroupSync();
+	}
+	if (Gtid.x == 0u)
+	{
+		const uint S = BatchStartRO[Base + MAX_BATCH - 1u];
+		const uint E = BatchStartRO[Base + MAX_BATCH];
+		for (uint k = S; k < E; ++k)
+		{
+			SolveContactGS(ContactOrderRO[k]);
+		}
 	}
 }
 
