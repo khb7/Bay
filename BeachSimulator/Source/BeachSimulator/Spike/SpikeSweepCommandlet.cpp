@@ -534,12 +534,36 @@ namespace
 			S.BaseJitter = 0.3f;
 			S.bOpenDownhill = false;
 
+			// #44 정지 상태 — -window=N 이면 N 프레임마다 그 구간 평균을 찍는다 (다짐 → 정지 경과). -w=W 면 BondFrame 에 물을 주고 결합
+			int32 Window = 0; FParse::Value(*Params, TEXT("window="), Window);
+			float W = 0.f; FParse::Value(*Params, TEXT("w="), W);
+			int32 BondFrame = 300; FParse::Value(*Params, TEXT("bondframe="), BondFrame);
+			FParse::Value(*Params, TEXT("strength="), P.BondStrength);
+			FParse::Value(*Params, TEXT("form="), P.BondFormStretch);
+
 			FSandSpike Sim;
 			Sim.InitTiltBox(P, S);
 			double Sum = 0.0, SumGpu = 0.0; float MinMs = FLT_MAX, MaxMs = 0.f; int32 Measured = 0;
+			double WinSum = 0.0; int32 WinN = 0;
 			for (int32 f = 0; f < Frames; ++f)
 			{
+				if (W > 0.f && f == BondFrame)
+				{
+					Sim.SetWGlobal(W);
+					const int32 Made = Sim.FormBonds();
+					UE_LOG(LogSpikeSweep, Display, TEXT("   f%d 결합 %d (W %.2f)"), f, Made, W);
+				}
 				Sim.Step(1.f / 60.f);
+				if (Window > 0)
+				{
+					WinSum += Sim.LastStepMs(); ++WinN;
+					if (WinN == Window)
+					{
+						UE_LOG(LogSpikeSweep, Display, TEXT("   [창] %7d f%5d | %8.1f ms | 쌍/입자 %5.1f | 평균|v| %.3f"),
+							Sim.Num(), f + 1, WinSum / WinN, (float)Sim.GetContacts().Num() / FMath::Max(1, Sim.Num()), Sim.AvgSpeed());
+						WinSum = 0.0; WinN = 0;
+					}
+				}
 				if (f < WarmupFrames) { continue; }
 				const float Ms = Sim.LastStepMs();
 				Sum += Ms; SumGpu += Sim.LastGpuMs(); MinMs = FMath::Min(MinMs, Ms); MaxMs = FMath::Max(MaxMs, Ms); ++Measured;
