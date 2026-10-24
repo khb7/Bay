@@ -289,6 +289,7 @@ namespace
 			P.bWarmTangent = WarmTan != 0;
 			P.WarmGapTol = WarmTol;
 			P.Kv         = KvV;
+			FParse::Value(*Params, TEXT("vmax="), P.MaxDepenVel);   // #47
 			P.Seed       = (uint32)Sd;
 			P.SorOmega   = Sor;
 			P.MomentumA  = Ma;
@@ -581,6 +582,9 @@ namespace
 			P.WarmStart = 1.f; P.WarmGapTol = 0.05f; P.SorOmega = 1.f;
 			P.bGatherApply = true; P.bMassSplit = true; P.BlockSize = 30.f;
 			FParse::Value(*Params, TEXT("substeps="), P.Substeps);   // 서브스텝 계획 S0
+			FParse::Value(*Params, TEXT("vmax="), P.MaxDepenVel);   // #47
+			FParse::Value(*Params, TEXT("warm="), P.WarmStart);
+			FParse::Value(*Params, TEXT("kv="), P.Kv);
 			FParse::Value(*Params, TEXT("block="), P.BlockSize);
 			P.bGpuSolve = FParse::Param(*Params, TEXT("gpu"));
 			P.bGpuResident = FParse::Param(*Params, TEXT("gpu2"));
@@ -820,6 +824,8 @@ namespace
 		P.Friction = Mu;
 		P.Iterations = Iterations;
 		FParse::Value(*Params, TEXT("substeps="), P.Substeps);   // 서브스텝 계획 S0
+		FParse::Value(*Params, TEXT("kv="), P.Kv);   // #47
+		FParse::Value(*Params, TEXT("vmax="), P.MaxDepenVel);
 		P.WGlobal = W;
 		P.WarmStart = 1.f;
 		P.WarmGapTol = 0.02f;
@@ -930,6 +936,7 @@ namespace
 		FParse::Value(*Params, TEXT("warm="), P.WarmStart);
 		FParse::Value(*Params, TEXT("warmtol="), P.WarmGapTol);
 		FParse::Value(*Params, TEXT("kv="), P.Kv);
+		FParse::Value(*Params, TEXT("vmax="), P.MaxDepenVel);   // #47
 		FParse::Value(*Params, TEXT("wallmu="), P.WallFriction);
 		P.bGatherApply = FParse::Param(*Params, TEXT("gather"));   // m0b-spike §3-1
 		P.bMassSplit = FParse::Param(*Params, TEXT("masssplit"));  // A′

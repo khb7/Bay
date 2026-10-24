@@ -84,6 +84,7 @@ struct FSandGpuFrameParams
 	float WarmStart = 1.f, WarmGapTol = 0.f;
 	bool  bWarmTangent = true;
 	float Kv = 0.1f, Kc = 1.f, SorOmega = 1.f, Friction = 0.17f;
+	float MaxDepenVel = 0.f;          // #47 접촉 분리 속도 상한 (cm/s). 0 = 끔
 	bool  bMassSplit = true;
 	FVector3f Gravity = FVector3f(0.f, 0.f, -980.f);   // 방향 × 크기 × 배율
 	float BondAlphaTilde = 0.f, BondLambdaMax = 0.f, BondOmega = 1.f, BreakStretch = 1.3f;

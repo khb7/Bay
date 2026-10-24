@@ -28,6 +28,7 @@ float Kv;
 float Kc;
 float SorOmega;
 float Friction;
+float MaxDepenVel;      // #47 접촉 분리 속도 상한 (cm/s). 0 = 끔
 uint  bMassSplit;
 
 float BondAlphaTilde;
@@ -110,7 +111,9 @@ float3 ContactImpulse(inout float4 InOutL, float WSum, float3 Pi, float3 Pj, flo
 
 	// 법선
 	const float NuN  = dot(RelV, N);
-	const float ResN = Kv * NuN + (Kc * InvH) * Gap;
+	// #47 분리 속도 상한 (Small Steps 식 10) — 깊은 겹침이 한 번에 큰 분리 속도가 되지 않게 침투 깊이를 MaxDepenVel·h 로 자른다
+	const float GapC = (MaxDepenVel > 0.f) ? max(Gap, -MaxDepenVel * StepDt) : Gap;
+	const float ResN = Kv * NuN + (Kc * InvH) * GapC;
 	float DLambdaN   = -(SorOmega / WSum) * ResN;
 	const float OldN = InOutL.w;
 	const float NewN = max(0.f, OldN + DLambdaN);

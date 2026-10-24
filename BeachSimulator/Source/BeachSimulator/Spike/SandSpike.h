@@ -38,6 +38,8 @@ struct FSandParams
 	// SP는 임펄스 하나에서 v 와 x 를 함께 낸다(x 는 정확히 h 배) — 역산이 없다.
 	bool   bSequentialPositions = true;
 	float  Kv    = 0.1f;    // 잔차의 속도 성분. 0이면 순수 PBD, 0.1이 논문 권장 출발점
+	/** #47 접촉 분리 속도 상한 (cm/s, -gpu2 만). 0 = 끔. 깊은 겹침의 폭발 사출을 막는다 (Small Steps 식 10) */
+	float  MaxDepenVel = 0.f;
 	float  Kc    = 1.0f;    // 잔차의 위치 성분
 	float  SorOmega = 0.5f; // (36) 의 ω
 	/**

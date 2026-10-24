@@ -32,6 +32,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandSolverParams, )
 	SHADER_PARAMETER(float, Kc)
 	SHADER_PARAMETER(float, SorOmega)
 	SHADER_PARAMETER(float, Friction)
+	SHADER_PARAMETER(float, MaxDepenVel)
 	SHADER_PARAMETER(uint32, bMassSplit)
 	SHADER_PARAMETER(float, BondAlphaTilde)
 	SHADER_PARAMETER(float, BondLambdaMax)
@@ -445,6 +446,7 @@ namespace
 			T.Kc       = D.Kc;
 			T.SorOmega = D.SorOmega;
 			T.Friction = D.Friction;
+			T.MaxDepenVel = 0.f;
 			T.bMassSplit     = D.bMassSplit ? 1 : 0;
 			T.BondAlphaTilde = D.BondAlphaTilde;
 			T.BondLambdaMax  = D.BondLambdaMax;
@@ -872,6 +874,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			T.Kc       = P.Kc;
 			T.SorOmega = P.SorOmega;
 			T.Friction = P.Friction;
+			T.MaxDepenVel = P.MaxDepenVel;
 			T.bMassSplit     = P.bMassSplit ? 1 : 0;
 			T.BondAlphaTilde = P.BondAlphaTilde;
 			T.BondLambdaMax  = P.BondLambdaMax;
