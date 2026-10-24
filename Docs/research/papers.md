@@ -1271,6 +1271,59 @@ for s in substeps:  Δts = Δtf / n
 - 결합(XPBD)은 α̃ = α/Δts² — 서브스텝마다 다시 계산.
 - 계획: [m0b-plan-substep.md](../design/m0b-plan-substep.md).
 
+### C7. Wang, Servin, Berglund (2015) — PGS 워밍 스타트 · 입상체 ★★
+
+**"Warm starting the projected Gauss-Seidel algorithm for granular matter simulation"** — Computational Particle Mechanics (arXiv 1509.04042). 원문 읽음 (2026-10-25, #46~47 의 기둥 진동 때문에). AGX Dynamics(Algoryx)의 NDEM.
+원래 찾던 **Servin, Wang, Lacoursière, Bodin (2014), "Examining the smooth and nonsmooth DEM approaches to granular matter", IJNME 97:878** 은 유료라 못 읽었다 — 아래 ★ 문장이 그 결론을 인용한다.
+
+**★ 우리 "기둥 진동" 의 이름이 여기 있다**
+> PGS 는 각 접촉은 정확히 풀지만 전체 해에는 **확산적으로** 다가간다. 남은 오차는 **인공 탄성**으로 나타나고, 그 유효 음속은 `v_PGS = √N_it · d / Δt`.
+> 필요한 반복 수는 접촉망의 크기, **특히 중력(하중) 방향 접촉 수**와 함께 는다. 아치(Janssen 효과)로 포화될 수는 있다.
+
+- 반복이 모자란 기둥 = **√N_it 에 비례하는 음속을 가진 탄성 기둥**. 그래서 스프링처럼 출렁인다 (#46 ①). 반복 60 → 120 은 음속 √2 배.
+- 1D 기둥: 오차 1~5% 에 필요한 반복이 **입자 수(층)에 거의 선형**. 워밍(history)이면 콜드의 1/3.
+- 3363 개 더미(높이 15d): 높이 오차 5% 에 워밍으로도 반복 ~50 수준, 반복이 적으면 "더미가 한 층으로 녹아내린다".
+
+**SPOOK 안정화 (Lacoursière 2007)** — 우리 `Kv·ν + Kc/h·gap` 과 같은 자리의 식:
+```
+목표 법선 속도:  q_n = −(4/Δt)·Υ·g + Υ·G·v_old,     Υ = 1 / (1 + 4τ/Δt),   τ = n_s·Δt,  n_s = 2  →  Υ = 1/9
+```
+- **침투는 τ (2 스텝) 에 걸쳐 나눠 고친다** (`4Υ ≈ 0.44` — 우리 Kc = 1 은 한 스텝에 전부).
+- 정규화 Σ (컴플라이언스 ε, 감쇠 γ) 로 접촉 탄성을 실제 재료(Hertz)에 맞춘다.
+
+**워밍**: 지난 스텝 λ 의 **β = 0.85** 가 최적 (우리 1.0, #36 크리프 때문). 워밍 임펄스를 속도에 반영 안 하면 콜드보다 나쁘다 (우리는 반영한다). 정지·준정지에서 2~5 배, 빠른 흐름에서는 효과 없음. 법선만 워밍하면 효과 거의 없다 — 마찰까지 해야 한다.
+
+### C8. Catto — Soft Step (Box2D v3, 2024) · Soft Constraints (GDC 2011) ★★
+
+**"Solver2D"** 블로그 (box2d.org/posts/2024/02/solver2d) · Box2D v3 소스 (`types.c` · `solver.c` · `contact_solver.c`) 확인 (2026-10-25).
+
+**Soft Step = 소프트 제약 + 서브스텝 + 워밍 + relax**. Box2D v3 의 기본 솔버.
+```
+for substep (기본 4):
+    속도 적분 → 워밍 → 풀이 (bias 켬, 반복 1) → 위치 적분 → relax (bias 끔, 반복 1)
+반발 · 임펄스 저장은 서브스텝 밖
+```
+- **소프트 접촉 (질량-스프링-댐퍼로 매개화)** — ζ 감쇠비, ω = 2π·hertz, h:
+  ```
+  a1 = 2ζ + hω,  a2 = hω·a1,  a3 = 1/(1+a2)
+  biasRate = ω/a1,  massCoeff = a2·a3,  impulseCoeff = a3
+  Δλ = −massCoeff · m_eff · (vn + biasRate·sep) − impulseCoeff · λ_acc
+  ```
+- **기본값 (`b2DefaultWorldDef`)**: `contactHertz = 30` · **`contactDampingRatio = 10` (강한 과감쇠)** · `contactSpeed`(최대 밀어내기 속도) = **3 m/s**. 60 Hz · 서브스텝 4. "60 Hz 스텝이면 30 Hz 이하 (나이퀴스트)".
+- 침투(sep < 0)의 위치 보정은 **별도 push 패스에서 소프트하게, `−contactSpeed` 로 하한** (= C6 식 10). 다가오지 않는 간격(sep > 0)은 speculative.
+- **relax**: 위치 적분 뒤 bias 를 끄고 한 번 더 풀어, 소프트 bias 가 속도에 넣은 에너지를 지운다 — "비싸지만 품질을 극적으로 올린다".
+
+**★ 우리 값과 비교 (서브스텝 4 · h = 1/240 s 로 계산)**
+```
+                   속도 오차를 지우는 비율      침투를 지우는 비율 (스텝당)
+Box2D v3           massCoeff ≈ 0.94            biasRate·h ≈ 0.04
+SPOOK (C7)         ≈ 1 (속도 제약)              4Υ ≈ 0.44 (2 스텝에 걸쳐)
+우리 Kv 0.1/Kc 1    0.1                          1.0          ← 정반대: 위치는 세게, 속도는 약하게
+우리 Kv 0.6 (#47)  0.6                          1.0
+```
+- 두 산업 솔버 모두 **속도는 거의 다 지우고 침투는 천천히** 고친다. 우리 기본값은 Frâncu 의 "PBD 쪽" 끝(Kv 0.1)이라 침투를 한 번에 분리 속도로 바꾼다 → 튕김(#46 ②)과 탄성 진동(①). **#47 의 Kv 0.6 은 이 방향으로 반쯤 간 것** — 경험값이 아니라 문헌이 받친다.
+- 다음 손잡이: **Kv → 1, Kc → 0.05~0.4** (Box2D~SPOOK 범위) + vmax (Box2D 3 m/s = 300 cm/s, 우리 30 은 훨씬 보수적).
+
 **지각 문턱** — **Yeh, Reinman, Patel, Faloutsos (2009), "Fool Me Twice: Exploring and Exploiting Error Tolerance in Physics-Based Animation", TOG 29(1).** GPU 가 CPU 와 다른 답을 낼 때 "얼마나 달라도 되나"의 근거. #35 의 예산 스윕이 쓴 기준(시드 산포 ±1°)을 지각 쪽에서 받친다.
 
 ---
