@@ -520,12 +520,14 @@ namespace
 			P.Friction = Mu; P.Substeps = 1; P.Iterations = Iterations;
 			P.WarmStart = 1.f; P.WarmGapTol = 0.05f; P.SorOmega = 1.f;
 			P.bGatherApply = true; P.bMassSplit = true; P.BlockSize = 30.f;
+			FParse::Value(*Params, TEXT("substeps="), P.Substeps);   // 서브스텝 계획 S0
 			FParse::Value(*Params, TEXT("block="), P.BlockSize);
 			P.bGpuSolve = FParse::Param(*Params, TEXT("gpu"));
 			P.bGpuResident = FParse::Param(*Params, TEXT("gpu2"));
 			P.bColor8 = FParse::Param(*Params, TEXT("color8"));   // A안 단계 1 (GPU 8색)
 			P.bColor8Par = FParse::Param(*Params, TEXT("color8par"));   // A안 단계 2
 			P.bColor8 = P.bColor8 || P.bColor8Par;
+			if (P.bColor8) { P.bGatherApply = false; P.bMassSplit = false; }   // CPU 8색은 GS (GPU 는 이 플래그를 안 본다)
 
 			FTiltSetup S;
 			S.TargetCount = Count;
@@ -755,6 +757,7 @@ namespace
 		FSandParams P;
 		P.Friction = Mu;
 		P.Iterations = Iterations;
+		FParse::Value(*Params, TEXT("substeps="), P.Substeps);   // 서브스텝 계획 S0
 		P.WGlobal = W;
 		P.WarmStart = 1.f;
 		P.WarmGapTol = 0.02f;
@@ -857,6 +860,7 @@ namespace
 		FSandParams P;
 		P.Friction = Mu;
 		P.Iterations = CutIterations;
+		FParse::Value(*Params, TEXT("substeps="), P.Substeps);   // 서브스텝 계획 S0
 		FParse::Value(*Params, TEXT("iterations="), P.Iterations);
 		P.WGlobal = W;
 		P.WarmStart = 1.f;
