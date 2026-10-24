@@ -502,6 +502,66 @@ namespace
 	 *   -perf -particles=20000,50000,100000,150000 -frames=100 [-gpu2] [-iterations=] [-mu=]
 	 * 앞 WarmupFrames 는 버린다 (낙하·다짐 중이라 접촉 수가 요동). 정지 상태 측정은 아니다 — 다짐 중 상태라 접촉 수는 정지보다 많다 (보수적)
 	 */
+	/**
+	 * #46 끓음 기전 — 어디의 어떤 입자가 빠른가, 겹침이 얼마나 깊은가.
+	 * 속도 분위 · 빠른 입자(|v| > 5)의 높이/벽/바닥 분포와 위·아래 방향 · 접촉 겹침 분포 (R 단위).
+	 */
+	void LogBoilDiag(const FSandSpike& Sim, float R)
+	{
+		const TArray<FVector3f>& Pos = Sim.GetPositions();
+		const TArray<FVector3f>& Vel = Sim.GetVelocities();
+		const TArray<float>& W = Sim.GetInvMass();
+		const FVector3f Box = Sim.GetBoxHalf();
+
+		TArray<float> Speeds;
+		float Top = -FLT_MAX, Bottom = FLT_MAX;
+		for (int32 p = 0; p < Pos.Num(); ++p)
+		{
+			if (W[p] <= 0.f) { continue; }
+			Speeds.Add(Vel[p].Size());
+			Top = FMath::Max(Top, Pos[p].Z); Bottom = FMath::Min(Bottom, Pos[p].Z);
+		}
+		if (Speeds.Num() == 0) { return; }
+		TArray<float> Sorted = Speeds; Sorted.Sort();
+		auto Pct = [&](float q) { return Sorted[FMath::Clamp((int32)(q * (Sorted.Num() - 1)), 0, Sorted.Num() - 1)]; };
+
+		// 빠른 입자 분포 — 높이 5 구간(아래 → 위), 벽 2R 안, 바닥 3R 안, 위로/아래로
+		const float Fast = 5.f;
+		int32 NFast = 0, Up = 0, NearWall = 0, NearFloor = 0;
+		int32 Bins[5] = {};
+		const float H = FMath::Max(Top - Bottom, R);
+		int32 k = 0;
+		for (int32 p = 0; p < Pos.Num(); ++p)
+		{
+			if (W[p] <= 0.f) { continue; }
+			const float S = Speeds[k++];
+			if (S <= Fast) { continue; }
+			++NFast;
+			if (Vel[p].Z > 0.f) { ++Up; }
+			if (Box.X - FMath::Abs(Pos[p].X) < 2.f * R || Box.Y - FMath::Abs(Pos[p].Y) < 2.f * R) { ++NearWall; }
+			if (Pos[p].Z - Bottom < 3.f * R) { ++NearFloor; }
+			Bins[FMath::Clamp((int32)(5.f * (Pos[p].Z - Bottom) / H), 0, 4)]++;
+		}
+
+		// 겹침 — 닿은 접촉의 (2R − 거리) / R
+		TArray<float> Ov;
+		for (const FSandContact& C : Sim.GetContacts())
+		{
+			const float D = 2.f * R - (Pos[C.I] - Pos[C.J]).Size();
+			if (D > 0.f) { Ov.Add(D / R); }
+		}
+		Ov.Sort();
+		auto OPct = [&](float q) { return Ov.Num() ? Ov[FMath::Clamp((int32)(q * (Ov.Num() - 1)), 0, Ov.Num() - 1)] : 0.f; };
+		int32 Deep = 0; for (float o : Ov) { if (o > 0.1f) { ++Deep; } }
+
+		const float F = FMath::Max(1, NFast);
+		UE_LOG(LogSpikeSweep, Display, TEXT("      [진단] |v| p50 %.2f p90 %.2f p99 %.1f max %.0f | 빠른(>5) %.1f%%: 위로 %.0f%% 벽 %.0f%% 바닥 %.0f%% 높이(아래→위) %.0f/%.0f/%.0f/%.0f/%.0f%% | 겹침/R p50 %.3f p99 %.3f max %.2f >0.1R %d/%d | 높이 %.1f"),
+			Pct(0.5f), Pct(0.9f), Pct(0.99f), Sorted.Last(), 100.f * NFast / Speeds.Num(),
+			100.f * Up / F, 100.f * NearWall / F, 100.f * NearFloor / F,
+			100.f * Bins[0] / F, 100.f * Bins[1] / F, 100.f * Bins[2] / F, 100.f * Bins[3] / F, 100.f * Bins[4] / F,
+			OPct(0.5f), OPct(0.99f), Ov.Num() ? Ov.Last() : 0.f, Deep, Ov.Num(), Top - Bottom);
+	}
+
 	int32 RunPerf(const FString& Params)
 	{
 		const TArray<int32> CountList = ParseList<int32>(Params, TEXT("particles="), { 20000 });
@@ -538,6 +598,7 @@ namespace
 
 			// #44 정지 상태 — -window=N 이면 N 프레임마다 그 구간 평균을 찍는다 (다짐 → 정지 경과). -w=W 면 BondFrame 에 물을 주고 결합
 			int32 Window = 0; FParse::Value(*Params, TEXT("window="), Window);
+			const bool bDiag = FParse::Param(*Params, TEXT("diag"));   // #46 끓음 기전
 			float W = 0.f; FParse::Value(*Params, TEXT("w="), W);
 			int32 BondFrame = 300; FParse::Value(*Params, TEXT("bondframe="), BondFrame);
 			FParse::Value(*Params, TEXT("strength="), P.BondStrength);
@@ -564,6 +625,7 @@ namespace
 						UE_LOG(LogSpikeSweep, Display, TEXT("   [창] %7d f%5d | %8.1f ms | 쌍/입자 %5.1f | 평균|v| %.3f"),
 							Sim.Num(), f + 1, WinSum / WinN, (float)Sim.GetContacts().Num() / FMath::Max(1, Sim.Num()), Sim.AvgSpeed());
 						WinSum = 0.0; WinN = 0;
+						if (bDiag) { LogBoilDiag(Sim, P.Radius); }
 					}
 				}
 				if (f < WarmupFrames) { continue; }
