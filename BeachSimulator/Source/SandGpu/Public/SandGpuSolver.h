@@ -85,6 +85,7 @@ struct FSandGpuFrameParams
 	bool  bParticleMargin = false;     // #50 입자별 탐색 여유 (Müller 2020)
 	float MarginMinR = 0.1f;           // #50 입자별 여유 하한 (반경 배수)
 	bool  bWakeCold = false;           // #50 깬 첫 프레임은 접촉 워밍 없이
+	bool  bWakeZeroPairs = false;      // 조사 H9 — 깬 입자의 쌍 λ 를 버린다
 	float SleepVel = 0.25f;           // cm/s (C9 2.5 mm/s)
 	int32 SleepFrames = 30;
 	float WakeVel = 15.f;             // cm/s (C9 0.15 m/s)

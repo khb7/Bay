@@ -566,6 +566,24 @@ void WakeCS(uint3 Tid : SV_DispatchThreadID)
 	}
 }
 
+// 조사 H9 — 방금 깬 입자가 낀 쌍의 워밍 λ 를 버린다. 깬 입자 쪽만 건너뛰던 -wakecold 와 달리 상대(깨어 있던 이웃)도 그 λ 를 받지 않는다.
+// 근거: stage53 trace — 잠든 이웃 사이에 낀 깬 입자의 Σλn 이 프레임마다 쌓여 이웃의 6~70 배(20000)가 되고, 이웃이 깨는 순간 풀려 튄다
+uint bWakeZeroPairs;
+[numthreads(64, 1, 1)]
+void WakeZeroCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint k = Tid.x;
+	if (k >= FrameCountsRO[0]) { return; }
+	const uint Slot = PermInvRW[k];
+	const uint i = SortedIJRW[2 * Slot];
+	const uint j = SortedIJRW[2 * Slot + 1];
+	if (((SleepRW[i] | SleepRW[j]) & SLEEP_JUST) != 0u)
+	{
+		LambdaRW[Slot] = 0;
+		PairImpulseRW[Slot] = 0;
+	}
+}
+
 [numthreads(64, 1, 1)]
 void BreakBondsCS(uint3 Tid : SV_DispatchThreadID)
 {

@@ -295,6 +295,7 @@ namespace
 			P.bParticleMargin = FParse::Param(*Params, TEXT("pmargin"));   // #50
 			FParse::Value(*Params, TEXT("pmarginmin="), P.MarginMinR);
 			P.bWakeCold = FParse::Param(*Params, TEXT("wakecold"));   // #50
+			P.bWakeZeroPairs = FParse::Param(*Params, TEXT("wakezero"));   // 조사 H9
 			FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 			FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
 			FParse::Value(*Params, TEXT("wakev="), P.WakeVel);
@@ -611,6 +612,8 @@ namespace
 		TArray<FTraceRow> Ring;   // N × Depth
 		TSet<int32> Dumped;
 		int32 NumDumps = 0;
+		float TrigVel = 300.f;   // 자유 낙하(더미 높이 180cm → 594 cm/s 상한)와 구분되는 사출만 · 대조군 잡음 50~120
+		int32 TrigFrame = 400;   // 잠들기 시작 뒤
 		void Record(const FSandSpike& Sim, int32 Frame, float R)
 		{
 			const TArray<FVector3f>& Pos = Sim.GetPositions();
@@ -662,14 +665,14 @@ namespace
 		}
 		void Check(const FSandSpike& Sim, int32 Frame, float R)
 		{
-			if (NumDumps >= 3 || Frame < 300) { return; }
+			if (NumDumps >= 3 || Frame < TrigFrame) { return; }
 			const TArray<FVector3f>& Pos = Sim.GetPositions();
 			const TArray<FVector3f>& Vel = Sim.GetVelocities();
 			const TArray<float>& W0 = Sim.GetInvMass();
 			const TArray<float>& W = Sim.GetGpuLiveW();
 			for (int32 p = 0; p < Pos.Num() && NumDumps < 3; ++p)
 			{
-				if (W0[p] <= 0.f || Vel[p].Size() <= 50.f || Dumped.Contains(p)) { continue; }
+				if (W0[p] <= 0.f || Vel[p].Size() <= TrigVel || Dumped.Contains(p)) { continue; }
 				Dumped.Add(p); ++NumDumps;
 				const FVector3f Box = Sim.GetBoxHalf();
 				UE_LOG(LogSpikeSweep, Display, TEXT("    [trace] ===== 사출 #%d: f%d p%d |v| %.1f · 벽까지 %.2fR · z %.2f ====="), NumDumps, Frame, p, Vel[p].Size(),
@@ -723,6 +726,7 @@ namespace
 			P.bParticleMargin = FParse::Param(*Params, TEXT("pmargin"));   // #50
 			FParse::Value(*Params, TEXT("pmarginmin="), P.MarginMinR);
 			P.bWakeCold = FParse::Param(*Params, TEXT("wakecold"));   // #50
+			P.bWakeZeroPairs = FParse::Param(*Params, TEXT("wakezero"));   // 조사 H9
 			FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 			FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
 			FParse::Value(*Params, TEXT("wakev="), P.WakeVel);
@@ -750,6 +754,8 @@ namespace
 			const bool bDiag = FParse::Param(*Params, TEXT("diag"));   // #46 끓음 기전
 			const bool bTrace = FParse::Param(*Params, TEXT("trace"));   // 벽 사출 조사 §5
 			FTracer Tracer;
+			FParse::Value(*Params, TEXT("tracev="), Tracer.TrigVel);
+			FParse::Value(*Params, TEXT("tracef="), Tracer.TrigFrame);
 			float W = 0.f; FParse::Value(*Params, TEXT("w="), W);
 			int32 BondFrame = 300; FParse::Value(*Params, TEXT("bondframe="), BondFrame);
 			FParse::Value(*Params, TEXT("strength="), P.BondStrength);
@@ -768,7 +774,7 @@ namespace
 					UE_LOG(LogSpikeSweep, Display, TEXT("   f%d 결합 %d (W %.2f)"), f, Made, W);
 				}
 				Sim.Step(1.f / 60.f);
-				if (bTrace && f >= 280) { Tracer.Record(Sim, f, P.Radius); Tracer.Check(Sim, f, P.Radius); }
+				if (bTrace && f >= Tracer.TrigFrame - FTracer::Depth) { Tracer.Record(Sim, f, P.Radius); Tracer.Check(Sim, f, P.Radius); }
 				if (Window > 0)
 				{
 					WinSum += Sim.LastStepMs(); ++WinN;
@@ -980,6 +986,7 @@ namespace
 		P.bParticleMargin = FParse::Param(*Params, TEXT("pmargin"));   // #50
 		FParse::Value(*Params, TEXT("pmarginmin="), P.MarginMinR);
 		P.bWakeCold = FParse::Param(*Params, TEXT("wakecold"));   // #50
+		P.bWakeZeroPairs = FParse::Param(*Params, TEXT("wakezero"));   // 조사 H9
 		FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 		FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
 		FParse::Value(*Params, TEXT("wakev="), P.WakeVel);
@@ -1100,6 +1107,7 @@ namespace
 		P.bParticleMargin = FParse::Param(*Params, TEXT("pmargin"));   // #50
 		FParse::Value(*Params, TEXT("pmarginmin="), P.MarginMinR);
 		P.bWakeCold = FParse::Param(*Params, TEXT("wakecold"));   // #50
+		P.bWakeZeroPairs = FParse::Param(*Params, TEXT("wakezero"));   // 조사 H9
 		FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 		FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
 		FParse::Value(*Params, TEXT("wakev="), P.WakeVel);

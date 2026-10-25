@@ -47,6 +47,7 @@ struct FSandParams
 	float  MarginMinR = 0.1f;
 	/** #50 깬 첫 프레임은 접촉 워밍 임펄스 없이 (-gpu2 -sleep) */
 	bool   bWakeCold = false;
+	bool   bWakeZeroPairs = false;   // 조사 H9
 	float  SleepVel = 0.25f;
 	int32  SleepFrames = 30;
 	float  WakeVel = 15.f;

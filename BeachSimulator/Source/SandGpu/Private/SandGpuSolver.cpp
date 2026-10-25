@@ -148,6 +148,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandFrameParams, )
 	SHADER_PARAMETER(float, WakeTouchVel)
 	SHADER_PARAMETER(uint32, WakePass)
 	SHADER_PARAMETER(uint32, bWakeCold)
+	SHADER_PARAMETER(uint32, bWakeZeroPairs)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, SleepRW)
 
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, PosRW)
@@ -237,6 +238,7 @@ SAND_SHADER(FSandBondWarmCS,    FSandFrameParams, FRAME_USF, "BondWarmCS")
 SAND_SHADER(FSandWarmPredictCS, FSandFrameParams, FRAME_USF, "WarmPredictCS")
 SAND_SHADER(FSandBreakBondsCS,  FSandFrameParams, FRAME_USF, "BreakBondsCS")
 SAND_SHADER(FSandWakeCS,        FSandFrameParams, FRAME_USF, "WakeCS")
+SAND_SHADER(FSandWakeZeroCS,    FSandFrameParams, FRAME_USF, "WakeZeroCS")
 SAND_SHADER(FSandStatsCS,       FSandFrameParams, FRAME_USF, "StatsCS")
 SAND_SHADER(FSandFillTailCS,    FSandFrameParams, FRAME_USF, "FillTailCS")
 
@@ -818,6 +820,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			F.bParticleMargin = P.bParticleMargin ? 1 : 0;
 			F.MarginMinR = P.MarginMinR;
 			F.bWakeCold = P.bWakeCold ? 1 : 0;
+			F.bWakeZeroPairs = P.bWakeZeroPairs ? 1 : 0;
 			F.SleepVel    = P.SleepVel;
 			F.SleepFrames = (uint32)FMath::Max(1, P.SleepFrames);
 			F.WakeVel     = P.WakeVel;
@@ -884,6 +887,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 				AddIndirectPass<FSandWakeCS>(GraphBuilder, RDG_EVENT_NAME("SandWake"), ShaderMap, FW, IndirectArgs, 0);
 				FW.WakePass = 1;
 				AddIndirectPass<FSandWakeCS>(GraphBuilder, RDG_EVENT_NAME("SandWakeSpread"), ShaderMap, FW, IndirectArgs, 0);
+				if (P.bWakeZeroPairs) { AddIndirectPass<FSandWakeZeroCS>(GraphBuilder, RDG_EVENT_NAME("SandWakeZero"), ShaderMap, F, IndirectArgs, 0); }
 			}
 			if (LB > 0)
 			{
