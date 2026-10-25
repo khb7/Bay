@@ -34,7 +34,7 @@ uint  FillTo;
 uint  FillValue;
 
 float CellSize;                  // = 접촉 탐색 반경 (D + 여유)
-uint  bParticleMargin;           // #50 입자별 여유 (Müller 2020, C2): 쌍 = 거리 < D + m_i + m_j, m = clamp(2·|v|·Δt, 0.05R, R). 0 = 전체 하나(CellSize)
+uint  bParticleMargin;           // #50 입자별 여유 (Müller 2020, C2): 쌍 = 거리 < D + m_i + m_j, m = clamp(2·|v|·Δt + g·Δt², 0.1R, R). 0 = 전체 하나(CellSize)
 float Radius;
 float StepDt;
 float BlockSize;
@@ -296,7 +296,8 @@ void ScatterCS(uint3 Tid : SV_DispatchThreadID)
 // #50 입자별 여유 — 튄 입자 하나가 모두의 탐색 반경을 올리지 않게 (#49). 셀 크기는 CPU 의 전체 값(상한 포함) 그대로라 놓치는 쌍이 없다
 float ParticleMargin(uint p)
 {
-	return clamp(2.f * length(VelRO[p].xyz) * StepDt, 0.05f * Radius, Radius);
+	// 중력 항 g·Δt² — 정지에서 출발한 입자도 한 프레임에 0.27cm(≈0.11R) 움직인다. 이걸 빼면 깨어나는 입자의 쌍을 놓쳐 깊게 겹친다 (#50: 겹침 max 1.95R)
+	return clamp(2.f * length(VelRO[p].xyz) * StepDt + length(Gravity) * StepDt * StepDt, 0.1f * Radius, Radius);
 }
 float PairRange2(float Range2, float Mi, uint j)
 {
