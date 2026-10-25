@@ -47,6 +47,15 @@ float BondStretchBreak;          // RestLen × BreakStretch
 uint  bBondsDry;                 // cohesion(W) = 0 → 전부 끊는다
 float VelocityDamping;
 
+// C안 재우기 (m0b-plan-sleep.md)
+uint  bSleep;
+float SleepVel;                  // 이 속도 미만이 SleepFrames 프레임 이어지면 잠든다 (cm/s)
+uint  SleepFrames;
+float WakeVel;                   // 잠든 입자로 다가오는 법선 상대 속도가 이보다 크면 깬다 (cm/s)
+uint  WakePass;                  // WakeCS: 0 = 충격 · 1 = 방금 깬 입자의 이웃 전파
+#define SLEEP_WOKE 0x40000000u   // 이번 프레임에 충격으로 깸 (전파용 표시, StatsCS 가 지운다)
+RWStructuredBuffer<uint>   SleepRW;           // 정지 프레임 수. ≥ SleepFrames = 잠듦 (그때 Pos.w = 0). 고정 입자는 늘 0
+
 uint  WallMode;
 uint  WallActiveMask;
 float WallLX;
@@ -83,7 +92,7 @@ RWStructuredBuffer<uint>   PairLocalRW;      // 생성 순서: 블록 안 / 경�
 StructuredBuffer<uint>     PairLocalRO;
 RWStructuredBuffer<uint>   BlockPairCountRW; // BlockTable
 StructuredBuffer<uint>     BlockStart;       // BlockTable + 1 — [BlockTable] = 블록 안 쌍 총수
-RWStructuredBuffer<uint>   CountersRW;       // [0] 경계 쌍 수 · [1] 끊긴 결합 · [2] 쌍 넘침 · [3] 인접 넘침
+RWStructuredBuffer<uint>   CountersRW;       // [0] 경계 쌍 수 · [1] 끊긴 결합 · [2] 쌍 넘침 · [3] 잠든 입자
 StructuredBuffer<uint>     CountersRO;
 
 StructuredBuffer<uint>     OldPairStart;     // 지난 프레임
@@ -496,6 +505,44 @@ void WarmPredictCS(uint3 Tid : SV_DispatchThreadID)
 	}
 }
 
+// 잠든 입자 p 를 깨운다 (고정 입자는 count 가 늘 0 이라 건드리지 않는다)
+void WakeParticle(uint p, uint Mark)
+{
+	if (SleepRW[p] >= SleepFrames && (SleepRW[p] & SLEEP_WOKE) == 0u)
+	{
+		SleepRW[p] = Mark;
+		PosRW[p] = float4(PosRW[p].xyz, 1.f);
+	}
+}
+
+// 쌍을 훑어 깨운다. 0: 깬 입자가 잠든 입자로 WakeVel 넘게 다가오면 · 1: 방금(0 에서) 깬 입자의 잠든 이웃 (깊이 2, C9)
+[numthreads(64, 1, 1)]
+void WakeCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint k = Tid.x;
+	if (k >= FrameCountsRO[0]) { return; }
+	const uint i = PairIJRO[2 * k];
+	const uint j = PairIJRO[2 * k + 1];
+	const bool Si = SleepRW[i] >= SleepFrames && (SleepRW[i] & SLEEP_WOKE) == 0u;
+	const bool Sj = SleepRW[j] >= SleepFrames && (SleepRW[j] & SLEEP_WOKE) == 0u;
+	if (Si == Sj) { return; }
+	const uint Sl = Si ? i : j;   // 잠든 쪽
+	const uint Aw = Si ? j : i;   // 깬 쪽
+	if (WakePass == 0u)
+	{
+		if (PosRW[Aw].w <= 0.f) { return; }   // 고정 입자는 깨우지 않는다
+		const float3 Diff = PosRW[Sl].xyz - PosRW[Aw].xyz;
+		const float Dist = length(Diff);
+		if (Dist < 1.e-4f) { return; }
+		const float Approach = dot(VelRW[Aw].xyz, Diff / Dist);   // 잠든 쪽 속도 = 0
+		if (Approach > WakeVel) { WakeParticle(Sl, SLEEP_WOKE); }
+	}
+	else if ((SleepRW[Aw] & SLEEP_WOKE) != 0u)
+	{
+		WakeParticle(Sl, 0u);
+	}
+}
+
 [numthreads(64, 1, 1)]
 void BreakBondsCS(uint3 Tid : SV_DispatchThreadID)
 {
@@ -504,13 +551,19 @@ void BreakBondsCS(uint3 Tid : SV_DispatchThreadID)
 	float4 B = BondDataRW[b];
 	if (B.x < 0.f) { return; }
 	const uint i = BondIJ[2 * b], j = BondIJ[2 * b + 1];
-	const float Dist = distance(PosRO[i].xyz, PosRO[j].xyz);
+	const float Dist = distance(PosRW[i].xyz, PosRW[j].xyz);
 	if (bBondsDry || Dist > B.x * BondStretchBreak)
 	{
 		B.x = -1.f;
 		B.y = 0.f;
 		BondDataRW[b] = B;
 		InterlockedAdd(CountersRW[1], 1u);
+		if (bSleep)
+		{
+			// 하중 경로가 바뀐다 — 두 입자를 깨운다
+			WakeParticle(i, 0u);
+			WakeParticle(j, 0u);
+		}
 	}
 }
 
@@ -528,12 +581,31 @@ void StatsCS(uint3 Tid : SV_DispatchThreadID, uint3 GTid : SV_GroupThreadID, uin
 	if (p < NumParticles)
 	{
 		float4 V = VelRW[p];
-		const float Wi = PosRO[p].w;
+		const float Wi = PosRW[p].w;
 		if (Wi > 0.f)
 		{
 			if (VelocityDamping > 0.f) { V.xyz *= (1.f - VelocityDamping); VelRW[p] = V; }
 			Speed = length(V.xyz);
 			Free = 1;
+			if (bSleep)
+			{
+				// 잠들기 — SleepVel 미만이 SleepFrames 프레임
+				uint Count = SleepRW[p] & ~SLEEP_WOKE;
+				Count = (Speed < SleepVel) ? Count + 1u : 0u;
+				if (Count >= SleepFrames)
+				{
+					PosRW[p] = float4(PosRW[p].xyz, 0.f);
+					VelRW[p] = float4(0, 0, 0, 0);
+					Speed = 0;
+				}
+				SleepRW[p] = Count;
+			}
+		}
+		else if (bSleep && SleepRW[p] >= SleepFrames)
+		{
+			// 잠든 입자 — 통계에선 속도 0 인 자유 입자다 (정지 판정이 그대로 돌게)
+			Free = 1;
+			InterlockedAdd(CountersRW[3], 1u);
 		}
 		// Σ|λn| — 쌍은 양쪽에서 한 번씩 세므로 절반, 지면은 한 번
 		for (uint e = AdjStart[p]; e < AdjStart[p + 1]; ++e) { LamSum += 0.5f * abs(LambdaRW[AdjRO[e] >> 1].w); }

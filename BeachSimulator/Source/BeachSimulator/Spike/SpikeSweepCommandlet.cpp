@@ -291,6 +291,10 @@ namespace
 			P.Kv         = KvV;
 			FParse::Value(*Params, TEXT("vmax="), P.MaxDepenVel);   // #47
 			FParse::Value(*Params, TEXT("kc="), P.Kc);   // #48
+			P.bSleep = FParse::Param(*Params, TEXT("sleep"));   // C안
+			FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
+			FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
+			FParse::Value(*Params, TEXT("wakev="), P.WakeVel);
 			P.Seed       = (uint32)Sd;
 			P.SorOmega   = Sor;
 			P.MomentumA  = Ma;
@@ -585,6 +589,10 @@ namespace
 			FParse::Value(*Params, TEXT("substeps="), P.Substeps);   // 서브스텝 계획 S0
 			FParse::Value(*Params, TEXT("vmax="), P.MaxDepenVel);   // #47
 			FParse::Value(*Params, TEXT("kc="), P.Kc);   // #48
+			P.bSleep = FParse::Param(*Params, TEXT("sleep"));   // C안
+			FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
+			FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
+			FParse::Value(*Params, TEXT("wakev="), P.WakeVel);
 			FParse::Value(*Params, TEXT("warm="), P.WarmStart);
 			FParse::Value(*Params, TEXT("kv="), P.Kv);
 			FParse::Value(*Params, TEXT("block="), P.BlockSize);
@@ -628,8 +636,9 @@ namespace
 					WinSum += Sim.LastStepMs(); ++WinN;
 					if (WinN == Window)
 					{
-						UE_LOG(LogSpikeSweep, Display, TEXT("   [창] %7d f%5d | %8.1f ms | 쌍/입자 %5.1f | 평균|v| %.3f"),
-							Sim.Num(), f + 1, WinSum / WinN, (float)Sim.GetContacts().Num() / FMath::Max(1, Sim.Num()), Sim.AvgSpeed());
+						UE_LOG(LogSpikeSweep, Display, TEXT("   [창] %7d f%5d | %8.1f ms | 쌍/입자 %5.1f | 평균|v| %.3f | 잠듦 %4.1f%% · 깬 블록 %d"),
+							Sim.Num(), f + 1, WinSum / WinN, (float)Sim.GetContacts().Num() / FMath::Max(1, Sim.Num()), Sim.AvgSpeed(),
+							100.f * Sim.LastNumAsleep() / FMath::Max(1, Sim.Num()), Sim.LastNumAwakeBlocks());
 						WinSum = 0.0; WinN = 0;
 						if (bDiag) { LogBoilDiag(Sim, P.Radius); }
 					}
@@ -829,6 +838,10 @@ namespace
 		FParse::Value(*Params, TEXT("kv="), P.Kv);   // #47
 		FParse::Value(*Params, TEXT("vmax="), P.MaxDepenVel);
 		FParse::Value(*Params, TEXT("kc="), P.Kc);   // #48
+		P.bSleep = FParse::Param(*Params, TEXT("sleep"));   // C안
+		FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
+		FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
+		FParse::Value(*Params, TEXT("wakev="), P.WakeVel);
 		P.WGlobal = W;
 		P.WarmStart = 1.f;
 		P.WarmGapTol = 0.02f;
@@ -941,6 +954,10 @@ namespace
 		FParse::Value(*Params, TEXT("kv="), P.Kv);
 		FParse::Value(*Params, TEXT("vmax="), P.MaxDepenVel);   // #47
 		FParse::Value(*Params, TEXT("kc="), P.Kc);   // #48
+		P.bSleep = FParse::Param(*Params, TEXT("sleep"));   // C안
+		FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
+		FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
+		FParse::Value(*Params, TEXT("wakev="), P.WakeVel);
 		FParse::Value(*Params, TEXT("wallmu="), P.WallFriction);
 		P.bGatherApply = FParse::Param(*Params, TEXT("gather"));   // m0b-spike §3-1
 		P.bMassSplit = FParse::Param(*Params, TEXT("masssplit"));  // A′

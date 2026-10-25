@@ -80,7 +80,7 @@ RWStructuredBuffer<uint>   ContactOrderRW;   // 블록 구간 안에서 (배치,
 StructuredBuffer<uint>     ContactOrderRO;
 RWStructuredBuffer<uint>   BatchStartRW;     // b · BATCH_STRIDE + t
 StructuredBuffer<uint>     BatchStartRO;
-RWStructuredBuffer<uint>   BatchStatsRW;     // [0] 최대 배치 수 · [1] Σ배치 수 · [2] 접촉 있는 블록 · [3] 해시 넘침 블록
+RWStructuredBuffer<uint>   BatchStatsRW;     // [0] 최대 배치 수 · [1] Σ배치 수 · [2] 접촉 있는 블록 · [3] 해시 넘침 블록 · [4] 깬 블록
 
 RWStructuredBuffer<float>  GroundLambdaRW;
 RWStructuredBuffer<float4> WallLambdaRW;
@@ -234,9 +234,11 @@ void ColorBatchCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
 		Counts[t] = 0u;
 	}
 	bool bOverflow = false;
+	bool bAnyAwake = false;   // C안 — 깬(w > 0) 입자를 가진 접촉이 하나도 없으면 블록 전체가 잠들었다 → 배치 0
 	uint NumBatch = 0u;
 	for (uint k = Start; k < End; ++k)
 	{
+		bAnyAwake = bAnyAwake || PosRO[ContactIJ[2 * k]].w > 0.f || PosRO[ContactIJ[2 * k + 1]].w > 0.f;
 		uint Batch = MAX_BATCH - 1u;
 		if (!bOverflow)
 		{
@@ -263,6 +265,16 @@ void ColorBatchCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
 		NumBatch = max(NumBatch, Batch + 1u);
 	}
 
+	if (!bAnyAwake)
+	{
+		for (uint t3 = 0; t3 <= MAX_BATCH; ++t3)
+		{
+			BatchStartRW[b * BATCH_STRIDE + t3] = Start;
+		}
+		if (End > Start) { InterlockedAdd(BatchStatsRW[2], 1u); }
+		return;
+	}
+
 	// 배치 시작 = 배치별 개수의 접두합
 	uint Cursor = Start;
 	for (uint t2 = 0; t2 < MAX_BATCH; ++t2)
@@ -284,6 +296,7 @@ void ColorBatchCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
 		InterlockedMax(BatchStatsRW[0], NumBatch);
 		InterlockedAdd(BatchStatsRW[1], NumBatch);
 		InterlockedAdd(BatchStatsRW[2], 1u);
+		InterlockedAdd(BatchStatsRW[4], 1u);
 		if (bOverflow)
 		{
 			InterlockedAdd(BatchStatsRW[3], 1u);

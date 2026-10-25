@@ -139,6 +139,12 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandFrameParams, )
 	SHADER_PARAMETER(float, WallLY)
 	SHADER_PARAMETER(float, WallLimit)
 	SHADER_PARAMETER(float, WallLiftZ)
+	SHADER_PARAMETER(uint32, bSleep)
+	SHADER_PARAMETER(float, SleepVel)
+	SHADER_PARAMETER(uint32, SleepFrames)
+	SHADER_PARAMETER(float, WakeVel)
+	SHADER_PARAMETER(uint32, WakePass)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, SleepRW)
 
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, PosRW)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, PosRO)
@@ -226,6 +232,7 @@ SAND_SHADER(FSandPairScatterCS, FSandFrameParams, FRAME_USF, "PairScatterCS")
 SAND_SHADER(FSandBondWarmCS,    FSandFrameParams, FRAME_USF, "BondWarmCS")
 SAND_SHADER(FSandWarmPredictCS, FSandFrameParams, FRAME_USF, "WarmPredictCS")
 SAND_SHADER(FSandBreakBondsCS,  FSandFrameParams, FRAME_USF, "BreakBondsCS")
+SAND_SHADER(FSandWakeCS,        FSandFrameParams, FRAME_USF, "WakeCS")
 SAND_SHADER(FSandStatsCS,       FSandFrameParams, FRAME_USF, "StatsCS")
 SAND_SHADER(FSandFillTailCS,    FSandFrameParams, FRAME_USF, "FillTailCS")
 
@@ -545,6 +552,7 @@ struct FSandGpuSim::FState
 {
 	// 영구 (입자 수 N)
 	TRefCountPtr<FRDGPooledBuffer> Pos, Vel, PrevPos, GroundLambda, WallLambda;
+	TRefCountPtr<FRDGPooledBuffer> Sleep;   // C안 — 정지 프레임 수 (uint)
 	// 영구 (결합)
 	TRefCountPtr<FRDGPooledBuffer> BondIJ, BondData, BondAdjOffset, BondAdj;
 	// 쌍 목록 두 벌 — [Cur] 이번 프레임 · [1-Cur] 지난 프레임 (워밍 조회)
@@ -617,6 +625,7 @@ void FSandGpuSim::Upload(const FSandGpuUpload& In, bool bKeepPairs)
 			S->PrevPos      = Persist(sizeof(FVector4f), NewCapN, TEXT("SandSim.PrevPos"));
 			S->GroundLambda = Persist(sizeof(float), NewCapN, TEXT("SandSim.GroundLambda"));
 			S->WallLambda   = Persist(sizeof(FVector4f), NewCapN, TEXT("SandSim.WallLambda"));
+			S->Sleep        = Persist(sizeof(uint32), NewCapN, TEXT("SandSim.Sleep"));
 			S->BondAdjOffset = Persist(sizeof(uint32), NewCapN + 1, TEXT("SandSim.BondAdjOffset"));
 			for (int32 k = 0; k < 2; ++k)
 			{
@@ -660,6 +669,7 @@ void FSandGpuSim::Upload(const FSandGpuUpload& In, bool bKeepPairs)
 		Up(S->PrevPos, In.Pos.GetData(), LN * sizeof(FVector4f));
 		Up(S->GroundLambda, In.GroundLambda.GetData(), LN * sizeof(float));
 		Up(S->WallLambda, In.WallLambda.GetData(), LN * sizeof(FVector4f));
+		Up(S->Sleep, nullptr, 0);   // 올리기(도구 조작) = 전부 깸 (계획 1-3 v1). w 는 CPU 의 원래 역질량으로 돌아온다
 		Up(S->BondIJ, In.BondIJ.GetData(), In.BondIJ.Num() * sizeof(uint32));
 		Up(S->BondData, In.BondData.GetData(), LB * sizeof(FVector4f));
 		Up(S->BondAdjOffset, In.BondAdjOffset.GetData(), In.BondAdjOffset.Num() * sizeof(uint32));
@@ -710,7 +720,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 	S->StatsPartial.SetNumUninitialized(NumStatGroups);
 	uint32 Counters[4] = {};
 	uint32 FrameCounts[4] = {};
-	uint32 BatchStats[4] = {};
+	uint32 BatchStats[8] = {};
 
 	ENQUEUE_RENDER_COMMAND(SandGpuSimStep)([S, &P, LN, LB, LMax, TableSize, NumStatGroups, &Counters, &FrameCounts, &BatchStats](FRHICommandListImmediate& RHICmdList)
 	{
@@ -725,6 +735,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			FRDGBufferRef PrevPos      = GraphBuilder.RegisterExternalBuffer(S->PrevPos);
 			FRDGBufferRef GroundLambda = GraphBuilder.RegisterExternalBuffer(S->GroundLambda);
 			FRDGBufferRef WallLambda   = GraphBuilder.RegisterExternalBuffer(S->WallLambda);
+			FRDGBufferRef SleepBuf     = GraphBuilder.RegisterExternalBuffer(S->Sleep);
 			FRDGBufferRef BondIJ        = GraphBuilder.RegisterExternalBuffer(S->BondIJ);
 			FRDGBufferRef BondData      = GraphBuilder.RegisterExternalBuffer(S->BondData);
 			FRDGBufferRef BondAdjOffset = GraphBuilder.RegisterExternalBuffer(S->BondAdjOffset);
@@ -799,6 +810,12 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			F.WallLY    = P.WallLY;
 			F.WallLimit = P.WallLimit;
 			F.WallLiftZ = P.WallLiftZ;
+			F.bSleep      = P.bSleep ? 1 : 0;
+			F.SleepVel    = P.SleepVel;
+			F.SleepFrames = (uint32)FMath::Max(1, P.SleepFrames);
+			F.WakeVel     = P.WakeVel;
+			F.WakePass    = 0;
+			F.SleepRW     = GraphBuilder.CreateUAV(SleepBuf);
 
 			F.PosRW = GraphBuilder.CreateUAV(Pos);           F.PosRO = GraphBuilder.CreateSRV(Pos);
 			F.VelRW = GraphBuilder.CreateUAV(Vel);           F.VelRO = GraphBuilder.CreateSRV(Vel);
@@ -852,6 +869,14 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			AddScan(GraphBuilder, ShaderMap, F, AdjCount, AdjStart, LN);
 			AddDirectPass<FSandBuildArgsCS>(GraphBuilder, RDG_EVENT_NAME("SandBuildArgs"), ShaderMap, F, 1, 1);
 			AddIndirectPass<FSandPairScatterCS>(GraphBuilder, RDG_EVENT_NAME("SandPairScatter"), ShaderMap, F, IndirectArgs, 0);
+			if (P.bSleep)
+			{
+				// C안 깨우기 — 충격 → 방금 깬 입자의 이웃 (깊이 2). 워밍·예측 앞이라 깬 입자는 이번 프레임부터 움직인다
+				FSandFrameParams FW = F;
+				AddIndirectPass<FSandWakeCS>(GraphBuilder, RDG_EVENT_NAME("SandWake"), ShaderMap, FW, IndirectArgs, 0);
+				FW.WakePass = 1;
+				AddIndirectPass<FSandWakeCS>(GraphBuilder, RDG_EVENT_NAME("SandWakeSpread"), ShaderMap, FW, IndirectArgs, 0);
+			}
 			if (LB > 0)
 			{
 				AddDirectPass<FSandBondWarmCS>(GraphBuilder, RDG_EVENT_NAME("SandBondWarm"), ShaderMap, F, LB, 64);
@@ -911,7 +936,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 
 			// 단계 2 — 블록 안 배치 나누기 (프레임당 1회, 반복 앞)
 			const bool bColor8Par = P.bColor8 && P.bColor8Par;
-			FRDGBufferRef BatchStatsBuf = ScratchBuffer(GraphBuilder, TEXT("SandSim.BatchStats"), sizeof(uint32), 4);
+			FRDGBufferRef BatchStatsBuf = ScratchBuffer(GraphBuilder, TEXT("SandSim.BatchStats"), sizeof(uint32), 8);
 			AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(BatchStatsBuf), 0u);
 			if (bColor8Par)
 			{
@@ -938,14 +963,14 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			AddEnqueueCopyPass(GraphBuilder, &S->StatsRB, Stats, NumStatGroups * sizeof(FVector4f));
 			AddEnqueueCopyPass(GraphBuilder, &S->CountersRB, CountersBuf, 4 * sizeof(uint32));
 			AddEnqueueCopyPass(GraphBuilder, &S->FrameCountsRB, FrameCountsBuf, 4 * sizeof(uint32));
-			AddEnqueueCopyPass(GraphBuilder, &S->BatchStatsRB, BatchStatsBuf, 4 * sizeof(uint32));
+			AddEnqueueCopyPass(GraphBuilder, &S->BatchStatsRB, BatchStatsBuf, 8 * sizeof(uint32));
 			GraphBuilder.Execute();
 		}
 		RHICmdList.SubmitAndBlockUntilGPUIdle();
 		FetchReadback(S->StatsRB, S->StatsPartial.GetData(), NumStatGroups * sizeof(FVector4f));
 		FetchReadback(S->CountersRB, Counters, 4 * sizeof(uint32));
 		FetchReadback(S->FrameCountsRB, FrameCounts, 4 * sizeof(uint32));
-		FetchReadback(S->BatchStatsRB, BatchStats, 4 * sizeof(uint32));
+		FetchReadback(S->BatchStatsRB, BatchStats, 8 * sizeof(uint32));
 		S->Cur = Old;
 		EndGpuFrame(RHICmdList);
 	});
@@ -967,6 +992,8 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 	Out.SumBatch        = (int32)BatchStats[1];
 	Out.NumBatchBlocks  = (int32)BatchStats[2];
 	Out.BatchOverflow   = (int32)BatchStats[3];
+	Out.NumAwakeBlocks  = (int32)BatchStats[4];
+	Out.NumAsleep       = (int32)Counters[3];
 	LastNumPairs = Out.NumPairs;
 	Out.GpuMs = (FPlatformTime::Seconds() - T0) * 1000.0;
 }

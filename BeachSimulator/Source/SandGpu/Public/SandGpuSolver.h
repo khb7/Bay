@@ -81,6 +81,10 @@ struct FSandGpuFrameParams
 	bool  bColor8 = false;            // A안 단계 1 — 8색 블록 GS (m0b-plan-a.md). 경계 Jacobi 없음
 	int32 FrameIndex = 0;             // 색 회전용
 	bool  bColor8Par = false;         // A안 단계 2 — 블록 안 배치 병렬 (bColor8 위에서만)
+	bool  bSleep = false;              // C안 재우기 (m0b-plan-sleep.md) — -color8par 와 함께
+	float SleepVel = 0.25f;           // cm/s (C9 2.5 mm/s)
+	int32 SleepFrames = 30;
+	float WakeVel = 15.f;             // cm/s (C9 0.15 m/s)
 	float WarmStart = 1.f, WarmGapTol = 0.f;
 	bool  bWarmTangent = true;
 	float Kv = 0.1f, Kc = 1.f, SorOmega = 1.f, Friction = 0.17f;
@@ -107,6 +111,7 @@ struct FSandGpuStats
 	int32  NumPairs = 0, NumInternal = 0, NumBoundary = 0;
 	int32  PairOverflow = 0;          // > 0 이면 MaxPairs 초과 — 결과 무효
 	int32  MaxBatch = 0, SumBatch = 0, NumBatchBlocks = 0, BatchOverflow = 0;   // 단계 2 블록 안 배치 (접촉 있는 블록 기준)
+	int32  NumAwakeBlocks = 0, NumAsleep = 0;   // C안 — 풀이를 돈 블록 · 잠든 입자
 	double GpuMs = 0.0;               // 스텝 벽시계 (통계 리드백 포함)
 };
 

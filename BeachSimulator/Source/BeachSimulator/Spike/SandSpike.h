@@ -40,6 +40,11 @@ struct FSandParams
 	float  Kv    = 0.1f;    // 잔차의 속도 성분. 0이면 순수 PBD, 0.1이 논문 권장 출발점
 	/** #47 접촉 분리 속도 상한 (cm/s, -gpu2 만). 0 = 끔. 깊은 겹침의 폭발 사출을 막는다 (Small Steps 식 10) */
 	float  MaxDepenVel = 0.f;
+	/** C안 재우기 (-gpu2 만, m0b-plan-sleep.md) — 잠 SleepVel(cm/s) 미만 SleepFrames 프레임 · 깸 WakeVel(cm/s) */
+	bool   bSleep = false;
+	float  SleepVel = 0.25f;
+	int32  SleepFrames = 30;
+	float  WakeVel = 15.f;
 	float  Kc    = 1.0f;    // 잔차의 위치 성분
 	float  SorOmega = 0.5f; // (36) 의 ω
 	/**
@@ -449,6 +454,9 @@ private:
 public:
 	/** GPU 경로의 마지막 프레임 벽시계 (올리기 + 반복 + 내려받기) · CPU 쪽 포장(블록 분류·인접) 시간 */
 	float LastGpuMs() const { return GpuMs; }
+	/** C안 — 마지막 GPU 프레임의 잠든 입자 수 · 풀이를 돈 블록 수 */
+	int32 LastNumAsleep() const { return LastAsleep; }
+	int32 LastNumAwakeBlocks() const { return LastAwakeBlocks; }
 	float LastGpuPrepMs() const { return GpuPrepMs; }
 	/** 마지막 접촉 패스에서 블록 경계를 넘은 활성 접촉 비율 (블록 모드 계측) */
 	float BoundaryContactFrac() const { return LastBoundaryFrac; }
@@ -474,6 +482,7 @@ private:
 	TArray<FVector3f> Delta;
 	TArray<int64>     BlockId;          // ①-b 블록 모사용. 셀 좌표를 21비트씩 묶은 정확한 키
 	float LastBoundaryFrac = 0.f;
+	int32 LastAsleep = 0, LastAwakeBlocks = 0;
 	float GpuMs = 0.f;
 	float GpuPrepMs = 0.f;
 	TUniquePtr<FSandGpuSim> GpuSim;   // 2단계. bGpuResident 일 때만
