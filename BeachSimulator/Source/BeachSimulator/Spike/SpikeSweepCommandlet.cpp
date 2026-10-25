@@ -292,6 +292,8 @@ namespace
 			FParse::Value(*Params, TEXT("vmax="), P.MaxDepenVel);   // #47
 			FParse::Value(*Params, TEXT("kc="), P.Kc);   // #48
 			P.bSleep = FParse::Param(*Params, TEXT("sleep"));   // C안
+			P.bParticleMargin = FParse::Param(*Params, TEXT("pmargin"));   // #50
+			P.bWakeCold = FParse::Param(*Params, TEXT("wakecold"));   // #50
 			FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 			FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
 			FParse::Value(*Params, TEXT("wakev="), P.WakeVel);
@@ -590,6 +592,8 @@ namespace
 			FParse::Value(*Params, TEXT("vmax="), P.MaxDepenVel);   // #47
 			FParse::Value(*Params, TEXT("kc="), P.Kc);   // #48
 			P.bSleep = FParse::Param(*Params, TEXT("sleep"));   // C안
+			P.bParticleMargin = FParse::Param(*Params, TEXT("pmargin"));   // #50
+			P.bWakeCold = FParse::Param(*Params, TEXT("wakecold"));   // #50
 			FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 			FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
 			FParse::Value(*Params, TEXT("wakev="), P.WakeVel);
@@ -839,6 +843,8 @@ namespace
 		FParse::Value(*Params, TEXT("vmax="), P.MaxDepenVel);
 		FParse::Value(*Params, TEXT("kc="), P.Kc);   // #48
 		P.bSleep = FParse::Param(*Params, TEXT("sleep"));   // C안
+		P.bParticleMargin = FParse::Param(*Params, TEXT("pmargin"));   // #50
+		P.bWakeCold = FParse::Param(*Params, TEXT("wakecold"));   // #50
 		FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 		FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
 		FParse::Value(*Params, TEXT("wakev="), P.WakeVel);
@@ -955,6 +961,8 @@ namespace
 		FParse::Value(*Params, TEXT("vmax="), P.MaxDepenVel);   // #47
 		FParse::Value(*Params, TEXT("kc="), P.Kc);   // #48
 		P.bSleep = FParse::Param(*Params, TEXT("sleep"));   // C안
+		P.bParticleMargin = FParse::Param(*Params, TEXT("pmargin"));   // #50
+		P.bWakeCold = FParse::Param(*Params, TEXT("wakecold"));   // #50
 		FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 		FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
 		FParse::Value(*Params, TEXT("wakev="), P.WakeVel);

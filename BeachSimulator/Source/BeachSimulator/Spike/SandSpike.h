@@ -42,6 +42,10 @@ struct FSandParams
 	float  MaxDepenVel = 0.f;
 	/** C안 재우기 (-gpu2 만, m0b-plan-sleep.md) — 잠 SleepVel(cm/s) 미만 SleepFrames 프레임 · 깸 WakeVel(cm/s) */
 	bool   bSleep = false;
+	/** #50 입자별 탐색 여유 (-gpu2 만, Müller 2020) — 쌍 = 거리 < D + m_i + m_j */
+	bool   bParticleMargin = false;
+	/** #50 깬 첫 프레임은 접촉 워밍 임펄스 없이 (-gpu2 -sleep) */
+	bool   bWakeCold = false;
 	float  SleepVel = 0.25f;
 	int32  SleepFrames = 30;
 	float  WakeVel = 15.f;

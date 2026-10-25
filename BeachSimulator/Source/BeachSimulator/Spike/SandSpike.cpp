@@ -1278,6 +1278,8 @@ void FSandSpike::StepGpuResident(float Dt)
 	P.Kv = Params.Kv; P.Kc = Params.Kc; P.SorOmega = Params.SorOmega; P.Friction = Params.Friction;
 	P.MaxDepenVel = Params.MaxDepenVel;
 	P.bSleep = Params.bSleep; P.SleepVel = Params.SleepVel; P.SleepFrames = Params.SleepFrames; P.WakeVel = Params.WakeVel;
+	P.bParticleMargin = Params.bParticleMargin;
+	P.bWakeCold = Params.bWakeCold;
 	P.bMassSplit  = Params.bMassSplit;
 	P.Gravity     = GravityDir * (FMath::Abs(Params.Gravity) * GravityScale);
 	const float Alpha = BondCompliance();

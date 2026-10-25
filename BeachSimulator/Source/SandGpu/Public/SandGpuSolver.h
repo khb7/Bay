@@ -82,6 +82,8 @@ struct FSandGpuFrameParams
 	int32 FrameIndex = 0;             // 색 회전용
 	bool  bColor8Par = false;         // A안 단계 2 — 블록 안 배치 병렬 (bColor8 위에서만)
 	bool  bSleep = false;              // C안 재우기 (m0b-plan-sleep.md) — -color8par 와 함께
+	bool  bParticleMargin = false;     // #50 입자별 탐색 여유 (Müller 2020)
+	bool  bWakeCold = false;           // #50 깬 첫 프레임은 접촉 워밍 없이
 	float SleepVel = 0.25f;           // cm/s (C9 2.5 mm/s)
 	int32 SleepFrames = 30;
 	float WakeVel = 15.f;             // cm/s (C9 0.15 m/s)

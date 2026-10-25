@@ -121,6 +121,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandFrameParams, )
 	SHADER_PARAMETER(uint32, FillTo)
 	SHADER_PARAMETER(uint32, FillValue)
 	SHADER_PARAMETER(float, CellSize)
+	SHADER_PARAMETER(uint32, bParticleMargin)
 	SHADER_PARAMETER(float, Radius)
 	SHADER_PARAMETER(float, StepDt)
 	SHADER_PARAMETER(float, BlockSize)
@@ -144,6 +145,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandFrameParams, )
 	SHADER_PARAMETER(uint32, SleepFrames)
 	SHADER_PARAMETER(float, WakeVel)
 	SHADER_PARAMETER(uint32, WakePass)
+	SHADER_PARAMETER(uint32, bWakeCold)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, SleepRW)
 
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, PosRW)
@@ -811,6 +813,8 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			F.WallLimit = P.WallLimit;
 			F.WallLiftZ = P.WallLiftZ;
 			F.bSleep      = P.bSleep ? 1 : 0;
+			F.bParticleMargin = P.bParticleMargin ? 1 : 0;
+			F.bWakeCold = P.bWakeCold ? 1 : 0;
 			F.SleepVel    = P.SleepVel;
 			F.SleepFrames = (uint32)FMath::Max(1, P.SleepFrames);
 			F.WakeVel     = P.WakeVel;

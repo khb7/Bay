@@ -34,6 +34,7 @@ uint  FillTo;
 uint  FillValue;
 
 float CellSize;                  // = 접촉 탐색 반경 (D + 여유)
+uint  bParticleMargin;           // #50 입자별 여유 (Müller 2020, C2): 쌍 = 거리 < D + m_i + m_j, m = clamp(2·|v|·Δt, 0.05R, R). 0 = 전체 하나(CellSize)
 float Radius;
 float StepDt;
 float BlockSize;
@@ -54,6 +55,9 @@ uint  SleepFrames;
 float WakeVel;                   // 잠든 입자로 다가오는 법선 상대 속도가 이보다 크면 깬다 (cm/s)
 uint  WakePass;                  // WakeCS: 0 = 충격 · 1 = 방금 깬 입자의 이웃 전파
 #define SLEEP_WOKE 0x40000000u   // 이번 프레임에 충격으로 깸 (전파용 표시, StatsCS 가 지운다)
+#define SLEEP_JUST 0x20000000u   // 이번 프레임에 깸 (어떤 경로든). bWakeCold 면 워밍 임펄스를 받지 않는다. StatsCS 가 지운다
+uint  bWakeCold;                 // #50 깬 첫 프레임은 접촉 워밍 임펄스 없이 시작 (잠든 동안 쌓인 λ 의 과충격 의심, #49)
+bool IsAsleep(uint s) { return (s & (SLEEP_WOKE | SLEEP_JUST)) == 0u && s >= SleepFrames; }
 RWStructuredBuffer<uint>   SleepRW;           // 정지 프레임 수. ≥ SleepFrames = 잠듦 (그때 Pos.w = 0). 고정 입자는 늘 0
 
 uint  WallMode;
@@ -289,6 +293,18 @@ void ScatterCS(uint3 Tid : SV_DispatchThreadID)
 	} \
 }
 
+// #50 입자별 여유 — 튄 입자 하나가 모두의 탐색 반경을 올리지 않게 (#49). 셀 크기는 CPU 의 전체 값(상한 포함) 그대로라 놓치는 쌍이 없다
+float ParticleMargin(uint p)
+{
+	return clamp(2.f * length(VelRO[p].xyz) * StepDt, 0.05f * Radius, Radius);
+}
+float PairRange2(float Range2, float Mi, uint j)
+{
+	if (bParticleMargin == 0u) { return Range2; }
+	const float R = min(2.f * Radius + Mi + ParticleMargin(j), CellSize);
+	return R * R;
+}
+
 [numthreads(64, 1, 1)]
 void PairCountCS(uint3 Tid : SV_DispatchThreadID)
 {
@@ -296,10 +312,11 @@ void PairCountCS(uint3 Tid : SV_DispatchThreadID)
 	if (i >= NumParticles) { return; }
 	const float3 Pi = PosRO[i].xyz;
 	const float Range2 = CellSize * CellSize;
+	const float Mi = ParticleMargin(i);
 	uint n = 0;
 	FOR_NEIGHBORS(Pi,
 		const float3 d = Pi - PosRO[j].xyz;
-		if (dot(d, d) < Range2) { ++n; }
+		if (dot(d, d) < PairRange2(Range2, Mi, j)) { ++n; }
 	)
 	PairCountRW[i] = n;
 }
@@ -311,6 +328,7 @@ void PairFillCS(uint3 Tid : SV_DispatchThreadID)
 	if (i >= NumParticles) { return; }
 	const float3 Pi = PosRO[i].xyz;
 	const float Range2 = CellSize * CellSize;
+	const float Mi = ParticleMargin(i);
 	const uint Begin = PairStart[i];
 	const uint OldBegin = OldPairStart[i];
 	const uint OldEnd   = OldPairStart[i + 1];
@@ -318,7 +336,7 @@ void PairFillCS(uint3 Tid : SV_DispatchThreadID)
 	uint k = Begin;
 	FOR_NEIGHBORS(Pi,
 		const float3 d = Pi - PosRO[j].xyz;
-		if (dot(d, d) < Range2)
+		if (dot(d, d) < PairRange2(Range2, Mi, j))
 		{
 			if (k < MaxPairs)
 			{
@@ -446,9 +464,10 @@ void WarmPredictCS(uint3 Tid : SV_DispatchThreadID)
 
 	if (Wi > 0.f)
 	{
-		// 접촉 워밍 임펄스 gather
+		// 접촉 워밍 임펄스 gather (bWakeCold: 방금 깬 입자는 건너뛴다)
 		float3 Imp = 0;
-		for (uint e = AdjStart[p]; e < AdjStart[p + 1]; ++e)
+		const bool bSkipWarm = bSleep && bWakeCold && (SleepRW[p] & SLEEP_JUST) != 0u;
+		for (uint e = AdjStart[p]; e < (bSkipWarm ? AdjStart[p] : AdjStart[p + 1]); ++e)
 		{
 			const uint A = AdjRO[e];
 			const float3 I3 = PairImpulseRO[A >> 1].xyz;
@@ -508,9 +527,9 @@ void WarmPredictCS(uint3 Tid : SV_DispatchThreadID)
 // 잠든 입자 p 를 깨운다 (고정 입자는 count 가 늘 0 이라 건드리지 않는다)
 void WakeParticle(uint p, uint Mark)
 {
-	if (SleepRW[p] >= SleepFrames && (SleepRW[p] & SLEEP_WOKE) == 0u)
+	if (IsAsleep(SleepRW[p]))
 	{
-		SleepRW[p] = Mark;
+		SleepRW[p] = Mark | SLEEP_JUST;
 		PosRW[p] = float4(PosRW[p].xyz, 1.f);
 	}
 }
@@ -523,8 +542,8 @@ void WakeCS(uint3 Tid : SV_DispatchThreadID)
 	if (k >= FrameCountsRO[0]) { return; }
 	const uint i = PairIJRO[2 * k];
 	const uint j = PairIJRO[2 * k + 1];
-	const bool Si = SleepRW[i] >= SleepFrames && (SleepRW[i] & SLEEP_WOKE) == 0u;
-	const bool Sj = SleepRW[j] >= SleepFrames && (SleepRW[j] & SLEEP_WOKE) == 0u;
+	const bool Si = IsAsleep(SleepRW[i]);
+	const bool Sj = IsAsleep(SleepRW[j]);
 	if (Si == Sj) { return; }
 	const uint Sl = Si ? i : j;   // 잠든 쪽
 	const uint Aw = Si ? j : i;   // 깬 쪽
@@ -590,7 +609,7 @@ void StatsCS(uint3 Tid : SV_DispatchThreadID, uint3 GTid : SV_GroupThreadID, uin
 			if (bSleep)
 			{
 				// 잠들기 — SleepVel 미만이 SleepFrames 프레임
-				uint Count = SleepRW[p] & ~SLEEP_WOKE;
+				uint Count = SleepRW[p] & ~(SLEEP_WOKE | SLEEP_JUST);
 				Count = (Speed < SleepVel) ? Count + 1u : 0u;
 				if (Count >= SleepFrames)
 				{
@@ -601,7 +620,7 @@ void StatsCS(uint3 Tid : SV_DispatchThreadID, uint3 GTid : SV_GroupThreadID, uin
 				SleepRW[p] = Count;
 			}
 		}
-		else if (bSleep && SleepRW[p] >= SleepFrames)
+		else if (bSleep && IsAsleep(SleepRW[p]))
 		{
 			// 잠든 입자 — 통계에선 속도 0 인 자유 입자다 (정지 판정이 그대로 돌게)
 			Free = 1;
