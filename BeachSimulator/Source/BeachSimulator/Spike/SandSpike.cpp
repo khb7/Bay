@@ -1293,6 +1293,7 @@ void FSandSpike::StepGpuResident(float Dt)
 	P.MarginMinR = Params.MarginMinR;
 	P.bWakeCold = Params.bWakeCold;
 	P.bWakeZeroPairs = Params.bWakeZeroPairs;
+	P.bSleepColdPairs = Params.bSleepColdPairs;
 	P.bMassSplit  = Params.bMassSplit;
 	P.Gravity     = GravityDir * (FMath::Abs(Params.Gravity) * GravityScale);
 	const float Alpha = BondCompliance();

@@ -149,6 +149,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandFrameParams, )
 	SHADER_PARAMETER(uint32, WakePass)
 	SHADER_PARAMETER(uint32, bWakeCold)
 	SHADER_PARAMETER(uint32, bWakeZeroPairs)
+	SHADER_PARAMETER(uint32, bSleepColdPairs)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, SleepRW)
 
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, PosRW)
@@ -821,6 +822,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			F.MarginMinR = P.MarginMinR;
 			F.bWakeCold = P.bWakeCold ? 1 : 0;
 			F.bWakeZeroPairs = P.bWakeZeroPairs ? 1 : 0;
+			F.bSleepColdPairs = P.bSleepColdPairs ? 1 : 0;
 			F.SleepVel    = P.SleepVel;
 			F.SleepFrames = (uint32)FMath::Max(1, P.SleepFrames);
 			F.WakeVel     = P.WakeVel;

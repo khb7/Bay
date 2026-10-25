@@ -59,6 +59,7 @@ uint  WakePass;                  // WakeCS: 0 = 충격 · 1 = 방금 깬 입자�
 #define SLEEP_WOKE 0x40000000u   // 이번 프레임에 충격으로 깸 (전파용 표시, StatsCS 가 지운다)
 #define SLEEP_JUST 0x20000000u   // 이번 프레임에 깸 (어떤 경로든). bWakeCold 면 워밍 임펄스를 받지 않는다. StatsCS 가 지운다
 uint  bWakeCold;                 // #50 깬 첫 프레임은 접촉 워밍 임펄스 없이 시작 (잠든 동안 쌓인 λ 의 과충격 의심, #49)
+uint  bSleepColdPairs;           // 조사 H9 (b) — 한쪽만 잠든 쌍은 워밍 안 함
 bool IsAsleep(uint s) { return (s & (SLEEP_WOKE | SLEEP_JUST)) == 0u && s >= SleepFrames; }
 RWStructuredBuffer<uint>   SleepRW;           // 정지 프레임 수. ≥ SleepFrames = 잠듦 (그때 Pos.w = 0). 고정 입자는 늘 0
 
@@ -411,6 +412,8 @@ void PairScatterCS(uint3 Tid : SV_DispatchThreadID)
 
 	// 워밍 λ — Step() 의 워밍 블록과 같다: 비율을 곱하고, 닿아 있는 쌍만, 접선은 현재 접평면에 재투영 후 원뿔로 다시 자른다
 	float4 L = PairWarmRO[k] * WarmStart;
+	// 조사 H9 (b) — 한쪽만 잠든 쌍은 워밍하지 않는다: 무한 질량 상대와의 접촉 λ 가 프레임마다 쌓이는 래칫을 끊는다 (stage53)
+	if (bSleepColdPairs != 0u && (IsAsleep(SleepRW[i]) != IsAsleep(SleepRW[j]))) { L = 0; }
 	float3 Impulse = 0;
 	const float3 Diff = PosRO[i].xyz - PosRO[j].xyz;
 	const float Dist = length(Diff);
