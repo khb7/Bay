@@ -1222,6 +1222,7 @@ void FSandSpike::SyncFromGpu() const
 	}
 	Self->GpuLiveW.SetNum(N);
 	for (int32 i = 0; i < N; ++i) { Self->GpuLiveW[i] = D.Pos[i].W; }
+	Self->GpuLiveSleep = D.Sleep;
 	Self->GroundLambdaN = D.GroundLambda;
 	Self->WallLambda    = D.WallLambda;
 

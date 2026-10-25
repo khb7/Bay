@@ -593,6 +593,111 @@ namespace
 		}
 	}
 
+	/** 벽 사출 조사 §5 — 입자별 최근 프레임 링 버퍼. 처음 |v| > 50 cm/s 가 된 입자와 최근접 6개의 이력을 덤프한다 */
+	struct FTraceRow
+	{
+		FVector3f P, V;
+		float W = 0.f;
+		uint32 Sleep = 0;
+		float Ground = 0.f, WallSum = 0.f;
+		float OvFixed = 0.f, OvAny = 0.f;   // 고정 입자와 / 아무 입자와 최대 겹침 (R 단위)
+		float LamN = 0.f;                   // 이 입자 쌍들의 Σλn
+		int32 Pairs = 0;
+		int32 Frame = -1;
+	};
+	struct FTracer
+	{
+		static constexpr int32 Depth = 20;
+		TArray<FTraceRow> Ring;   // N × Depth
+		TSet<int32> Dumped;
+		int32 NumDumps = 0;
+		void Record(const FSandSpike& Sim, int32 Frame, float R)
+		{
+			const TArray<FVector3f>& Pos = Sim.GetPositions();
+			const TArray<FVector3f>& Vel = Sim.GetVelocities();
+			const TArray<float>& W0 = Sim.GetInvMass();
+			const TArray<float>& W = Sim.GetGpuLiveW();
+			const TArray<uint32>& Sl = Sim.GetGpuLiveSleep();
+			const TArray<float>& G = Sim.GetGroundLambda();
+			const TArray<FVector4f>& WL = Sim.GetWallLambda();
+			const int32 N = Pos.Num();
+			if (Ring.Num() != N * Depth) { Ring.SetNum(N * Depth); }
+			const int32 Slot = Frame % Depth;
+			for (int32 p = 0; p < N; ++p)
+			{
+				FTraceRow& Row = Ring[p * Depth + Slot];
+				Row = FTraceRow();
+				Row.P = Pos[p]; Row.V = Vel[p];
+				Row.W = W.IsValidIndex(p) ? W[p] : W0[p];
+				Row.Sleep = Sl.IsValidIndex(p) ? Sl[p] : 0u;
+				Row.Ground = G.IsValidIndex(p) ? G[p] : 0.f;
+				Row.WallSum = WL.IsValidIndex(p) ? WL[p].X + WL[p].Y + WL[p].Z + WL[p].W : 0.f;
+				Row.Frame = Frame;
+			}
+			for (const FSandContact& C : Sim.GetContacts())
+			{
+				const float Ov = (2.f * R - (Pos[C.I] - Pos[C.J]).Size()) / R;
+				for (int32 k = 0; k < 2; ++k)
+				{
+					const int32 a = k ? C.J : C.I, b = k ? C.I : C.J;
+					FTraceRow& Row = Ring[a * Depth + Slot];
+					++Row.Pairs;
+					Row.LamN += C.LambdaN;
+					Row.OvAny = FMath::Max(Row.OvAny, Ov);
+					if (W0[b] <= 0.f) { Row.OvFixed = FMath::Max(Row.OvFixed, Ov); }
+				}
+			}
+		}
+		void DumpOne(int32 p, int32 Frame, const TCHAR* Tag) const
+		{
+			for (int32 d = Depth - 1; d >= 0; --d)
+			{
+				const int32 f = Frame - d;
+				if (f < 0) { continue; }
+				const FTraceRow& Row = Ring[p * Depth + (f % Depth)];
+				if (Row.Frame != f) { continue; }
+				UE_LOG(LogSpikeSweep, Display, TEXT("      [trace %s] f%d p%d pos(%.2f,%.2f,%.2f) v(%.1f,%.1f,%.1f) |v| %.1f w %.0f sleep 0x%08x | 지면λ %.4f 벽λ %.4f | 쌍 %d Σλn %.4f 겹침 고정 %.2fR 전체 %.2fR"),
+					Tag, f, p, Row.P.X, Row.P.Y, Row.P.Z, Row.V.X, Row.V.Y, Row.V.Z, Row.V.Size(), Row.W, Row.Sleep, Row.Ground, Row.WallSum, Row.Pairs, Row.LamN, Row.OvFixed, Row.OvAny);
+			}
+		}
+		void Check(const FSandSpike& Sim, int32 Frame, float R)
+		{
+			if (NumDumps >= 3 || Frame < 300) { return; }
+			const TArray<FVector3f>& Pos = Sim.GetPositions();
+			const TArray<FVector3f>& Vel = Sim.GetVelocities();
+			const TArray<float>& W0 = Sim.GetInvMass();
+			const TArray<float>& W = Sim.GetGpuLiveW();
+			for (int32 p = 0; p < Pos.Num() && NumDumps < 3; ++p)
+			{
+				if (W0[p] <= 0.f || Vel[p].Size() <= 50.f || Dumped.Contains(p)) { continue; }
+				Dumped.Add(p); ++NumDumps;
+				const FVector3f Box = Sim.GetBoxHalf();
+				UE_LOG(LogSpikeSweep, Display, TEXT("    [trace] ===== 사출 #%d: f%d p%d |v| %.1f · 벽까지 %.2fR · z %.2f ====="), NumDumps, Frame, p, Vel[p].Size(),
+					FMath::Min(Box.X - FMath::Abs(Pos[p].X), Box.Y - FMath::Abs(Pos[p].Y)) / R, Pos[p].Z);
+				DumpOne(p, Frame, TEXT("본"));
+				// 이번 프레임 쌍 상세
+				for (const FSandContact& C : Sim.GetContacts())
+				{
+					if (C.I != p && C.J != p) { continue; }
+					const int32 q = C.I == p ? C.J : C.I;
+					UE_LOG(LogSpikeSweep, Display, TEXT("      [trace 쌍] p%d–q%d 거리 %.3fR λn %.4f |λt| %.4f q: w %.0f 고정 %d |v| %.1f"),
+						p, q, (Pos[p] - Pos[q]).Size() / R, C.LambdaN, C.LambdaTan.Size(), W.IsValidIndex(q) ? W[q] : -1.f, W0[q] <= 0.f ? 1 : 0, Vel[q].Size());
+				}
+				// 최근접 6개 (지금 위치 기준이 아니라 20 프레임 전 위치 기준 — 날아가기 전의 이웃)
+				const int32 F0 = FMath::Max(0, Frame - Depth + 1);
+				const FVector3f P0 = Ring[p * Depth + (F0 % Depth)].P;
+				TArray<TPair<float, int32>> Near;
+				for (int32 q = 0; q < Pos.Num(); ++q)
+				{
+					if (q == p) { continue; }
+					Near.Add(TPair<float, int32>((Ring[q * Depth + (F0 % Depth)].P - P0).SizeSquared(), q));
+				}
+				Near.Sort([](const TPair<float, int32>& A, const TPair<float, int32>& B) { return A.Key < B.Key; });
+				for (int32 n = 0; n < FMath::Min(6, Near.Num()); ++n) { DumpOne(Near[n].Value, Frame, *FString::Printf(TEXT("이웃%d"), n)); }
+			}
+		}
+	};
+
 	int32 RunPerf(const FString& Params)
 	{
 		const TArray<int32> CountList = ParseList<int32>(Params, TEXT("particles="), { 20000 });
@@ -643,6 +748,8 @@ namespace
 			// #44 정지 상태 — -window=N 이면 N 프레임마다 그 구간 평균을 찍는다 (다짐 → 정지 경과). -w=W 면 BondFrame 에 물을 주고 결합
 			int32 Window = 0; FParse::Value(*Params, TEXT("window="), Window);
 			const bool bDiag = FParse::Param(*Params, TEXT("diag"));   // #46 끓음 기전
+			const bool bTrace = FParse::Param(*Params, TEXT("trace"));   // 벽 사출 조사 §5
+			FTracer Tracer;
 			float W = 0.f; FParse::Value(*Params, TEXT("w="), W);
 			int32 BondFrame = 300; FParse::Value(*Params, TEXT("bondframe="), BondFrame);
 			FParse::Value(*Params, TEXT("strength="), P.BondStrength);
@@ -661,6 +768,7 @@ namespace
 					UE_LOG(LogSpikeSweep, Display, TEXT("   f%d 결합 %d (W %.2f)"), f, Made, W);
 				}
 				Sim.Step(1.f / 60.f);
+				if (bTrace && f >= 280) { Tracer.Record(Sim, f, P.Radius); Tracer.Check(Sim, f, P.Radius); }
 				if (Window > 0)
 				{
 					WinSum += Sim.LastStepMs(); ++WinN;

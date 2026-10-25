@@ -464,6 +464,9 @@ public:
 	int32 LastNumAsleep() const { return LastAsleep; }
 	int32 LastNumAwakeBlocks() const { return LastAwakeBlocks; }
 	const TArray<float>& GetGpuLiveW() const { SyncFromGpu(); return GpuLiveW; }
+	const TArray<uint32>& GetGpuLiveSleep() const { SyncFromGpu(); return GpuLiveSleep; }
+	const TArray<float>& GetGroundLambda() const { SyncFromGpu(); return GroundLambdaN; }
+	const TArray<FVector4f>& GetWallLambda() const { SyncFromGpu(); return WallLambda; }
 	float LastGpuPrepMs() const { return GpuPrepMs; }
 	/** 마지막 접촉 패스에서 블록 경계를 넘은 활성 접촉 비율 (블록 모드 계측) */
 	float BoundaryContactFrac() const { return LastBoundaryFrac; }
@@ -492,6 +495,7 @@ private:
 	int32 LastAsleep = 0, LastAwakeBlocks = 0;
 	bool  bMarginGlobalMode = false;   // #53 잠든 비율이 높으면 입자별 여유를 끄고 전체 여유로 (이력 70% / 50%)
 	TArray<float> GpuLiveW;   // #50 진단 — 내려받은 Pos.w (잠듦 = 0)
+	TArray<uint32> GpuLiveSleep;   // 조사 계측 — 정지 카운터 · 표시 비트
 	float GpuMs = 0.f;
 	float GpuPrepMs = 0.f;
 	TUniquePtr<FSandGpuSim> GpuSim;   // 2단계. bGpuResident 일 때만

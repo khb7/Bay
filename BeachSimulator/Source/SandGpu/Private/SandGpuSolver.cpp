@@ -569,7 +569,7 @@ struct FSandGpuSim::FState
 	FRHIGPUBufferReadback FrameCountsRB{ TEXT("SandGpu.FrameCounts") };
 	FRHIGPUBufferReadback BatchStatsRB{ TEXT("SandGpu.BatchStats") };
 	FRHIGPUBufferReadback DlPos{ TEXT("SandGpu.DlPos") }, DlVel{ TEXT("SandGpu.DlVel") }, DlPairIJ{ TEXT("SandGpu.DlPairIJ") },
-		DlLambda{ TEXT("SandGpu.DlLambda") }, DlBond{ TEXT("SandGpu.DlBond") }, DlGround{ TEXT("SandGpu.DlGround") }, DlWall{ TEXT("SandGpu.DlWall") };
+		DlLambda{ TEXT("SandGpu.DlLambda") }, DlBond{ TEXT("SandGpu.DlBond") }, DlGround{ TEXT("SandGpu.DlGround") }, DlWall{ TEXT("SandGpu.DlWall") }, DlSleep{ TEXT("SandGpu.DlSleep") };
 
 	TArray<FVector4f> StatsPartial;
 };
@@ -1016,6 +1016,7 @@ void FSandGpuSim::Download(FSandGpuDownload& Out) const
 	Out.BondData.SetNumUninitialized(NumB);
 	Out.GroundLambda.SetNumUninitialized(N);
 	Out.WallLambda.SetNumUninitialized(N);
+	Out.Sleep.SetNumZeroed(N);
 	if (N == 0)
 	{
 		return;
@@ -1031,6 +1032,7 @@ void FSandGpuSim::Download(FSandGpuDownload& Out) const
 			AddEnqueueCopyPass(GraphBuilder, &S->DlVel, GraphBuilder.RegisterExternalBuffer(S->Vel), LN * sizeof(FVector4f));
 			AddEnqueueCopyPass(GraphBuilder, &S->DlGround, GraphBuilder.RegisterExternalBuffer(S->GroundLambda), LN * sizeof(float));
 			AddEnqueueCopyPass(GraphBuilder, &S->DlWall, GraphBuilder.RegisterExternalBuffer(S->WallLambda), LN * sizeof(FVector4f));
+			AddEnqueueCopyPass(GraphBuilder, &S->DlSleep, GraphBuilder.RegisterExternalBuffer(S->Sleep), LN * sizeof(uint32));
 			if (LP > 0)
 			{
 				AddEnqueueCopyPass(GraphBuilder, &S->DlPairIJ, GraphBuilder.RegisterExternalBuffer(S->SortedIJ[Last]), 2 * LP * sizeof(uint32));
@@ -1047,6 +1049,7 @@ void FSandGpuSim::Download(FSandGpuDownload& Out) const
 		FetchReadback(S->DlVel, Out.Vel.GetData(), LN * sizeof(FVector4f));
 		FetchReadback(S->DlGround, Out.GroundLambda.GetData(), LN * sizeof(float));
 		FetchReadback(S->DlWall, Out.WallLambda.GetData(), LN * sizeof(FVector4f));
+		FetchReadback(S->DlSleep, Out.Sleep.GetData(), LN * sizeof(uint32));
 		FetchReadback(S->DlPairIJ, Out.PairIJ.GetData(), 2 * LP * sizeof(uint32));
 		FetchReadback(S->DlLambda, Out.PairLambda.GetData(), LP * sizeof(FVector4f));
 		FetchReadback(S->DlBond, Out.BondData.GetData(), LB * sizeof(FVector4f));

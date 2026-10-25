@@ -128,6 +128,7 @@ struct FSandGpuDownload
 	TArray<FVector4f> BondData;       // x < 0 = 끊긴 결합
 	TArray<float>     GroundLambda;
 	TArray<FVector4f> WallLambda;
+	TArray<uint32>    Sleep;          // C안 정지 카운터 (+ 표시 비트) — 조사 계측용
 };
 
 /**
