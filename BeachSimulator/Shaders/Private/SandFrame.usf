@@ -60,6 +60,9 @@ uint  WakePass;                  // WakeCS: 0 = 충격 · 1 = 방금 깬 입자�
 #define SLEEP_JUST 0x20000000u   // 이번 프레임에 깸 (어떤 경로든). bWakeCold 면 워밍 임펄스를 받지 않는다. StatsCS 가 지운다
 uint  bWakeCold;                 // #50 깬 첫 프레임은 접촉 워밍 임펄스 없이 시작 (잠든 동안 쌓인 λ 의 과충격 의심, #49)
 uint  bSleepColdPairs;           // 조사 H9 (b) — 한쪽만 잠든 쌍은 워밍 안 함
+float WakeLamRatio;              // 조사 H9 (e) — 잠든 입자의 Σλn 이 잠들 때 값의 이 배수 + WakeLamAbs 를 넘으면 깬다 (0 = 끔). C9 힘 균형 조건
+float WakeLamAbs;
+RWStructuredBuffer<float> SleepRefRW;   // 잠들 때의 Σλn
 bool IsAsleep(uint s) { return (s & (SLEEP_WOKE | SLEEP_JUST)) == 0u && s >= SleepFrames; }
 RWStructuredBuffer<uint>   SleepRW;           // 정지 프레임 수. ≥ SleepFrames = 잠듦 (그때 Pos.w = 0). 고정 입자는 늘 0
 
@@ -616,6 +619,13 @@ groupshared float  StatMax[256];
 groupshared uint   StatFree[256];
 groupshared float  StatLambda[256];
 
+float LamSumContacts(uint p)
+{
+	float S = 0;
+	for (uint e = AdjStart[p]; e < AdjStart[p + 1]; ++e) { S += abs(LambdaRW[AdjRO[e] >> 1].w); }
+	return S;
+}
+
 [numthreads(256, 1, 1)]
 void StatsCS(uint3 Tid : SV_DispatchThreadID, uint3 GTid : SV_GroupThreadID, uint3 Gid : SV_GroupID)
 {
@@ -646,6 +656,7 @@ void StatsCS(uint3 Tid : SV_DispatchThreadID, uint3 GTid : SV_GroupThreadID, uin
 				Count = bCalm ? Count + 1u : 0u;
 				if (Count >= SleepFrames)
 				{
+					if (Count == SleepFrames) { SleepRefRW[p] = LamSumContacts(p); }   // H9 (e) 기준값
 					PosRW[p] = float4(PosRW[p].xyz, 0.f);
 					VelRW[p] = float4(0, 0, 0, 0);
 					Speed = 0;
@@ -655,6 +666,12 @@ void StatsCS(uint3 Tid : SV_DispatchThreadID, uint3 GTid : SV_GroupThreadID, uin
 		}
 		else if (bSleep && IsAsleep(SleepRW[p]))
 		{
+			// H9 (e) — 접촉 λ 가 잠들 때보다 크게 쌓였으면 실제로는 밀려야 한다는 뜻 → 깨운다 (C9 §3.2.2 힘 균형)
+			if (WakeLamRatio > 0.f && LamSumContacts(p) > WakeLamRatio * SleepRefRW[p] + WakeLamAbs)
+			{
+				SleepRW[p] = SLEEP_JUST;
+				PosRW[p] = float4(PosRW[p].xyz, 1.f);
+			}
 			// 잠든 입자 — 통계에선 속도 0 인 자유 입자다 (정지 판정이 그대로 돌게)
 			Free = 1;
 			InterlockedAdd(CountersRW[3], 1u);

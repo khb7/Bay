@@ -49,6 +49,7 @@ struct FSandParams
 	bool   bWakeCold = false;
 	bool   bWakeZeroPairs = false;   // 조사 H9
 	bool   bSleepColdPairs = false;   // 조사 H9 (b)
+	float  WakeLamRatio = 0.f, WakeLamAbs = 5.f;   // 조사 H9 (e)
 	float  SleepVel = 0.25f;
 	int32  SleepFrames = 30;
 	float  WakeVel = 15.f;

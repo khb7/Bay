@@ -87,6 +87,7 @@ struct FSandGpuFrameParams
 	bool  bWakeCold = false;           // #50 깬 첫 프레임은 접촉 워밍 없이
 	bool  bWakeZeroPairs = false;      // 조사 H9 — 깬 입자의 쌍 λ 를 버린다
 	bool  bSleepColdPairs = false;     // 조사 H9 (b) — 한쪽만 잠든 쌍 워밍 안 함
+	float WakeLamRatio = 0.f, WakeLamAbs = 5.f;   // 조사 H9 (e) — Σλn > 비율·잠들때 + 절대 → 깸 (0 = 끔)
 	float SleepVel = 0.25f;           // cm/s (C9 2.5 mm/s)
 	int32 SleepFrames = 30;
 	float WakeVel = 15.f;             // cm/s (C9 0.15 m/s)

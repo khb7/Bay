@@ -150,6 +150,9 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandFrameParams, )
 	SHADER_PARAMETER(uint32, bWakeCold)
 	SHADER_PARAMETER(uint32, bWakeZeroPairs)
 	SHADER_PARAMETER(uint32, bSleepColdPairs)
+	SHADER_PARAMETER(float, WakeLamRatio)
+	SHADER_PARAMETER(float, WakeLamAbs)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, SleepRefRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, SleepRW)
 
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, PosRW)
@@ -560,6 +563,7 @@ struct FSandGpuSim::FState
 	// 영구 (입자 수 N)
 	TRefCountPtr<FRDGPooledBuffer> Pos, Vel, PrevPos, GroundLambda, WallLambda;
 	TRefCountPtr<FRDGPooledBuffer> Sleep;   // C안 — 정지 프레임 수 (uint)
+	TRefCountPtr<FRDGPooledBuffer> SleepRef;   // 조사 H9 (e) — 잠들 때의 Σλn
 	// 영구 (결합)
 	TRefCountPtr<FRDGPooledBuffer> BondIJ, BondData, BondAdjOffset, BondAdj;
 	// 쌍 목록 두 벌 — [Cur] 이번 프레임 · [1-Cur] 지난 프레임 (워밍 조회)
@@ -633,6 +637,7 @@ void FSandGpuSim::Upload(const FSandGpuUpload& In, bool bKeepPairs)
 			S->GroundLambda = Persist(sizeof(float), NewCapN, TEXT("SandSim.GroundLambda"));
 			S->WallLambda   = Persist(sizeof(FVector4f), NewCapN, TEXT("SandSim.WallLambda"));
 			S->Sleep        = Persist(sizeof(uint32), NewCapN, TEXT("SandSim.Sleep"));
+			S->SleepRef     = Persist(sizeof(float), NewCapN, TEXT("SandSim.SleepRef"));
 			S->BondAdjOffset = Persist(sizeof(uint32), NewCapN + 1, TEXT("SandSim.BondAdjOffset"));
 			for (int32 k = 0; k < 2; ++k)
 			{
@@ -677,6 +682,7 @@ void FSandGpuSim::Upload(const FSandGpuUpload& In, bool bKeepPairs)
 		Up(S->GroundLambda, In.GroundLambda.GetData(), LN * sizeof(float));
 		Up(S->WallLambda, In.WallLambda.GetData(), LN * sizeof(FVector4f));
 		Up(S->Sleep, nullptr, 0);   // 올리기(도구 조작) = 전부 깸 (계획 1-3 v1). w 는 CPU 의 원래 역질량으로 돌아온다
+		Up(S->SleepRef, nullptr, 0);
 		Up(S->BondIJ, In.BondIJ.GetData(), In.BondIJ.Num() * sizeof(uint32));
 		Up(S->BondData, In.BondData.GetData(), LB * sizeof(FVector4f));
 		Up(S->BondAdjOffset, In.BondAdjOffset.GetData(), In.BondAdjOffset.Num() * sizeof(uint32));
@@ -743,6 +749,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			FRDGBufferRef GroundLambda = GraphBuilder.RegisterExternalBuffer(S->GroundLambda);
 			FRDGBufferRef WallLambda   = GraphBuilder.RegisterExternalBuffer(S->WallLambda);
 			FRDGBufferRef SleepBuf     = GraphBuilder.RegisterExternalBuffer(S->Sleep);
+			FRDGBufferRef SleepRefBuf  = GraphBuilder.RegisterExternalBuffer(S->SleepRef);
 			FRDGBufferRef BondIJ        = GraphBuilder.RegisterExternalBuffer(S->BondIJ);
 			FRDGBufferRef BondData      = GraphBuilder.RegisterExternalBuffer(S->BondData);
 			FRDGBufferRef BondAdjOffset = GraphBuilder.RegisterExternalBuffer(S->BondAdjOffset);
@@ -823,6 +830,9 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			F.bWakeCold = P.bWakeCold ? 1 : 0;
 			F.bWakeZeroPairs = P.bWakeZeroPairs ? 1 : 0;
 			F.bSleepColdPairs = P.bSleepColdPairs ? 1 : 0;
+			F.WakeLamRatio = P.WakeLamRatio;
+			F.WakeLamAbs   = P.WakeLamAbs;
+			F.SleepRefRW   = GraphBuilder.CreateUAV(SleepRefBuf);
 			F.SleepVel    = P.SleepVel;
 			F.SleepFrames = (uint32)FMath::Max(1, P.SleepFrames);
 			F.WakeVel     = P.WakeVel;

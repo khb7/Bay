@@ -297,6 +297,8 @@ namespace
 			P.bWakeCold = FParse::Param(*Params, TEXT("wakecold"));   // #50
 			P.bWakeZeroPairs = FParse::Param(*Params, TEXT("wakezero"));   // 조사 H9
 			P.bSleepColdPairs = FParse::Param(*Params, TEXT("sleepcoldpairs"));   // 조사 H9 (b)
+			FParse::Value(*Params, TEXT("wakelam="), P.WakeLamRatio);   // 조사 H9 (e)
+			FParse::Value(*Params, TEXT("wakelamabs="), P.WakeLamAbs);
 			FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 			FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
 			FParse::Value(*Params, TEXT("wakev="), P.WakeVel);
@@ -729,6 +731,8 @@ namespace
 			P.bWakeCold = FParse::Param(*Params, TEXT("wakecold"));   // #50
 			P.bWakeZeroPairs = FParse::Param(*Params, TEXT("wakezero"));   // 조사 H9
 			P.bSleepColdPairs = FParse::Param(*Params, TEXT("sleepcoldpairs"));   // 조사 H9 (b)
+			FParse::Value(*Params, TEXT("wakelam="), P.WakeLamRatio);   // 조사 H9 (e)
+			FParse::Value(*Params, TEXT("wakelamabs="), P.WakeLamAbs);
 			FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 			FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
 			FParse::Value(*Params, TEXT("wakev="), P.WakeVel);
@@ -990,6 +994,8 @@ namespace
 		P.bWakeCold = FParse::Param(*Params, TEXT("wakecold"));   // #50
 		P.bWakeZeroPairs = FParse::Param(*Params, TEXT("wakezero"));   // 조사 H9
 		P.bSleepColdPairs = FParse::Param(*Params, TEXT("sleepcoldpairs"));   // 조사 H9 (b)
+		FParse::Value(*Params, TEXT("wakelam="), P.WakeLamRatio);   // 조사 H9 (e)
+		FParse::Value(*Params, TEXT("wakelamabs="), P.WakeLamAbs);
 		FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 		FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
 		FParse::Value(*Params, TEXT("wakev="), P.WakeVel);
@@ -1112,6 +1118,8 @@ namespace
 		P.bWakeCold = FParse::Param(*Params, TEXT("wakecold"));   // #50
 		P.bWakeZeroPairs = FParse::Param(*Params, TEXT("wakezero"));   // 조사 H9
 		P.bSleepColdPairs = FParse::Param(*Params, TEXT("sleepcoldpairs"));   // 조사 H9 (b)
+		FParse::Value(*Params, TEXT("wakelam="), P.WakeLamRatio);   // 조사 H9 (e)
+		FParse::Value(*Params, TEXT("wakelamabs="), P.WakeLamAbs);
 		FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 		FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
 		FParse::Value(*Params, TEXT("wakev="), P.WakeVel);
