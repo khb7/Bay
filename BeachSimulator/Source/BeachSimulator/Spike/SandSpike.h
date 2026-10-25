@@ -490,6 +490,7 @@ private:
 	TArray<int64>     BlockId;          // ①-b 블록 모사용. 셀 좌표를 21비트씩 묶은 정확한 키
 	float LastBoundaryFrac = 0.f;
 	int32 LastAsleep = 0, LastAwakeBlocks = 0;
+	bool  bMarginGlobalMode = false;   // #53 잠든 비율이 높으면 입자별 여유를 끄고 전체 여유로 (이력 70% / 50%)
 	TArray<float> GpuLiveW;   // #50 진단 — 내려받은 Pos.w (잠듦 = 0)
 	float GpuMs = 0.f;
 	float GpuPrepMs = 0.f;
