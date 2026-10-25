@@ -1,5 +1,6 @@
 # M0-b — GPU 이식: 같은 답이 나오는가 (초안 2026-09-14)
 
+> **기준 플래그 (2026-10-26)** — 물리: `-gpu2 -color8par -block=15 -mu=0.17 -kv=1 -kc=0.2 -vmax=30 -iterations=60 -pmargin`. 재우기 추가: `-sleep -wakecold -wakezero -wakelam=1.2` (#57). 코드의 `FSandParams` 기본값은 아직 옛 값(Kv 0.1 · Kc 1 · 반복 120)이다 — 커맨드릿 플래그로 준다.
 > **현황 (2026-10-26, m0-log #41~#56)** — **새 기본값: A안 8색 블록 GS · 블록 안 배치 병렬 · `-kv=1 -kc=0.2 -vmax=30 -iterations=60 -pmargin`** (`-gpu2 -color8par -block=15`). 물리 관문 전부 통과 (#54: 터널 1.5% · 더미 크리프 0.0031/0.0019 · 절토 H_c 84.4). 5만 성능: 다짐 중 15~21 ms · 정지 젖음 16.3 ms (통과선 **활성 5만 · 16 ms**, 2026-10-25 하향). 재우기(C안)는 정지 9.6~11.6 ms 를 주지만 사출 문제로 조사 중 — [m0b-investigation-wall-ejection.md](m0b-investigation-wall-ejection.md). 경로: [m0b-plan-a.md](m0b-plan-a.md) → [m0b-plan-substep.md](m0b-plan-substep.md)(기각) → Kv·Kc (#47~48, papers C7·C8) → [m0b-plan-sleep.md](m0b-plan-sleep.md).
 
 

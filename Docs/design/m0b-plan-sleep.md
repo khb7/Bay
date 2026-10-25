@@ -1,5 +1,6 @@
 # M0-b C안 — 멈춘 모래 재우기 계획
 
+> **결론 (2026-10-26)** — 재우기 **사용 가능**. 권장 `-pmargin -sleep -wakecold -wakezero -wakelam=1.2`. 사출은 λ 래칫(H9)이 원인이었고 `-wakelam` 으로 대조의 1/5~1/50, 드문 꼬리는 알려진 한계 ([조사 문서](m0b-investigation-wall-ejection.md) 결론). G1(더미)·G2(터널·절토) 는 #57 P4 로 대체 — 같다 (시드 3 각 −1°). G3(붓기)·W1~W3 는 미실시.
 > **진행 (2026-10-26)** — v1 구현 (#49). 깬 첫 프레임 워밍 끄기 `-wakecold` 로 마른 재각성 해결 (#50: 97% 잠듦 · 9.6 ms). 입자별 여유와 섞으면 재각성 · 사출 → 잠든 비율 70%/50% 로 전환하는 조합 나누기 (#53). **남은 사출의 원인은 조사 중**: 잠든(무한 질량) 이웃 사이에 낀 깬 입자의 접촉 λ 가 프레임마다 쌓였다가 이웃이 깰 때 풀리는 "λ 래칫" (#56, H9). [m0b-investigation-wall-ejection.md](m0b-investigation-wall-ejection.md). 관문 G1~G4 는 사출이 풀린 뒤.
 > 추가된 스위치: `-wakecold` · `-wakezero` · `-sleepcoldpairs`(기각) · `-wakevtouch`(기각) · 잠들기에 "이웃도 조용해야" (#51, 항상 켬).
 
