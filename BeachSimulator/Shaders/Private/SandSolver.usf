@@ -460,7 +460,7 @@ void PushWall(inout float3 P, inout float3 V, inout float LambdaN, float Wi, flo
 		return;
 	}
 	const float InvH = 1.f / StepDt;
-	const float ResN = Kv * dot(V, N) + (Kc * InvH) * Gap;
+	const float ResN = Kv * dot(V, N) + (Kc * InvH) * ((MaxDepenVel > 0.f) ? max(Gap, -MaxDepenVel * StepDt) : Gap);   // #51 벽에도 분리 속도 상한
 	float DLambdaN   = -(SorOmega / Wi) * ResN;
 	const float OldN = LambdaN;
 	LambdaN  = max(0.f, LambdaN + DLambdaN);
@@ -528,7 +528,7 @@ void ApplyBondsCS(uint3 Tid : SV_DispatchThreadID)
 		}
 		else
 		{
-			const float ResN = Kv * V.z + (Kc * InvH) * Gap;
+			const float ResN = Kv * V.z + (Kc * InvH) * ((MaxDepenVel > 0.f) ? max(Gap, -MaxDepenVel * StepDt) : Gap);   // #51 지면에도 분리 속도 상한
 			float DLambdaN   = -(SorOmega / Wi) * ResN;
 			const float OldN = LambdaN;
 			LambdaN  = max(0.f, LambdaN + DLambdaN);
