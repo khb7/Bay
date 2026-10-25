@@ -293,6 +293,7 @@ namespace
 			FParse::Value(*Params, TEXT("kc="), P.Kc);   // #48
 			P.bSleep = FParse::Param(*Params, TEXT("sleep"));   // C안
 			P.bParticleMargin = FParse::Param(*Params, TEXT("pmargin"));   // #50
+			FParse::Value(*Params, TEXT("pmarginmin="), P.MarginMinR);
 			P.bWakeCold = FParse::Param(*Params, TEXT("wakecold"));   // #50
 			FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 			FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
@@ -568,6 +569,27 @@ namespace
 			100.f * Up / F, 100.f * NearWall / F, 100.f * NearFloor / F,
 			100.f * Bins[0] / F, 100.f * Bins[1] / F, 100.f * Bins[2] / F, 100.f * Bins[3] / F, 100.f * Bins[4] / F,
 			OPct(0.5f), OPct(0.99f), Ov.Num() ? Ov.Last() : 0.f, Deep, Ov.Num(), Top - Bottom);
+
+		// #50 가장 빠른 5개 — 깼나(w), 벽까지, 가장 가까운 이웃과 그 이웃이 잠들었나, 이 입자의 쌍 수
+		const TArray<float>& LW = Sim.GetGpuLiveW();
+		if (LW.Num() == Pos.Num())
+		{
+			TArray<int32> Idx;
+			for (int32 p = 0; p < Pos.Num(); ++p) { if (W[p] > 0.f) { Idx.Add(p); } }
+			Idx.Sort([&](int32 a, int32 b) { return Vel[a].SizeSquared() > Vel[b].SizeSquared(); });
+			TArray<int32> PairsOf; PairsOf.Init(0, Pos.Num());
+			for (const FSandContact& C : Sim.GetContacts()) { ++PairsOf[C.I]; ++PairsOf[C.J]; }
+			for (int32 n = 0; n < FMath::Min(5, Idx.Num()); ++n)
+			{
+				const int32 p = Idx[n];
+				if (Vel[p].Size() < 5.f) { break; }
+				float Best = FLT_MAX; int32 Nb = -1;
+				for (int32 q = 0; q < Pos.Num(); ++q) { if (q == p) { continue; } const float d = (Pos[q] - Pos[p]).SizeSquared(); if (d < Best) { Best = d; Nb = q; } }
+				const float WallD = FMath::Min(Box.X - FMath::Abs(Pos[p].X), Box.Y - FMath::Abs(Pos[p].Y));
+				UE_LOG(LogSpikeSweep, Display, TEXT("        빠른 #%d |v| %.0f vz %.0f z %.1f 벽 %.1fR w %.0f | 쌍 %d | 최근접 %.2fR (w %.0f, 고정 %d, |v| %.1f)"),
+					p, Vel[p].Size(), Vel[p].Z, Pos[p].Z, WallD / R, LW[p], PairsOf[p], FMath::Sqrt(Best) / R, Nb >= 0 ? LW[Nb] : -1.f, Nb >= 0 && W[Nb] <= 0.f ? 1 : 0, Nb >= 0 ? Vel[Nb].Size() : 0.f);
+			}
+		}
 	}
 
 	int32 RunPerf(const FString& Params)
@@ -593,6 +615,7 @@ namespace
 			FParse::Value(*Params, TEXT("kc="), P.Kc);   // #48
 			P.bSleep = FParse::Param(*Params, TEXT("sleep"));   // C안
 			P.bParticleMargin = FParse::Param(*Params, TEXT("pmargin"));   // #50
+			FParse::Value(*Params, TEXT("pmarginmin="), P.MarginMinR);
 			P.bWakeCold = FParse::Param(*Params, TEXT("wakecold"));   // #50
 			FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 			FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
@@ -844,6 +867,7 @@ namespace
 		FParse::Value(*Params, TEXT("kc="), P.Kc);   // #48
 		P.bSleep = FParse::Param(*Params, TEXT("sleep"));   // C안
 		P.bParticleMargin = FParse::Param(*Params, TEXT("pmargin"));   // #50
+		FParse::Value(*Params, TEXT("pmarginmin="), P.MarginMinR);
 		P.bWakeCold = FParse::Param(*Params, TEXT("wakecold"));   // #50
 		FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 		FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
@@ -962,6 +986,7 @@ namespace
 		FParse::Value(*Params, TEXT("kc="), P.Kc);   // #48
 		P.bSleep = FParse::Param(*Params, TEXT("sleep"));   // C안
 		P.bParticleMargin = FParse::Param(*Params, TEXT("pmargin"));   // #50
+		FParse::Value(*Params, TEXT("pmarginmin="), P.MarginMinR);
 		P.bWakeCold = FParse::Param(*Params, TEXT("wakecold"));   // #50
 		FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 		FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);

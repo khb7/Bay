@@ -44,6 +44,7 @@ struct FSandParams
 	bool   bSleep = false;
 	/** #50 입자별 탐색 여유 (-gpu2 만, Müller 2020) — 쌍 = 거리 < D + m_i + m_j */
 	bool   bParticleMargin = false;
+	float  MarginMinR = 0.1f;
 	/** #50 깬 첫 프레임은 접촉 워밍 임펄스 없이 (-gpu2 -sleep) */
 	bool   bWakeCold = false;
 	float  SleepVel = 0.25f;
@@ -461,6 +462,7 @@ public:
 	/** C안 — 마지막 GPU 프레임의 잠든 입자 수 · 풀이를 돈 블록 수 */
 	int32 LastNumAsleep() const { return LastAsleep; }
 	int32 LastNumAwakeBlocks() const { return LastAwakeBlocks; }
+	const TArray<float>& GetGpuLiveW() const { SyncFromGpu(); return GpuLiveW; }
 	float LastGpuPrepMs() const { return GpuPrepMs; }
 	/** 마지막 접촉 패스에서 블록 경계를 넘은 활성 접촉 비율 (블록 모드 계측) */
 	float BoundaryContactFrac() const { return LastBoundaryFrac; }
@@ -487,6 +489,7 @@ private:
 	TArray<int64>     BlockId;          // ①-b 블록 모사용. 셀 좌표를 21비트씩 묶은 정확한 키
 	float LastBoundaryFrac = 0.f;
 	int32 LastAsleep = 0, LastAwakeBlocks = 0;
+	TArray<float> GpuLiveW;   // #50 진단 — 내려받은 Pos.w (잠듦 = 0)
 	float GpuMs = 0.f;
 	float GpuPrepMs = 0.f;
 	TUniquePtr<FSandGpuSim> GpuSim;   // 2단계. bGpuResident 일 때만

@@ -1220,6 +1220,8 @@ void FSandSpike::SyncFromGpu() const
 		Self->Pos[i] = FVector3f(D.Pos[i]);
 		Self->Vel[i] = FVector3f(D.Vel[i]);
 	}
+	Self->GpuLiveW.SetNum(N);
+	for (int32 i = 0; i < N; ++i) { Self->GpuLiveW[i] = D.Pos[i].W; }
 	Self->GroundLambdaN = D.GroundLambda;
 	Self->WallLambda    = D.WallLambda;
 
@@ -1279,6 +1281,7 @@ void FSandSpike::StepGpuResident(float Dt)
 	P.MaxDepenVel = Params.MaxDepenVel;
 	P.bSleep = Params.bSleep; P.SleepVel = Params.SleepVel; P.SleepFrames = Params.SleepFrames; P.WakeVel = Params.WakeVel;
 	P.bParticleMargin = Params.bParticleMargin;
+	P.MarginMinR = Params.MarginMinR;
 	P.bWakeCold = Params.bWakeCold;
 	P.bMassSplit  = Params.bMassSplit;
 	P.Gravity     = GravityDir * (FMath::Abs(Params.Gravity) * GravityScale);

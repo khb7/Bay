@@ -35,6 +35,7 @@ uint  FillValue;
 
 float CellSize;                  // = 접촉 탐색 반경 (D + 여유)
 uint  bParticleMargin;           // #50 입자별 여유 (Müller 2020, C2): 쌍 = 거리 < D + m_i + m_j, m = clamp(2·|v|·Δt + g·Δt², 0.1R, R). 0 = 전체 하나(CellSize)
+float MarginMinR;                // #50 입자별 여유 하한 (반경 배수)
 float Radius;
 float StepDt;
 float BlockSize;
@@ -297,7 +298,7 @@ void ScatterCS(uint3 Tid : SV_DispatchThreadID)
 float ParticleMargin(uint p)
 {
 	// 중력 항 g·Δt² — 정지에서 출발한 입자도 한 프레임에 0.27cm(≈0.11R) 움직인다. 이걸 빼면 깨어나는 입자의 쌍을 놓쳐 깊게 겹친다 (#50: 겹침 max 1.95R)
-	return clamp(2.f * length(VelRO[p].xyz) * StepDt + length(Gravity) * StepDt * StepDt, 0.1f * Radius, Radius);
+	return clamp(2.f * length(VelRO[p].xyz) * StepDt + length(Gravity) * StepDt * StepDt, MarginMinR * Radius, Radius);
 }
 float PairRange2(float Range2, float Mi, uint j)
 {
@@ -611,7 +612,15 @@ void StatsCS(uint3 Tid : SV_DispatchThreadID, uint3 GTid : SV_GroupThreadID, uin
 			{
 				// 잠들기 — SleepVel 미만이 SleepFrames 프레임
 				uint Count = SleepRW[p] & ~(SLEEP_WOKE | SLEEP_JUST);
-				Count = (Speed < SleepVel) ? Count + 1u : 0u;
+				// #51 이웃도 조용해야 잠든다 — 혼자 깬 입자가 잠든(무한 질량) 이웃 · 고정 바닥 · 벽 사이에 끼어 풀리지 않고 튀는 것을 막는다 (C9 는 연결망 단위로 합친다)
+				bool bCalm = Speed < SleepVel;
+				for (uint e2 = AdjStart[p]; bCalm && e2 < AdjStart[p + 1]; ++e2)
+				{
+					const uint A = AdjRO[e2];
+					const uint Q = (A & 1u) ? SortedIJRW[2 * (A >> 1)] : SortedIJRW[2 * (A >> 1) + 1];
+					bCalm = PosRW[Q].w <= 0.f || length(VelRW[Q].xyz) < SleepVel;
+				}
+				Count = bCalm ? Count + 1u : 0u;
 				if (Count >= SleepFrames)
 				{
 					PosRW[p] = float4(PosRW[p].xyz, 0.f);

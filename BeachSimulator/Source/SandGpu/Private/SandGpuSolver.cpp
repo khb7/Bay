@@ -122,6 +122,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandFrameParams, )
 	SHADER_PARAMETER(uint32, FillValue)
 	SHADER_PARAMETER(float, CellSize)
 	SHADER_PARAMETER(uint32, bParticleMargin)
+	SHADER_PARAMETER(float, MarginMinR)
 	SHADER_PARAMETER(float, Radius)
 	SHADER_PARAMETER(float, StepDt)
 	SHADER_PARAMETER(float, BlockSize)
@@ -814,6 +815,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			F.WallLiftZ = P.WallLiftZ;
 			F.bSleep      = P.bSleep ? 1 : 0;
 			F.bParticleMargin = P.bParticleMargin ? 1 : 0;
+			F.MarginMinR = P.MarginMinR;
 			F.bWakeCold = P.bWakeCold ? 1 : 0;
 			F.SleepVel    = P.SleepVel;
 			F.SleepFrames = (uint32)FMath::Max(1, P.SleepFrames);
