@@ -1,0 +1,142 @@
+# 조사 — 재우기 중 벽 · 바닥 근처 입자 사출
+
+> 2026-10-25 작성. **별도 대화에서 이 문서대로 진행한다.** 이 문서만 읽고 시작할 수 있게 썼다.
+> 관련: [m0b-plan-sleep.md](m0b-plan-sleep.md) (재우기 설계) · [m0-log.md](m0-log.md) #49~#53 (지금까지의 측정) · [papers.md](../research/papers.md) C6~C9.
+
+## 0. 이 조사의 규칙
+
+1. **재현 먼저, 고치기 나중.** 최소 재현 장면과 재현 확률을 먼저 확보한다.
+2. **판정 기준은 결과를 보기 전에 정하고 바꾸지 않는다** (§3).
+3. **가설마다 예측을 먼저 적는다.** "이 가설이 맞다면 계측에서 무엇이 보여야 하는가." 예측과 다르면 기각.
+4. **계측으로 가설을 거른 다음에만 수정을 시도한다.** 지금까지(#50~#52)는 짐작으로 고치고 결과를 보는 식이라 다섯 번 빗나갔다.
+5. **한 실험 = 변수 하나 + 대조군.** 같은 시드로 {재우기 끔 · 재우기 켬 · 수정 적용}.
+6. **전부 기록한다** — m0-log 에 `#54~` 로. 기각된 가설도 이유와 함께.
+7. 실행 환경 규칙: GPU 측정은 **동시 1개** (2개 동시는 TDR `DXGI_ERROR_DEVICE_HUNG`, #41) · BelowNormal 우선순위 · **조용한 GPU 실행을 죽이지 않는다** (로그는 끝에만 찍히는 시험이 있다).
+
+## 1. 배경 — 지금 무엇이 켜져 있나
+
+- 솔버: A안 8색 블록 GS, 블록 안 배치 병렬 (`-gpu2 -color8par -block=15`).
+- 접촉 매개변수 (#48): `-kv=1 -kc=0.2 -vmax=30 -iterations=60 -mu=0.17`. 속도 오차는 다 지우고 침투는 스텝당 20% 만 고친다 (C7 SPOOK · C8 Box2D 방향). `vmax` = 침투를 분리 속도 30 cm/s 로 자르는 상한 (C6 식 10). 접촉·벽·지면에 다 걸린다 (#51).
+- 입자별 탐색 여유 (`-pmargin`, #50): 쌍 = 거리 < D + m_i + m_j, m = clamp(2|v|Δt + g·Δt², 0.1R, R) (Müller 2020 C2). 셀 크기는 CPU 의 전체 여유 그대로.
+- 재우기 (`-sleep`, C안 v1, #49): 입자가 0.25 cm/s 미만 30 프레임이면 w = 0 (고정처럼), 속도 0. 깬 입자의 접촉이 없는 블록은 풀이를 건너뛴다. 쌍 · λ 는 그대로 둔다.
+  - 깨우기: 깬 입자가 15 cm/s 넘게 다가오면 + 이웃 전파 (깊이 2) · 결합 파단 · `Upload`(도구 조작) 때 전부.
+  - `-wakecold` (#50): 깬 첫 프레임은 접촉 워밍 임펄스를 받지 않는다 — **이것으로 마른 5만의 "잠든 뒤 재각성"은 잡혔다** (pmargin 없이: 97% 잠듦 · 9.6 ms, stage40).
+  - 잠들기 조건에 "이웃도 조용해야" (#51) — 젖음에선 효과, 마른에선 효과 없음.
+- 조합 나누기 (#53): `-pmargin -sleep` 이면 잠든 비율 ≥ 70% 에서 전체 여유로, < 50% 에서 입자별 여유로.
+
+**깨끗한 조합 (사출 없음)**: `-pmargin` 단독 (stage41) · `-sleep -wakecold` (pmargin 없이, 마른, stage40).
+**문제 조합**: `-pmargin -sleep -wakecold` (stage42~47), 그리고 #53 조합 나누기의 젖음 (stage47 f800).
+
+## 2. 증상 (측정된 사실만)
+
+| 실행 | 장면 | 관찰 |
+|---|---|---|
+| stage39 | 마른 5만 · sleep (cold 없음) | f400 96% 잠듦 → f500 부터 사출 (max 554~2988 cm/s), 재각성 |
+| stage40 | 마른 5만 · sleep · cold (pmargin 없음) | **사출 없음**, 97% 잠듦 유지, max 1 cm/s, 겹침 max 0.57R |
+| stage41~42 | 마른 5만 · pmargin · sleep · cold | 사출 · 재각성. 충격 깨우기 끔 · 잠 60 프레임 · 여유 하한 0.3R/0.6R 로 바꿔도 남는다 |
+| stage43 | 같음 + 빠른 5 개 추적 (충격 깨우기 끔) | f300~500 조용, **f550 부터 사출. 사출 입자 = 바닥층 · 벽에 붙은(벽까지 1.0R) 깬 입자. 최근접 = 고정 바닥 입자, 거리 0.64~0.90R (고정 입자 속으로 0.1~1.4R 파고듦). 이웃은 잠듦 또는 고정** |
+| stage44 | + 이웃도 조용해야 잠듦 | 젖음 거의 잡힘. 마른은 그대로 — 사출 입자는 벽에 붙은 채(1.0R) 쌍 0 개로 수 m 위아래로 난다 |
+| stage45 | + 벽 · 지면 vmax | 조금 줄었을 뿐 |
+| stage46 | + 닿은 깬 이웃 속도로 깨우기 | 깨우기 사슬 — 기각 |
+| stage47 | #53 조합 나누기 | 마른: 다짐 15 ms → 정지 9.7 ms (f800 한 번 튐). **젖음: f800 벽 근처(85%) 사출 max 4497 cm/s** — 전체 여유 모드에서도 나온다 |
+
+- 관찰 장면은 전부 `-perf` 기둥 상자: `InitTiltBox`, 층 = ∛N, 고정 바닥 1층(지터 0.3R), 네 벽 닫힘 (`WallMode 1`), R = 2.5 cm.
+- "깊은 겹침(1.9R)" 은 사출 입자가 남을 뚫고 지나간 **결과**로 본다 (원인 아님).
+
+## 3. 판정 기준 (고정)
+
+재현 장면(§4)에서, **세 시드 모두**:
+
+```
+P1  사출 없음          매 프레임 자유 입자 max |v| < 50 cm/s (첫 다짐 구간 f < 300 은 제외)
+P2  고정 입자 파고듦    깬 입자와 고정 입자 사이 겹침 < 0.6R (지금 바닥 지터 자체가 0.55R 를 만든다)
+P3  잠 유지            잠든 비율이 최고치에서 10%p 이상 떨어지지 않는다 (재각성 없음)
+P4  부작용 없음        수정 후 m0b-plan-sleep G1 · G2 관문 (더미 시드 3 · 1337 각 ±1° · 터널 < 5% · 절토 H_c 84~95) 이 재우기 끔과 같다
+```
+
+5만 기둥(`-perf -particles=50000 -frames=900`)에서도 P1~P3 를 확인해야 최종 통과.
+
+## 4. 단계 1 — 최소 재현
+
+목표: **몇 분 안에, 높은 확률로** 사출이 나는 가장 작은 장면.
+
+- 후보 (작은 것부터): 2만 기둥 · 1만 기둥 · 5천 입자를 벽 모서리에 몇 층.
+- 각 후보 × 시드 3 × {`-pmargin -sleep -wakecold`, `-sleep -wakecold`, `-pmargin`} × 마른/젖음 (`-w=0.15 -strength=3 -form=1.2`).
+- 기록: 사출(P1 위반) 첫 프레임 · 재현 시드 수 / 3.
+- **재현 장면 선택 기준**: 문제 조합에서 3/3 재현, 깨끗한 두 조합에서 0/3. 그 장면을 이후 모든 실험에 고정한다.
+- 시드: `-perf` 는 지금 `-seed=` 를 안 받는다 → `RunPerf` 에 `FTiltSetup` 시드 연결이 필요하면 추가 (`SpikeSweepCommandlet.cpp` `RunPerf`).
+
+## 5. 단계 2 — 계측 (`-trace`)
+
+목표: 사출 입자의 **사출 직전 20 프레임**을 입자 · 접촉 단위로 본다.
+
+- 매 프레임 내려받기 (재현 장면이 작아야 감당된다): 위치 · 속도 · Pos.w(잠듦) · Sleep 카운터와 표시 비트 · 지면 λ · 벽 λ(4) · 그 입자의 쌍 목록과 각 쌍의 λ(법선·접선) · 겹침.
+  - Sleep 버퍼는 지금 내려받지 않는다 → `FSandGpuSim::Download` 에 추가 (`SandGpuSolver.cpp`, `FState::Sleep`).
+- 입자마다 32 프레임 링 버퍼. 어떤 입자가 처음으로 |v| > 50 cm/s 가 되면 그 입자와 **최근접 이웃 6개**의 링을 덤프한다 (첫 3 건만).
+- 덤프 형식: 프레임마다 한 줄 — `f | p | pos | v | w | sleep | Σ벽λ | 지면λ | 쌍 수 | (이웃 id · 상대 거리/R · λn · λt · 이웃 w)…`.
+- 출력은 로그 + `Saved/SpikeRuns/trace_*.csv`.
+
+## 6. 가설과 예측
+
+각 가설: **예측** (계측에서 보여야 할 것) → **기각 조건**.
+
+| # | 가설 | 예측 | 기각 조건 |
+|---|---|---|---|
+| H1 | **끼임**: 깬 입자가 잠든 이웃(w = 0) · 고정 바닥 · 벽에 둘러싸여 움직일 수 있는 게 자기뿐이라 겹침이 쌓였다가 튄다 (stage43 근거) | 사출 전 수 프레임 동안 이웃 전부 w = 0, 고정 입자와 겹침이 **단조 증가** | 사출 직전 깬 이웃이 있거나 겹침이 늘지 않음 |
+| H2 | **벽 λ 소거**: `WarmPredictCS` 의 잠든 쪽 분기가 `WallLambdaRW = 0` 으로 지운다 → 깨어난 벽 입자는 벽 접촉이 차갑게 시작 | 사출 입자가 사출 수 프레임 전에 **깼다**, 깬 프레임의 벽 λ = 0, 그 뒤 벽 λ 가 급증 | 사출 입자가 계속 깨어 있었다 (잠든 적 없음) |
+| H3 | **벽 마찰 드리프트**: 벽 마찰은 `PrevPos` 기준 접선 변위로 계산 — 잠든 동안 `PrevPos = P` 가 매 프레임 갱신되는 것과 깬 뒤 상태가 어긋난다 | 사출 직전 벽 접선 λ 가 마찰 한계(μ_wall·λn)에 붙어 있고 속도가 벽을 따라(수직) 커진다 (stage44 의 "벽을 따라 위아래로" 와 일치) | 벽 접선 λ 가 작다 |
+| H4 | **쌍 깜빡임**: pmargin 으로 쌍이 생겼다 사라지며 워밍 λ 가 끊긴다 → 다시 생긴 쌍은 λ 0 | 사출 입자 · 이웃의 쌍이 직전 프레임들에 생성/소멸을 반복, 새 쌍 λ = 0 | 쌍 목록이 안정. ⚠ stage47 젖음은 전체 여유 모드에서도 사출 → 이미 약하다 |
+| H5 | **선제 접촉(떨어진 쌍)**: 여유 안의 떨어진 쌍에 Kv = 1 이 다가오는 속도를 지우는 임펄스를 준다. 상대가 무한 질량이면 전부 깬 쪽이 받는다 | 사출 직전 겹침 없는(gap > 0) 쌍에 큰 λn | 큰 λn 이 전부 겹친 쌍 |
+| H6 | **큰 보정 뒤 속도 재계산**: 지면 · 벽 밀어내기가 위치와 속도를 같이 바꿀 때 큰 위치 보정이 큰 속도가 된다 (XPBD 서베이 arXiv 2311.09327 의 에너지 증가 추정과 같은 꼴) | 사출 프레임의 속도 ≈ (그 프레임 위치 보정)/Δt, 보정은 지면/벽 식에서 온다 | 속도 급증이 입자 접촉에서 온다 |
+| H7 | **vmax 가 겹침을 가둔다**: 침투 보정이 30 cm/s 로 잘려 하중 아래 겹침이 천천히 쌓이고, 무언가 풀릴 때 한꺼번에 튄다 | 사출 전 겹침이 0.6R 넘게 천천히 자람, `-vmax=0` 에선 쌓이지 않음 | vmax 를 꺼도 같다 |
+| H8 | **상태 비트 오류**: `SLEEP_WOKE` · `SLEEP_JUST` · 카운터 처리 실수로 w 가 엉뚱하게 바뀐다 (예: 깬 입자가 같은 프레임에 다시 w = 0) | 사출 입자의 w · Sleep 값이 규칙에 맞지 않는 전이 | 모든 전이가 규칙대로 |
+
+- H1 과 H6 · H7 은 같이 참일 수 있다 (끼어서 쌓이고, 풀릴 때 속도로 튄다). 계측으로 **어느 접촉에서 속도가 생기는지** 를 먼저 본다.
+
+## 7. 단계 3 — 수정 (계측이 가리킨 가설에만)
+
+가설별 수정 후보 (계측 전에 고르지 않는다):
+
+| 가설 | 수정 후보 | 근거 |
+|---|---|---|
+| H1 | 잠든 · 고정 이웃만 있는 깬 입자는 같이 깨운다 / 잠든 쪽을 무한 질량 대신 유한 질량(예: w = 0.1)으로 | C9 (덩어리는 질량 있는 강체) · Box2D (잠든 몸은 깬 몸과 안 닿는다) |
+| H2 | 잠든 동안 벽 λ 를 지우지 않고 지면 λ 처럼 워밍 유지 | 지면 λ 는 이미 유지한다 (`WarmPredictCS` else 분기) |
+| H3 | 잠든 동안 `PrevPos` 갱신 정책 / 깬 프레임 벽 마찰 리셋 | — |
+| H4 | 잠든 입자가 낀 쌍은 지난 목록에서 그대로 복사 (Box2D 의 접촉 보존) | Box2D `solver_set.c` |
+| H5 | 떨어진 쌍은 상대가 무한 질량이면 선제 임펄스 끔 | — |
+| H6 | Macklin 2014 pre-stabilization (초기 겹침은 속도 없이 위치만) 을 지면 · 벽에 | C1 · C6 §4.3 |
+| H7 | vmax 를 하중 쪽 침투엔 풀고 사출 쪽만 자른다 / Kc 를 겹침 깊이에 따라 | C6 식 10 |
+| H8 | 버그 수정 | — |
+
+각 수정: 재현 장면 세 시드 × {끔 · 켬 · 수정} → §3 P1~P3 → 통과하면 5만 기둥 → P4 관문.
+
+## 8. 파일 · 명령
+
+**코드**
+- `BeachSimulator/Shaders/Private/SandFrame.usf` — `StatsCS`(잠들기) · `WakeCS` · `WakeParticle` · `BreakBondsCS` · `WarmPredictCS`(잠든 쪽 else 분기 — 벽 λ 소거) · `ParticleMargin` · `PairRange2` · `PairCountCS` · `PairFillCS` · `PairScatterCS`(워밍).
+- `BeachSimulator/Shaders/Private/SandSolver.usf` — `ContactImpulse`(접촉 식, vmax) · `SolveContactGS` · `ColorBatchCS`(깬 블록 판정) · `SolveBlocksParCS` · `PushWall` · `ApplyBondsCS`(지면 · 벽).
+- `BeachSimulator/Source/SandGpu/Private/SandGpuSolver.cpp` — `FSandGpuSim::Step`(패스 순서) · `Upload`(Sleep 초기화) · `Download`.
+- `BeachSimulator/Source/BeachSimulator/Spike/SandSpike.cpp` — `StepGpuResident` (매개변수 · 전체 여유 계산 · #53 모드 전환).
+- `BeachSimulator/Source/BeachSimulator/Spike/SpikeSweepCommandlet.cpp` — `RunPerf` (`-window` · `-diag` · `LogBoilDiag` 의 빠른 5개 추적).
+
+**빌드**
+```bash
+"D:\UE_5.8\Engine\Build\BatchFiles\Build.bat" BeachSimulatorEditor Win64 Development "-Project=C:\Users\onebe\Bay\BeachSimulator\BeachSimulator.uproject" -WaitMutex
+```
+셰이더(.usf)만 바꿨으면 빌드 불필요 — 실행 시 컴파일된다.
+
+**실행** — 줄마다 커맨드릿 인자 한 줄을 담은 작업 파일을 큐 실행기로 (동시 1개 · BelowNormal). 큐 실행기 `runq.ps1` 은 이전 대화의 스크래치 폴더에 있으므로 새 대화에선 다시 만들거나 직접 실행:
+```bash
+"D:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" "C:\Users\onebe\Bay\BeachSimulator\BeachSimulator.uproject" -run=SpikeSweep <인자> -log=<이름>.log -unattended -nopause -nosplash
+```
+로그: `BeachSimulator/Saved/Logs/<이름>.log`. 문제 조합의 기준 인자:
+```
+-perf -gpu2 -color8par -block=15 -AllowCommandletRendering -mu=0.17 -kv=1 -kc=0.2 -vmax=30 -iterations=60 -diag -frames=900 -window=100 -particles=50000 -pmargin -sleep -wakecold
+```
+(젖음: `-w=0.15 -strength=3 -form=1.2` 추가. 기타 플래그: `-sleepv= -sleepframes= -wakev= -wakevtouch= -pmarginmin=`)
+
+## 9. 산출물
+
+- m0-log `#54~`: 재현 장면 · 계측 결과 · 가설별 판정 · 수정 · P1~P4 결과.
+- 해결되면: m0b-plan-sleep 에 결론 반영, 재우기 기본값 결정.
+- 해결 안 되면 (타임박스 3 일): 재우기는 끈 채로 두고 (`-pmargin` 단독 = 다짐 15 ms · 정지 14~15 ms), 원인 후보와 남은 가설을 기록해 닫는다.
