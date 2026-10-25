@@ -638,6 +638,7 @@ namespace
 			S.FixedLayers = 1;
 			S.BaseJitter = 0.3f;
 			S.bOpenDownhill = false;
+			FParse::Value(*Params, TEXT("seed="), P.Seed);   // 벽 사출 조사 §4
 
 			// #44 정지 상태 — -window=N 이면 N 프레임마다 그 구간 평균을 찍는다 (다짐 → 정지 경과). -w=W 면 BondFrame 에 물을 주고 결합
 			int32 Window = 0; FParse::Value(*Params, TEXT("window="), Window);
