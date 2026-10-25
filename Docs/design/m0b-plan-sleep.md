@@ -1,5 +1,9 @@
 # M0-b C안 — 멈춘 모래 재우기 계획
 
+> **진행 (2026-10-26)** — v1 구현 (#49). 깬 첫 프레임 워밍 끄기 `-wakecold` 로 마른 재각성 해결 (#50: 97% 잠듦 · 9.6 ms). 입자별 여유와 섞으면 재각성 · 사출 → 잠든 비율 70%/50% 로 전환하는 조합 나누기 (#53). **남은 사출의 원인은 조사 중**: 잠든(무한 질량) 이웃 사이에 낀 깬 입자의 접촉 λ 가 프레임마다 쌓였다가 이웃이 깰 때 풀리는 "λ 래칫" (#56, H9). [m0b-investigation-wall-ejection.md](m0b-investigation-wall-ejection.md). 관문 G1~G4 는 사출이 풀린 뒤.
+> 추가된 스위치: `-wakecold` · `-wakezero` · `-sleepcoldpairs`(기각) · `-wakevtouch`(기각) · 잠들기에 "이웃도 조용해야" (#51, 항상 켬).
+
+
 > 2026-10-25. 근거: [papers.md C9](../research/papers.md) (Servin & Wang 2015 적응 모델 축소) · C1 §4.5 (Flex 입자 슬리핑) · Box2D v3 `sleepThreshold`.
 > 바탕: #48 새 기본값 `-gpu2 -color8par -block=15 -kv=1 -kc=0.2 -vmax=30 -iterations=60`.
 > 왜: 5만 정지 13.6 ms(마른) · 16.2 ms(젖음) — 통과선 언저리. 반복(색 8 패스 × 60)이 비용의 대부분인데, 정지 모래도 똑같이 그 비용을 낸다.
