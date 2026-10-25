@@ -145,6 +145,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandFrameParams, )
 	SHADER_PARAMETER(float, SleepVel)
 	SHADER_PARAMETER(uint32, SleepFrames)
 	SHADER_PARAMETER(float, WakeVel)
+	SHADER_PARAMETER(float, WakeTouchVel)
 	SHADER_PARAMETER(uint32, WakePass)
 	SHADER_PARAMETER(uint32, bWakeCold)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, SleepRW)
@@ -820,6 +821,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			F.SleepVel    = P.SleepVel;
 			F.SleepFrames = (uint32)FMath::Max(1, P.SleepFrames);
 			F.WakeVel     = P.WakeVel;
+			F.WakeTouchVel = P.WakeTouchVel;
 			F.WakePass    = 0;
 			F.SleepRW     = GraphBuilder.CreateUAV(SleepBuf);
 

@@ -54,6 +54,7 @@ uint  bSleep;
 float SleepVel;                  // 이 속도 미만이 SleepFrames 프레임 이어지면 잠든다 (cm/s)
 uint  SleepFrames;
 float WakeVel;                   // 잠든 입자로 다가오는 법선 상대 속도가 이보다 크면 깬다 (cm/s)
+float WakeTouchVel;              // #52 닿아 있는 깬 이웃이 이보다 빠르면 깬다 (cm/s, 0 = 끔). Box2D 섬: 잠든 몸은 깬 몸과 닿지 않는다
 uint  WakePass;                  // WakeCS: 0 = 충격 · 1 = 방금 깬 입자의 이웃 전파
 #define SLEEP_WOKE 0x40000000u   // 이번 프레임에 충격으로 깸 (전파용 표시, StatsCS 가 지운다)
 #define SLEEP_JUST 0x20000000u   // 이번 프레임에 깸 (어떤 경로든). bWakeCold 면 워밍 임펄스를 받지 않는다. StatsCS 가 지운다
@@ -556,7 +557,8 @@ void WakeCS(uint3 Tid : SV_DispatchThreadID)
 		const float Dist = length(Diff);
 		if (Dist < 1.e-4f) { return; }
 		const float Approach = dot(VelRW[Aw].xyz, Diff / Dist);   // 잠든 쪽 속도 = 0
-		if (Approach > WakeVel) { WakeParticle(Sl, SLEEP_WOKE); }
+		const bool bTouchWake = WakeTouchVel > 0.f && Dist < 2.f * Radius * 1.02f && length(VelRW[Aw].xyz) > WakeTouchVel;
+		if (Approach > WakeVel || bTouchWake) { WakeParticle(Sl, SLEEP_WOKE); }
 	}
 	else if ((SleepRW[Aw] & SLEEP_WOKE) != 0u)
 	{

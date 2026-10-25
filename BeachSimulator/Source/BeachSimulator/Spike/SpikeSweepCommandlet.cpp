@@ -298,6 +298,7 @@ namespace
 			FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 			FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
 			FParse::Value(*Params, TEXT("wakev="), P.WakeVel);
+			FParse::Value(*Params, TEXT("wakevtouch="), P.WakeTouchVel);   // #52
 			P.Seed       = (uint32)Sd;
 			P.SorOmega   = Sor;
 			P.MomentumA  = Ma;
@@ -620,6 +621,7 @@ namespace
 			FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 			FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
 			FParse::Value(*Params, TEXT("wakev="), P.WakeVel);
+			FParse::Value(*Params, TEXT("wakevtouch="), P.WakeTouchVel);   // #52
 			FParse::Value(*Params, TEXT("warm="), P.WarmStart);
 			FParse::Value(*Params, TEXT("kv="), P.Kv);
 			FParse::Value(*Params, TEXT("block="), P.BlockSize);
@@ -872,6 +874,7 @@ namespace
 		FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 		FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
 		FParse::Value(*Params, TEXT("wakev="), P.WakeVel);
+		FParse::Value(*Params, TEXT("wakevtouch="), P.WakeTouchVel);   // #52
 		P.WGlobal = W;
 		P.WarmStart = 1.f;
 		P.WarmGapTol = 0.02f;
@@ -991,6 +994,7 @@ namespace
 		FParse::Value(*Params, TEXT("sleepv="), P.SleepVel);
 		FParse::Value(*Params, TEXT("sleepframes="), P.SleepFrames);
 		FParse::Value(*Params, TEXT("wakev="), P.WakeVel);
+		FParse::Value(*Params, TEXT("wakevtouch="), P.WakeTouchVel);   // #52
 		FParse::Value(*Params, TEXT("wallmu="), P.WallFriction);
 		P.bGatherApply = FParse::Param(*Params, TEXT("gather"));   // m0b-spike §3-1
 		P.bMassSplit = FParse::Param(*Params, TEXT("masssplit"));  // A′

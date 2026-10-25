@@ -1279,7 +1279,7 @@ void FSandSpike::StepGpuResident(float Dt)
 	P.bWarmTangent = Params.bWarmTangent;
 	P.Kv = Params.Kv; P.Kc = Params.Kc; P.SorOmega = Params.SorOmega; P.Friction = Params.Friction;
 	P.MaxDepenVel = Params.MaxDepenVel;
-	P.bSleep = Params.bSleep; P.SleepVel = Params.SleepVel; P.SleepFrames = Params.SleepFrames; P.WakeVel = Params.WakeVel;
+	P.bSleep = Params.bSleep; P.SleepVel = Params.SleepVel; P.SleepFrames = Params.SleepFrames; P.WakeVel = Params.WakeVel; P.WakeTouchVel = Params.WakeTouchVel;
 	P.bParticleMargin = Params.bParticleMargin;
 	P.MarginMinR = Params.MarginMinR;
 	P.bWakeCold = Params.bWakeCold;

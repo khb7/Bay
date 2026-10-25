@@ -88,6 +88,7 @@ struct FSandGpuFrameParams
 	float SleepVel = 0.25f;           // cm/s (C9 2.5 mm/s)
 	int32 SleepFrames = 30;
 	float WakeVel = 15.f;             // cm/s (C9 0.15 m/s)
+	float WakeTouchVel = 0.f;          // #52 닿은 깬 이웃 속도 문턱 (0 = 끔)
 	float WarmStart = 1.f, WarmGapTol = 0.f;
 	bool  bWarmTangent = true;
 	float Kv = 0.1f, Kc = 1.f, SorOmega = 1.f, Friction = 0.17f;

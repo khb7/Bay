@@ -50,6 +50,7 @@ struct FSandParams
 	float  SleepVel = 0.25f;
 	int32  SleepFrames = 30;
 	float  WakeVel = 15.f;
+	float  WakeTouchVel = 0.f;   // #52 닿은 깬 이웃이 이보다 빠르면 깬다 (Box2D 섬 규칙의 완화형)
 	float  Kc    = 1.0f;    // 잔차의 위치 성분
 	float  SorOmega = 0.5f; // (36) 의 ω
 	/**
