@@ -37,8 +37,9 @@ struct FSandGpuMeshResult
 	int32 NumInteriorKs = 0, NumIsoSamples = 0, MaxNeighborCount = 0;
 	// G1-3
 	int32 NumBandPoints = 0, NumActiveBlocks = 0, NumBlocks = 0, NumKPairs = 0, KListOverflowBlocks = 0, KPairOverflow = 0;
+	int32 NumSlots = 0, SlotOverflow = 0;   // 활성 영역 슬롯 용량 · 넘친 영역 (#23)
 	double FieldSum = 0.0; int32 FieldPositive = 0;
-	TArray<uint32> Band;               // 점별 (-meshdiff 대조용)
+	TArray<uint32> Band;               // 슬롯 점별 (-meshdiff 대조용, #23 부터 격자 전체가 아니라 슬롯 × 512)
 	TArray<float>  Field;              // φ − Iso
 	// G1-4
 	TArray<FVector3f> Vertices, Normals;

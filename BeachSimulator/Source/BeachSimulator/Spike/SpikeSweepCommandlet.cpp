@@ -820,9 +820,9 @@ namespace
 					int32 Thin = 0;
 					for (int32 i = 0; i < Sim.GetPositions().Num(); ++i) { if (Sim.GetPositions()[i].Z > Box.Min.Z + 15.f && M.NeighborCount[i] <= 6) { ++Thin; } }
 					UE_LOG(LogSpikeSweep, Display, TEXT("   f %3d: 가는 입자(높이 15cm↑ · 이웃 ≤ 6) %d"), f, Thin);
-					UE_LOG(LogSpikeSweep, Display, TEXT("   f %3d: 정점 CPU %d / GPU %d · 삼각형 %d / %d %s · 띠 점 %d / %d · GPU ms 시뮬 %.2f + 메시 %.2f (이웃 %.2f 커널 %.2f 띠·장 %.2f 메시 %.2f) · 최고점 %.1f"),
+					UE_LOG(LogSpikeSweep, Display, TEXT("   f %3d: 정점 CPU %d / GPU %d · 삼각형 %d / %d %s · 띠 점 %d / %d · GPU ms 시뮬 %.2f + 메시 %.2f (이웃 %.2f 커널 %.2f 띠·장 %.2f 메시 %.2f) · 최고점 %.1f · 활성 영역 %d / 슬롯 %d / 전체 %d · 넘침 %d"),
 						f, M.Vertices.Num(), G.NumVertsTotal, M.Triangles.Num() / 3, G.NumIndicesTotal / 3, bSame ? TEXT("같음") : TEXT("⚠ 다름"), M.NumBandPoints, G.NumBandPoints,
-						SimMs, MeshMs, G.StageMs[0], G.StageMs[1], G.StageMs[2], G.StageMs[3], VMax);
+						SimMs, MeshMs, G.StageMs[0], G.StageMs[1], G.StageMs[2], G.StageMs[3], VMax, G.NumActiveBlocks, G.NumSlots, G.NumBlocks, G.SlotOverflow);
 				}
 			}
 			UE_LOG(LogSpikeSweep, Display, TEXT("G3 요약 — 같은 프레임 일치 %d / %d · GPU ms 평균 시뮬 %.2f + 메시 %.2f = %.2f · 최대 시뮬 %.2f · 메시 %.2f"),
@@ -981,8 +981,8 @@ namespace
 						*Scene, CSum, GSum, CSurf, GSurf, CDev, GDev, CDiag, GDiag, G.WallMs);
 					UE_LOG(LogSpikeSweep, Display, TEXT("   GPU G1-2 %s: k_s CPU %.6f / GPU %.6f · 내부 φ %.5f / %.5f · Iso %.5f / %.5f · (GPU 내부 %d · 표본 %d · 최대 이웃 %d)"),
 						*Scene, M.Ks, G.Ks, M.InteriorPhi, G.InteriorPhi, M.Iso, G.Iso, G.NumInteriorKs, G.NumIsoSamples, G.MaxNeighborCount);
-					UE_LOG(LogSpikeSweep, Display, TEXT("   GPU G1-3 %s: 띠 점 CPU %d / GPU %d · φ 합 %.2f / %.2f · 양수 점 %d / %d · (영역 %d 중 활성 %d · 영역·커널 쌍 %d · 목록 넘침 영역 %d · 쌍 넘침 %d)"),
-						*Scene, M.NumBandPoints, G.NumBandPoints, M.FieldSum, G.FieldSum, M.FieldPositive, G.FieldPositive, G.NumBlocks, G.NumActiveBlocks, G.NumKPairs, G.KListOverflowBlocks, G.KPairOverflow);
+					UE_LOG(LogSpikeSweep, Display, TEXT("   GPU G1-3 %s: 띠 점 CPU %d / GPU %d · φ 합 %.2f / %.2f · 양수 점 %d / %d · (영역 %d 중 활성 %d · 영역·커널 쌍 %d · 목록 넘침 영역 %d · 쌍 넘침 %d · 슬롯 %d · 넘침 %d)"),
+						*Scene, M.NumBandPoints, G.NumBandPoints, M.FieldSum, G.FieldSum, M.FieldPositive, G.FieldPositive, G.NumBlocks, G.NumActiveBlocks, G.NumKPairs, G.KListOverflowBlocks, G.KPairOverflow, G.NumSlots, G.SlotOverflow);
 					{
 						FSandSurfaceMesh GM;
 						GM.Vertices = G.Vertices; GM.Normals = G.Normals; GM.Triangles = G.Indices;

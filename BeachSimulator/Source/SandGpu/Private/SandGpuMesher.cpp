@@ -81,6 +81,10 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandMeshParams, )
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float2>, SamplePhiRO)
 
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, DevRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BlockSlotRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BlockSlotRO)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BlockSlotStart)
+	SHADER_PARAMETER(uint32, MaxSlots)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BandRW)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BandRO)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BlockActiveRW)
@@ -155,6 +159,8 @@ SAND_MESH_SHADER(FSandMeshKernelCS,       "KernelCS")
 SAND_MESH_SHADER(FSandMeshIsoSampleCS,    "IsoSampleCS")
 SAND_MESH_SHADER(FSandMeshFinalizeIsoCS,  "FinalizeIsoCS")
 SAND_MESH_SHADER(FSandMeshMarkBandCS,     "MarkBandCS")
+SAND_MESH_SHADER(FSandMeshMarkBlocksCS,   "MarkBlocksCS")
+SAND_MESH_SHADER(FSandMeshSlotAssignCS,   "SlotAssignCS")
 SAND_MESH_SHADER(FSandMeshKCountCS,       "KCountCS")
 SAND_MESH_SHADER(FSandMeshKFillCS,        "KFillCS")
 SAND_MESH_SHADER(FSandMeshFieldCS,        "FieldCS")
@@ -385,13 +391,22 @@ namespace
 			TB.MaxPairsK = MaxPairsK;
 			TB.MaxVerts = MaxVerts;
 			TB.MaxIndices = MaxIndices;
-			FRDGBufferRef BandB      = MeshBuffer(GraphBuilder, TEXT("SandMesh.Band"), sizeof(uint32), NumPts);
+			// 활성 영역 슬롯 (#23) — 띠 · 장 · 셀 정점은 슬롯 × 512 점만. 활성 영역은 입자 수의 13~27% 였다 (#12) → 여유를 두고 3/4
+			const int32 MaxSlots = FMath::Min(NumBlocks, FMath::Max(1024, N * 3 / 4));
+			const int32 SlotPts = MaxSlots * 512;
+			TB.MaxSlots = MaxSlots;
+			FRDGBufferRef BlockSlot  = MeshBuffer(GraphBuilder, TEXT("SandMesh.BlockSlot"), sizeof(uint32), NumBlocks);
+			FRDGBufferRef BlockSlotSt = MeshBuffer(GraphBuilder, TEXT("SandMesh.BlockSlotStart"), sizeof(uint32), NumBlocks + 1);
+			TB.BlockSlotRW = GraphBuilder.CreateUAV(BlockSlot);
+			TB.BlockSlotRO = GraphBuilder.CreateSRV(BlockSlot);
+			TB.BlockSlotStart = GraphBuilder.CreateSRV(BlockSlotSt);
+			FRDGBufferRef BandB      = MeshBuffer(GraphBuilder, TEXT("SandMesh.Band"), sizeof(uint32), SlotPts);
 			FRDGBufferRef BlockAct   = MeshBuffer(GraphBuilder, TEXT("SandMesh.BlockActive"), sizeof(uint32), NumBlocks);
 			FRDGBufferRef BlockKCnt  = MeshBuffer(GraphBuilder, TEXT("SandMesh.BlockKCount"), sizeof(uint32), NumBlocks);
 			FRDGBufferRef BlockKSt   = MeshBuffer(GraphBuilder, TEXT("SandMesh.BlockKStart"), sizeof(uint32), NumBlocks + 1);
 			FRDGBufferRef BlockKCur  = MeshBuffer(GraphBuilder, TEXT("SandMesh.BlockKCursor"), sizeof(uint32), NumBlocks);
 			FRDGBufferRef BlockKIt   = MeshBuffer(GraphBuilder, TEXT("SandMesh.BlockKItems"), sizeof(uint32), MaxPairsK);
-			FRDGBufferRef FieldB     = MeshBuffer(GraphBuilder, TEXT("SandMesh.Field"), sizeof(float), NumPts);
+			FRDGBufferRef FieldB     = MeshBuffer(GraphBuilder, TEXT("SandMesh.Field"), sizeof(float), SlotPts);
 			TB.DevRO = GraphBuilder.CreateSRV(Dev);
 			TB.BandRW = GraphBuilder.CreateUAV(BandB);
 			TB.BandRO = GraphBuilder.CreateSRV(BandB);
@@ -409,6 +424,9 @@ namespace
 			AddClearUAVPass(GraphBuilder, TB.BlockKCountRW, 0u);
 			AddClearUAVPass(GraphBuilder, TB.BlockKCursorRW, 0u);
 			AddClearUAVPass(GraphBuilder, TB.FieldRW, 0xBF800000u);   // −1.0f — 띠 밖 (CPU 와 같다)
+			AddMeshPass<FSandMeshMarkBlocksCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshMarkBlocks"), ShaderMap, TB, N, 64);
+			AddMeshScan(GraphBuilder, ShaderMap, TB, BlockAct, BlockSlotSt, NumBlocks);
+			AddMeshPass<FSandMeshSlotAssignCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshSlotAssign"), ShaderMap, TB, NumBlocks, 64);
 			AddMeshPass<FSandMeshMarkBandCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshMarkBand"), ShaderMap, TB, N, 64);
 			AddMeshPass<FSandMeshKCountCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshKCount"), ShaderMap, TB, N, 64);
 			AddMeshScan(GraphBuilder, ShaderMap, TB, BlockKCnt, BlockKSt, NumBlocks);
@@ -421,7 +439,7 @@ namespace
 			FRDGBufferRef BlockVSt  = MeshBuffer(GraphBuilder, TEXT("SandMesh.BlockVStart"), sizeof(uint32), NumBlocks + 1);
 			FRDGBufferRef BlockTCnt = MeshBuffer(GraphBuilder, TEXT("SandMesh.BlockTCount"), sizeof(uint32), NumBlocks);
 			FRDGBufferRef BlockTSt  = MeshBuffer(GraphBuilder, TEXT("SandMesh.BlockTStart"), sizeof(uint32), NumBlocks + 1);
-			FRDGBufferRef CellVert  = MeshBuffer(GraphBuilder, TEXT("SandMesh.CellVert"), sizeof(uint32), NumPts);
+			FRDGBufferRef CellVert  = MeshBuffer(GraphBuilder, TEXT("SandMesh.CellVert"), sizeof(uint32), SlotPts);
 			FRDGBufferRef VertexB   = MeshBuffer(GraphBuilder, TEXT("SandMesh.Vertex"), sizeof(FVector4f), MaxVerts);
 			FRDGBufferRef NormalB   = MeshBuffer(GraphBuilder, TEXT("SandMesh.Normal"), sizeof(FVector4f), MaxVerts);
 			FRDGBufferRef IndexB    = MeshBuffer(GraphBuilder, TEXT("SandMesh.Index"), sizeof(uint32), MaxIndices);
@@ -531,8 +549,9 @@ namespace
 				return;
 			}
 
-			AddEnqueueCopyPass(GraphBuilder, &RB->Band, BandB, NumPts * sizeof(uint32));
-			AddEnqueueCopyPass(GraphBuilder, &RB->Field, FieldB, NumPts * sizeof(float));
+			AddEnqueueCopyPass(GraphBuilder, &RB->Band, BandB, SlotPts * sizeof(uint32));
+			AddEnqueueCopyPass(GraphBuilder, &RB->Field, FieldB, SlotPts * sizeof(float));
+			Out.NumSlots = MaxSlots;
 			AddEnqueueCopyPass(GraphBuilder, &RB->BlockActive, BlockAct, NumBlocks * sizeof(uint32));
 			AddEnqueueCopyPass(GraphBuilder, &RB->BlockKStart, BlockKSt, (NumBlocks + 1) * sizeof(uint32));
 			AddEnqueueCopyPass(GraphBuilder, &RB->Vertex, PosFinal, MaxVerts * sizeof(FVector4f));
@@ -562,10 +581,9 @@ namespace
 		Out.Ks = Sc[0]; Out.InteriorPhi = Sc[1]; Out.Iso = Sc[2]; Out.NumInteriorKs = (int32)Sc[3]; Out.NumIsoSamples = (int32)Sc[4];
 		Out.MaxNeighborCount = (int32)Ct[0];
 		Out.KListOverflowBlocks = (int32)Ct[1]; Out.KPairOverflow = (int32)Ct[2];
-		Out.NumVertsTotal = (int32)Ct[3]; Out.NumIndicesTotal = (int32)Ct[4];
+		Out.NumVertsTotal = (int32)Ct[3]; Out.NumIndicesTotal = (int32)Ct[4]; Out.SlotOverflow = (int32)Ct[5];
 		{
-			const FIntVector GD = P.GridDims;
-			const int32 NumPts = GD.X * GD.Y * GD.Z;
+			const int32 NumPts = Out.NumSlots * 512;   // 슬롯 점 (#23)
 			const int32 MaxVerts = FMath::Max(1 << 16, N * 16);
 			const int32 MaxIndices = MaxVerts * 6;
 			Fetch(RB->Band, Out.Band, NumPts);

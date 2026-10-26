@@ -495,7 +495,13 @@ uint   MaxVerts;
 uint   MaxIndices;
 
 StructuredBuffer<float>    DevRO;
-RWStructuredBuffer<uint>   BandRW;           // 점별 0/1
+// 띠 · 장 · 셀 정점은 활성 영역 슬롯에만 (#23 — 격자 전체 조밀 배열은 고정 영역에서 수십 MB)
+//   점 P 의 자리 = BlockSlot[영역(P)] × 512 + 영역 안 색인. 슬롯이 없으면(띠 없는 영역) 띠 아님 · 장 −1
+RWStructuredBuffer<uint>   BlockSlotRW;      // 영역별 슬롯 (없으면 INVALID_V)
+StructuredBuffer<uint>     BlockSlotRO;
+StructuredBuffer<uint>     BlockSlotStart;   // BlockActive 접두합
+uint  MaxSlots;
+RWStructuredBuffer<uint>   BandRW;           // 슬롯 점별 0/1
 StructuredBuffer<uint>     BandRO;
 RWStructuredBuffer<uint>   BlockActiveRW;    // 영역별 0/1
 StructuredBuffer<uint>     BlockActiveRO;
@@ -534,20 +540,27 @@ RWStructuredBuffer<float4> SmoothDst;
 RWBuffer<float>            RPosRW;           // 정점당 3 (float3 스트림)
 RWBuffer<uint>             RTanRW;           // 정점당 2: TangentX · TangentZ (FPackedNormal, 부호 있는 8 비트 × 4)
 RWBuffer<uint>             RIdxRW;           // 32 비트 색인 버퍼
-// CountersRW: [0] 최대 이웃 수 [1] 커널 목록 넘침 영역 [2] 쌍 용량 넘침 [3] 정점 총수 [4] 색인 총수
+// CountersRW: [0] 최대 이웃 수 [1] 커널 목록 넘침 영역 [2] 쌍 용량 넘침 [3] 정점 총수 [4] 색인 총수 [5] 슬롯 넘침 영역
 
 uint PtIndex(uint3 P) { return (P.z * GD.y + P.y) * GD.x + P.x; }
 uint BlockIndex(uint3 B) { return (B.z * BD.y + B.y) * BD.x + B.x; }
 float3 PtPos(uint3 P) { return GOrigin + float3(P) * Cell; }
 
+uint SlotPt(uint3 P)
+{
+	const uint Sl = BlockSlotRO[BlockIndex(P / MB)];
+	if (Sl == INVALID_V) { return INVALID_V; }
+	const uint3 L = P % MB;
+	return Sl * MB3 + (L.z * MB + L.y) * MB + L.x;
+}
+bool BandAt(uint3 P) { const uint I = SlotPt(P); return I != INVALID_V && BandRO[I] != 0u; }
+float FieldAt(uint3 P) { const uint I = SlotPt(P); return I == INVALID_V ? -1.f : FieldRO[I]; }
+
 bool IsSurfP(uint i) { return NCountRO[i] < BandNEps || (SurfDev > 0.f && DevRO[i] > SurfDev); }
 
-// 표면 입자 → 띠 점 (CPU ④ 와 같은 줄 구간 식) · 영역 활성
-[numthreads(64, 1, 1)]
-void MarkBandCS(uint3 Tid : SV_DispatchThreadID)
+// 표면 입자 → 띠 점 (CPU ④ 와 같은 줄 구간 식). 두 번 돈다: ① 영역 활성만 → 슬롯 배정 → ② 슬롯에 띠 점
+void MarkSphere(uint i, bool bBlocksOnly)
 {
-	const uint i = Tid.x;
-	if (i >= NumParticles || !IsSurfP(i)) { return; }
 	const float3 X = PosRO[i].xyz;
 	const float3 L = (X - GOrigin) / Cell;
 	const int3 Cc = int3(floor(L + 0.5f));   // CPU RoundToInt 과 같다
@@ -563,10 +576,41 @@ void MarkBandCS(uint3 Tid : SV_DispatchThreadID)
 		for (int x = x0; x <= x1; ++x)
 		{
 			const uint3 P = uint3(x, y, z);
-			BandRW[PtIndex(P)] = 1u;                   // 같은 값 쓰기라 경쟁 무해
-			BlockActiveRW[BlockIndex(P / MB)] = 1u;
+			if (bBlocksOnly) { BlockActiveRW[BlockIndex(P / MB)] = 1u; }   // 같은 값 쓰기라 경쟁 무해
+			else { const uint I = SlotPt(P); if (I != INVALID_V) { BandRW[I] = 1u; } }
 		}
 	}
+}
+
+[numthreads(64, 1, 1)]
+void MarkBlocksCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x;
+	if (i >= NumParticles || !IsSurfP(i)) { return; }
+	MarkSphere(i, true);
+}
+
+[numthreads(64, 1, 1)]
+void MarkBandCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x;
+	if (i >= NumParticles || !IsSurfP(i)) { return; }
+	MarkSphere(i, false);
+}
+
+// 활성 영역 → 슬롯 (접두합 순 = 영역 번호 순, 결정적). 넘치면 그 영역은 버린다 (계수 [5])
+[numthreads(64, 1, 1)]
+void SlotAssignCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint b = Tid.x;
+	if (b >= BD.x * BD.y * BD.z) { return; }
+	uint Sl = INVALID_V;
+	if (BlockActiveRO[b])
+	{
+		if (BlockSlotStart[b] < MaxSlots) { Sl = BlockSlotStart[b]; }
+		else { InterlockedAdd(CountersRW[5], 1u); }
+	}
+	BlockSlotRW[b] = Sl;
 }
 
 // 커널 지지 AABB 의 점 범위 (CPU PtRange 와 같다)
@@ -651,8 +695,8 @@ void FieldCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI : SV
 
 	const uint3 P = Gid * MB + GTid;
 	if (any(P >= GD)) { return; }
-	const uint I = PtIndex(P);
-	if (!BandRO[I]) { return; }
+	const uint I = SlotPt(P);
+	if (I == INVALID_V || !BandRO[I]) { return; }
 	const float3 X = PtPos(P);
 	float Phi = 0.f;
 	for (uint k = 0; k < Cnt; ++k)
@@ -682,9 +726,9 @@ bool CellVertex(uint3 P, out float3 OutPos)
 	float V[8]; uint Mask = 0;
 	for (uint c = 0; c < 8; ++c)
 	{
-		const uint I = PtIndex(P + CornerOf[c]);
-		if (!BandRO[I]) { return false; }
-		V[c] = FieldRO[I];
+		const uint3 Pc = P + CornerOf[c];
+		if (!BandAt(Pc)) { return false; }
+		V[c] = FieldAt(Pc);
 		Mask |= (V[c] > 0.f) ? (1u << c) : 0u;
 	}
 	if (Mask == 0u || Mask == 0xFFu) { return false; }
@@ -710,7 +754,7 @@ uint PackSNorm8(float4 V)
 float Fat(int3 P)
 {
 	P = clamp(P, int3(0, 0, 0), int3(GD) - 1);
-	return FieldRO[PtIndex(uint3(P))];
+	return FieldAt(uint3(P));
 }
 
 groupshared uint GsScan[MB3];
@@ -740,7 +784,7 @@ void VertCountCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI 
 	if (!BlockActiveRO[b]) { if (GI == 0) { BlockVCountRW[b] = 0u; } return; }
 	const uint3 P = Gid * MB + GTid;
 	float3 Vp;
-	uint Has = (all(P < GD) && BandRO[PtIndex(P)] && CellVertex(P, Vp)) ? 1u : 0u;
+	uint Has = (all(P < GD) && BandAt(P) && CellVertex(P, Vp)) ? 1u : 0u;
 	const uint Total = GroupPrefix(GI, Has);
 	if (GI == 0) { BlockVCountRW[b] = Total; }
 }
@@ -751,19 +795,19 @@ void VertWriteCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI 
 	const uint b = BlockIndex(Gid);
 	if (!BlockActiveRO[b]) { return; }
 	const uint3 P = Gid * MB + GTid;
-	const bool bIn = all(P < GD) && BandRO[PtIndex(P)];
+	const bool bIn = all(P < GD) && BandAt(P);
 	float3 Vp;
 	const bool bHas = bIn && CellVertex(P, Vp);
 	uint Local = bHas ? 1u : 0u;
 	GroupPrefix(GI, Local);
 	if (!bIn) { return; }
-	const uint I = PtIndex(P);
+	const uint I = SlotPt(P);
 	if (!bHas) { CellVertRW[I] = INVALID_V; return; }
 	const uint Vi = BlockVStart[b] + Local;
 	CellVertRW[I] = Vi;
 	if (Vi >= MaxVerts) { return; }
 	VertexRW[Vi] = float4(Vp, 0.f);
-	VertPtRW[Vi] = I;
+	VertPtRW[Vi] = PtIndex(P);   // 격자 좌표 부호 (배열 색인 아님)
 	float3 G = 0.f;
 	for (uint c = 0; c < 8; ++c)
 	{
@@ -778,23 +822,21 @@ void VertWriteCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI 
 uint VertAt(int3 C)
 {
 	if (any(C < 0) || any(C + 1 >= int3(GD))) { return INVALID_V; }
-	const uint I = PtIndex(uint3(C));
-	return BandRO[I] ? CellVertRO[I] : INVALID_V;
+	const uint I = SlotPt(uint3(C));
+	return (I != INVALID_V && BandRO[I]) ? CellVertRO[I] : INVALID_V;
 }
 
 // 점 P 에서 +축 모서리마다 사각형 (CPU 의 면 규칙). Out 이 있으면 색인을 쓴다
 uint FaceQuads(uint3 P, bool bWrite, uint Base)
 {
 	if (any(P < 1) || any(P + 1 >= GD)) { return 0u; }
-	const uint I0 = PtIndex(P);
-	if (!BandRO[I0]) { return 0u; }
-	const bool In0 = FieldRO[I0] > 0.f;
+	if (!BandAt(P)) { return 0u; }
+	const bool In0 = FieldAt(P) > 0.f;
 	uint NumIdx = 0;
 	for (uint Axis = 0; Axis < 3; ++Axis)
 	{
 		const uint3 P1 = P + uint3(Axis == 0, Axis == 1, Axis == 2);
-		const uint I1 = PtIndex(P1);
-		if (!BandRO[I1] || (FieldRO[I1] > 0.f) == In0) { continue; }
+		if (!BandAt(P1) || (FieldAt(P1) > 0.f) == In0) { continue; }
 		uint Q[4]; bool bOk = true;
 		for (uint k = 0; k < 4; ++k)
 		{
