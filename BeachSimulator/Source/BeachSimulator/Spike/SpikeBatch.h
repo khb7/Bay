@@ -247,6 +247,12 @@ namespace SpikeBatch
 	FCutFaceResult RunCutFace(const FSandParams& Params, int32 Layers, int32 SidePerLayer, int32 SettleCap, int32 HoldFrames, bool bOpen = true);
 
 	/** 같은 절토 시험을 **상자에 부어 만든 블록**으로. 격자 채움은 높으면 준정적이 안 되고(#29), 게임의 블록도 붓고 다져서 생긴다 */
+	/**
+	 * 닫힌 상자(반폭 BoxHalf)에 TargetCount 개를 무작위로 부어(한 알씩 · 정지 입자 최고점 + 1d) 3g 램프로 다진다 — 무작위 퇴적 블록.
+	 * 절토 시험(RunCutFacePour)과 M1 G3 무작위 퇴적 장면이 같이 쓴다. 벽은 켜진 채로 끝난다.
+	 */
+	void PourBoxBlock(FSandSpike& Sim, const FSandParams& Params, int32 TargetCount, float BoxHalf, float BaseJitter = 0.3f);
+
 	FCutFaceResult RunCutFacePour(const FSandParams& Params, int32 TargetCount, float BoxHalf, int32 SettleCap, int32 HoldFrames, bool bOpen = true, float BaseJitter = 0.3f);
 
 	/** 터널 (m0-spike.md §3-1). 상자에 부어 다진 블록에 결합 → X 축 관통 터널 제거 → 유지. 벽은 둔다(형틀 안 블록) */

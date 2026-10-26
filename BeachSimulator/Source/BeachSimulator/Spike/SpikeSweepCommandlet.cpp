@@ -760,9 +760,23 @@ namespace
 			SP.Substeps = 1; SP.WarmStart = 1.f; SP.WarmGapTol = 0.05f; SP.bGpuResident = true;
 			ApplyGpuProfile(TEXT("-gpu2"), SP);
 			SP.bGatherApply = false; SP.bMassSplit = false;
-			FTiltSetup S; S.TargetCount = Count; S.Layers = FMath::Max(4, FMath::RoundToInt(27.f * FMath::Pow(Count / 20000.f, 1.f / 3.f))); S.FixedLayers = 1; S.BaseJitter = 0.3f; S.bOpenDownhill = false;
-			FSandSpike Sim; Sim.InitTiltBox(SP, S);
-			for (int32 f = 0; f < 600; ++f) { Sim.Step(1.f / 60.f); }
+			// 장면: lattice = 격자 기둥 (자유 입자 흔들림 0.05R, 지금까지) · jitter = 격자 흔들림 0.3R · pour = 상자에 무작위로 부어 다진 블록 (SpikeBatch::PourBoxBlock)
+			FString SceneKind = TEXT("lattice");
+			FParse::Value(*Params, TEXT("scene="), SceneKind);
+			FSandSpike Sim;
+			if (SceneKind == TEXT("pour"))
+			{
+				float BoxHalfP = 38.f; FParse::Value(*Params, TEXT("boxhalf="), BoxHalfP);
+				SpikeBatch::PourBoxBlock(Sim, SP, Count, BoxHalfP);
+				for (int32 f = 0; f < 300; ++f) { Sim.Step(1.f / 60.f); }
+			}
+			else
+			{
+				FTiltSetup S; S.TargetCount = Count; S.Layers = FMath::Max(4, FMath::RoundToInt(27.f * FMath::Pow(Count / 20000.f, 1.f / 3.f))); S.FixedLayers = 1; S.BaseJitter = 0.3f; S.bOpenDownhill = false;
+				if (SceneKind == TEXT("jitter")) { S.FreeJitter = 0.3f; }
+				Sim.InitTiltBox(SP, S);
+				for (int32 f = 0; f < 600; ++f) { Sim.Step(1.f / 60.f); }
+			}
 			// 고정 영역 = 정지 더미 상자 + 옆으로 60cm (벽을 치우면 퍼진다) · 위로 10cm
 			FBox Box(ForceInit);
 			for (const FVector3f& X : Sim.GetPositions()) { Box += FVector(X); }
@@ -778,7 +792,7 @@ namespace
 			GP.MaxStretch = Pp.MaxStretch; GP.IsoFrac = Pp.IsoFrac; GP.NEps = Pp.NEps; GP.KnRamp = Pp.KnRamp;
 			GP.BandNEps = Pp.BandNEps; GP.SurfDev = Pp.SurfDev; GP.BandR = Pp.BandR; GP.Cell = Pp.Cell;
 			GP.GridOrigin = Pp.GridOriginOverride; GP.GridDims = Pp.GridDimsOverride;
-			UE_LOG(LogSpikeSweep, Display, TEXT("G3 — 입자 %d · 영역 격자 %d×%d×%d · 벽 치움 후 %d 프레임"), Sim.GetPositions().Num(), GP.GridDims.X, GP.GridDims.Y, GP.GridDims.Z, Frames);
+			UE_LOG(LogSpikeSweep, Display, TEXT("G3 — 장면 %s · 입자 %d · 정지 상자 %s · 영역 격자 %d×%d×%d · 벽 치움 후 %d 프레임"), *SceneKind, Sim.GetPositions().Num(), *Box.ToString(), GP.GridDims.X, GP.GridDims.Y, GP.GridDims.Z, Frames);
 			Sim.ReleaseWalls();
 			double SumSim = 0, SumMesh = 0, MaxSim = 0, MaxMesh = 0; int32 Cnt = 0, Matches = 0, Checks = 0;
 			for (int32 f = 1; f <= Frames; ++f)
@@ -798,6 +812,10 @@ namespace
 					const bool bSame = M.Vertices.Num() == G.NumVertsTotal && M.Triangles.Num() == G.NumIndicesTotal;
 					Matches += bSame ? 1 : 0; ++Checks;
 					float VMax = 0.f; for (const FVector3f& X : Sim.GetPositions()) { VMax = FMath::Max(VMax, X.Z); }
+					// 기둥 지표: 바닥에서 15cm 위인데 이웃(10cm 안)이 6 개 이하 — 한 줄로 선 입자 (덩어리 표면은 15~25)
+					int32 Thin = 0;
+					for (int32 i = 0; i < Sim.GetPositions().Num(); ++i) { if (Sim.GetPositions()[i].Z > Box.Min.Z + 15.f && M.NeighborCount[i] <= 6) { ++Thin; } }
+					UE_LOG(LogSpikeSweep, Display, TEXT("   f %3d: 가는 입자(높이 15cm↑ · 이웃 ≤ 6) %d"), f, Thin);
 					UE_LOG(LogSpikeSweep, Display, TEXT("   f %3d: 정점 CPU %d / GPU %d · 삼각형 %d / %d %s · 띠 점 %d / %d · GPU ms 시뮬 %.2f + 메시 %.2f (이웃 %.2f 커널 %.2f 띠·장 %.2f 메시 %.2f) · 최고점 %.1f"),
 						f, M.Vertices.Num(), G.NumVertsTotal, M.Triangles.Num() / 3, G.NumIndicesTotal / 3, bSame ? TEXT("같음") : TEXT("⚠ 다름"), M.NumBandPoints, G.NumBandPoints,
 						SimMs, MeshMs, G.StageMs[0], G.StageMs[1], G.StageMs[2], G.StageMs[3], VMax);

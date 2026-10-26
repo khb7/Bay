@@ -691,63 +691,10 @@ FCutFaceResult SpikeBatch::RunCutFacePour(const FSandParams& Params, int32 Targe
 	FCutFaceResult R;
 	R.Layers = 0;
 
-	FPourSetup Setup;
-	Setup.TargetCount = TargetCount;
-	Setup.BoxHalf = BoxHalf;
-	Setup.BaseJitter = BaseJitter;
-	Setup.DropHeightDiameters = 1.f;
-
 	FSandParams Dry = Params;
 	Dry.WGlobal = 0.f;
 	FSandSpike Sim;
-	Sim.InitPour(Dry, Setup);
-
-	// 상자 전체에 붓는다 — 놓는 지점은 상자 안 균일, 높이는 상자 안 정지 입자 최고점 + 1d (#23 규칙 그대로)
-	const float D = 2.f * Params.Radius;
-	const float SpawnR = BoxHalf - 1.5f * Params.Radius;
-	const float RestSpeed = 0.1f * FMath::Sqrt(FMath::Abs(Params.Gravity) * D);
-	const float MinDist2 = FMath::Square(D * 1.05f);
-	FRandomStream Rng(Params.Seed);
-	int32 Poured = 0, Frame = 0, LastPlaced = 0;
-	while (Poured < TargetCount)
-	{
-		if (Frame - LastPlaced > 600) { UE_LOG(LogTemp, Warning, TEXT("상자 붓기 정체: %d/%d"), Poured, TargetCount); break; }
-		if (Frame % 2 == 0)
-		{
-			const TArray<FVector3f>& Ps = Sim.GetPositions();
-			const TArray<FVector3f>& Vs = Sim.GetVelocities();
-			float Apex = 0.f;
-			for (int32 i = 0; i < Ps.Num(); ++i) { if (Vs[i].Size() < RestSpeed) { Apex = FMath::Max(Apex, Ps[i].Z); } }
-			const float Z = Apex + D;
-			TArray<FVector3f> Batch;
-			for (int32 k = 0; k < 2 && Poured < TargetCount; ++k)
-			{
-				for (int32 Try = 0; Try < 16; ++Try)
-				{
-					const FVector3f Cand(Rng.FRandRange(-SpawnR, SpawnR), Rng.FRandRange(-SpawnR, SpawnR), Z);
-					bool bClear = true;
-					for (const FVector3f& E : Ps) { if (FVector3f::DistSquared(Cand, E) < MinDist2) { bClear = false; break; } }
-					if (bClear) { for (const FVector3f& B : Batch) { if (FVector3f::DistSquared(Cand, B) < MinDist2) { bClear = false; break; } } }
-					if (bClear) { Batch.Add(Cand); ++Poured; break; }
-				}
-			}
-			if (Batch.Num() > 0) { Sim.AddParticles(Batch); LastPlaced = Frame; }
-		}
-		Sim.Step(BatchDt);
-		++Frame;
-	}
-
-	// 다지기 — 과잉 하중 3g. 형틀에 부은 모래를 다지는 것과 같다.
-	// ★ 계단으로 바꾸면 안 된다: 워밍 스타트가 직전 λ(3g 하중)를 그대로 임펄스로 넣어 1g 로 돌아오는 첫 스텝에
-	// 블록 전체가 2g 만큼 위로 차인다 (실측: 풀어준 뒤 5초에 +8.7cm). 램프로 올리고 내린다
-	auto Ramp = [&](float From, float To, int32 Frames)
-	{
-		for (int32 k = 0; k < Frames; ++k) { Sim.SetGravityScale(FMath::Lerp(From, To, (float)(k + 1) / Frames)); Sim.Step(BatchDt); }
-	};
-	Ramp(1.f, 3.f, 300);
-	for (int32 k = 0; k < 300; ++k) { Sim.Step(BatchDt); }
-	Ramp(3.f, 1.f, 600);
-	for (int32 k = 0; k < 600; ++k) { Sim.Step(BatchDt); }
+	PourBoxBlock(Sim, Dry, TargetCount, BoxHalf, BaseJitter);
 
 	// 감쇠는 여기서부터 — 붓기·다지기 중에 걸면 재배치 속도까지 죽여 성긴 채(충전 0.40, 84cm) 얼어붙는다.
 	// 압밀은 감쇠 없이 순환하며 일어나게 두고(0.5, 68cm), 마지막 정지만 감쇠로 얼린다. 준비 창은 꼬리가 감쇠를 끄고 잰다
@@ -1261,4 +1208,62 @@ FPourResult SpikeBatch::RunPour(const FSandParams& Params, const FPourSetup& Set
 
 	R.WallSeconds = FPlatformTime::Seconds() - T0;
 	return R;
+}
+
+void SpikeBatch::PourBoxBlock(FSandSpike& Sim, const FSandParams& Params, int32 TargetCount, float BoxHalf, float BaseJitter)
+{
+	FPourSetup Setup;
+	Setup.TargetCount = TargetCount;
+	Setup.BoxHalf = BoxHalf;
+	Setup.BaseJitter = BaseJitter;
+	Setup.DropHeightDiameters = 1.f;
+
+	Sim.InitPour(Params, Setup);
+
+	// 상자 전체에 붓는다 — 놓는 지점은 상자 안 균일, 높이는 상자 안 정지 입자 최고점 + 1d (#23 규칙 그대로)
+	const float D = 2.f * Params.Radius;
+	const float SpawnR = BoxHalf - 1.5f * Params.Radius;
+	const float RestSpeed = 0.1f * FMath::Sqrt(FMath::Abs(Params.Gravity) * D);
+	const float MinDist2 = FMath::Square(D * 1.05f);
+	FRandomStream Rng(Params.Seed);
+	int32 Poured = 0, Frame = 0, LastPlaced = 0;
+	while (Poured < TargetCount)
+	{
+		if (Frame - LastPlaced > 600) { UE_LOG(LogTemp, Warning, TEXT("상자 붓기 정체: %d/%d"), Poured, TargetCount); break; }
+		if (Frame % 2 == 0)
+		{
+			const TArray<FVector3f>& Ps = Sim.GetPositions();
+			const TArray<FVector3f>& Vs = Sim.GetVelocities();
+			float Apex = 0.f;
+			for (int32 i = 0; i < Ps.Num(); ++i) { if (Vs[i].Size() < RestSpeed) { Apex = FMath::Max(Apex, Ps[i].Z); } }
+			const float Z = Apex + D;
+			TArray<FVector3f> Batch;
+			for (int32 k = 0; k < 2 && Poured < TargetCount; ++k)
+			{
+				for (int32 Try = 0; Try < 16; ++Try)
+				{
+					const FVector3f Cand(Rng.FRandRange(-SpawnR, SpawnR), Rng.FRandRange(-SpawnR, SpawnR), Z);
+					bool bClear = true;
+					for (const FVector3f& E : Ps) { if (FVector3f::DistSquared(Cand, E) < MinDist2) { bClear = false; break; } }
+					if (bClear) { for (const FVector3f& B : Batch) { if (FVector3f::DistSquared(Cand, B) < MinDist2) { bClear = false; break; } } }
+					if (bClear) { Batch.Add(Cand); ++Poured; break; }
+				}
+			}
+			if (Batch.Num() > 0) { Sim.AddParticles(Batch); LastPlaced = Frame; }
+		}
+		Sim.Step(BatchDt);
+		++Frame;
+	}
+
+	// 다지기 — 과잉 하중 3g. 형틀에 부은 모래를 다지는 것과 같다.
+	// ★ 계단으로 바꾸면 안 된다: 워밍 스타트가 직전 λ(3g 하중)를 그대로 임펄스로 넣어 1g 로 돌아오는 첫 스텝에
+	// 블록 전체가 2g 만큼 위로 차인다 (실측: 풀어준 뒤 5초에 +8.7cm). 램프로 올리고 내린다
+	auto Ramp = [&](float From, float To, int32 Frames)
+	{
+		for (int32 k = 0; k < Frames; ++k) { Sim.SetGravityScale(FMath::Lerp(From, To, (float)(k + 1) / Frames)); Sim.Step(BatchDt); }
+	};
+	Ramp(1.f, 3.f, 300);
+	for (int32 k = 0; k < 300; ++k) { Sim.Step(BatchDt); }
+	Ramp(3.f, 1.f, 600);
+	for (int32 k = 0; k < 600; ++k) { Sim.Step(BatchDt); }
 }

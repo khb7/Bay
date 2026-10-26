@@ -9,6 +9,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "SandSurfaceComponent.h"
+#include "../Spike/SpikeBatch.h"
 #include "UnrealClient.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -113,10 +114,20 @@ void USandSurfaceTestSubsystem::StartSim(UWorld& World)
 	SP.Substeps = 1; SP.WarmStart = 1.f; SP.WarmGapTol = 0.05f; SP.bGpuResident = true;
 	ApplySandGpuProfile(TEXT("-gpu2"), SP);
 	SP.bGatherApply = false; SP.bMassSplit = false;
-	FTiltSetup S; S.TargetCount = Count; S.Layers = FMath::Max(4, FMath::RoundToInt(27.f * FMath::Pow(Count / 20000.f, 1.f / 3.f))); S.FixedLayers = 1; S.BaseJitter = 0.3f; S.bOpenDownhill = false;
+	// -sandscene=pour: 상자에 무작위로 부어 다진 블록 (기본은 격자 기둥)
+	FString SceneKind = TEXT("lattice"); FParse::Value(FCommandLine::Get(), TEXT("sandscene="), SceneKind);
 	Sim = MakeUnique<FSandSpike>();
-	Sim->InitTiltBox(SP, S);
-	for (int32 f = 0; f < 600; ++f) { Sim->Step(1.f / 60.f); }
+	if (SceneKind == TEXT("pour"))
+	{
+		SpikeBatch::PourBoxBlock(*Sim, SP, Count, 38.f);
+		for (int32 f = 0; f < 300; ++f) { Sim->Step(1.f / 60.f); }
+	}
+	else
+	{
+		FTiltSetup S; S.TargetCount = Count; S.Layers = FMath::Max(4, FMath::RoundToInt(27.f * FMath::Pow(Count / 20000.f, 1.f / 3.f))); S.FixedLayers = 1; S.BaseJitter = 0.3f; S.bOpenDownhill = false;
+		Sim->InitTiltBox(SP, S);
+		for (int32 f = 0; f < 600; ++f) { Sim->Step(1.f / 60.f); }
+	}
 	FBox Box(ForceInit);
 	for (const FVector3f& X : Sim->GetPositions()) { Box += FVector(X); }
 	const float Pad = 2.f * 5.f * 2.f + 1.25f;   // 지지(2h·MaxStretch) + 셀
