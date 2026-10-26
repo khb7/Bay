@@ -319,15 +319,29 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 			const int32 cx = FMath::RoundToInt(L.X), cy = FMath::RoundToInt(L.Y), cz = FMath::RoundToInt(L.Z);
 			for (int32 z = FMath::Max(0, cz - RC); z <= FMath::Min(GD.Z - 1, cz + RC); ++z)
 			for (int32 y = FMath::Max(0, cy - RC); y <= FMath::Min(GD.Y - 1, cy + RC); ++y)
-			for (int32 x = FMath::Max(0, cx - RC); x <= FMath::Min(GD.X - 1, cx + RC); ++x)
 			{
-				if ((PtPos(x, y, z) - Pos[i]).SizeSquared() <= Reach * Reach) { Band[PtIndex(x, y, z)] = 1; }   // 같은 값 쓰기라 경쟁 무해
+				// 줄마다 구와 겹치는 x 구간을 한 번에 (같은 값 쓰기라 경쟁 무해)
+				const float Dy = GOrigin.Y + y * P.Cell - Pos[i].Y, Dz = GOrigin.Z + z * P.Cell - Pos[i].Z;
+				const float R2 = Reach * Reach - Dy * Dy - Dz * Dz;
+				if (R2 < 0.f) { continue; }
+				const float Hx = FMath::Sqrt(R2) / P.Cell;
+				const int32 x0 = FMath::Max(0, FMath::CeilToInt(L.X - Hx)), x1 = FMath::Min(GD.X - 1, FMath::FloorToInt(L.X + Hx));
+				if (x0 <= x1) { FMemory::Memset(&Band[PtIndex(x0, y, z)], 1, x1 - x0 + 1); }
 			}
 		});
 	}
 	const double Tf0 = FPlatformTime::Seconds();
-	int32 NumBand = 0;
-	for (uint8 B : Band) { NumBand += B; }
+	// 띠 점 목록 (색인 오름차순) — 메시 단계가 전역 격자 대신 이것만 돈다
+	TArray<int32> BandList;
+	{
+		TArray<int32> SliceN; SliceN.SetNumZeroed(GD.Z + 1);
+		const int32 SliceSize = GD.X * GD.Y;
+		ParallelFor(GD.Z, [&](int32 z) { int32 C = 0; const uint8* Bp = &Band[z * SliceSize]; for (int32 k = 0; k < SliceSize; ++k) { C += Bp[k]; } SliceN[z + 1] = C; });
+		for (int32 z = 0; z < GD.Z; ++z) { SliceN[z + 1] += SliceN[z]; }
+		BandList.SetNumUninitialized(SliceN[GD.Z]);
+		ParallelFor(GD.Z, [&](int32 z) { int32 W = SliceN[z]; for (int32 k = 0; k < SliceSize; ++k) { if (Band[z * SliceSize + k]) { BandList[W++] = z * SliceSize + k; } } });
+	}
+	const int32 NumBand = BandList.Num();
 	Out.NumBandPoints = NumBand;
 	Out.NumGridPoints = NumPts;
 
@@ -370,11 +384,12 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 	float Iso = 0.f;
 	if (P.Field != ESandSurfaceField::ZhuBridson)
 	{
-		double Sum = 0.0; int32 Cnt = 0;
-		for (int32 i = 0; i < N && Cnt < 2000; i += FMath::Max(1, N / 2000))
-		{
-			if (IsInterior(i)) { Sum += EvalField(Pos[i]); ++Cnt; }
-		}
+		TArray<int32> Samples;
+		for (int32 i = 0; i < N && Samples.Num() < 2000; i += FMath::Max(1, N / 2000)) { if (IsInterior(i)) { Samples.Add(i); } }
+		TArray<float> SPhi; SPhi.SetNumUninitialized(Samples.Num());
+		ParallelFor(Samples.Num(), [&](int32 k) { SPhi[k] = EvalField(Pos[Samples[k]]); });
+		double Sum = 0.0; const int32 Cnt = Samples.Num();
+		for (float V : SPhi) { Sum += V; }
 		// 내부가 없으면(얇은 벽 · 부스러기) 고체 분율 기준값 0.6 (무작위 조밀 충전) — φ 는 고체 분율 추정이다
 		Out.InteriorPhi = Cnt > 0 ? (float)(Sum / Cnt) : 0.6f;
 		Iso = Out.InteriorPhi * P.IsoFrac;
@@ -401,7 +416,8 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 		// 선형 합 → 입자마다 자기 지지 AABB 안의 띠 점에 뿌린다 (모으기보다 이웃 검사가 훨씬 적다)
 		TArray<float> Phi; if (P.Block <= 0) { Phi.SetNumZeroed(NumPts); }
 		// 뿌릴 입자 = 띠 점에 닿을 수 있는 것만 — 표면 입자에서 (띠 반경 + 자기 지지) 안 (splashsurf 의 "표면 입자 + 두 고리" 와 같은 생각, 여기선 기하로 판정)
-		TArray<uint8> Contributes; Contributes.SetNumZeroed(N);
+		TArray<uint8> Contributes; Contributes.Init(1, N);
+		if (P.Block <= 0)   // 부분 영역 경로는 영역 목록 · 줄 띠 범위가 같은 일을 한다
 		{
 			TArray<FVector3f> SurfPos;
 			for (int32 i = 0; i < N; ++i) { if (!P.bBandOnly || IsSurf[i]) { SurfPos.Add(Pos[i]); } }
@@ -559,26 +575,30 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 	Out.MsFieldBand = (Tf0 - T2) * 1000.0;
 	Out.MsFieldIso = (Tf1 - Tf0) * 1000.0;
 
-	// ── ⑥ Surface Nets ──
-	const FIntVector CD(GD.X - 1, GD.Y - 1, GD.Z - 1);
-	const int32 NumCellsAll = CD.X * CD.Y * CD.Z;
-	auto CellIdx = [&](int32 x, int32 y, int32 z) { return (z * CD.Y + y) * CD.X + x; };
-	TArray<int32> CellVert; CellVert.Init(INDEX_NONE, NumCellsAll);
-	TArray<FVector3f> CellPos; CellPos.SetNumUninitialized(NumCellsAll);
+	// ── ⑥ Surface Nets ── 띠 점 목록만 돈다. 셀 = 꼭짓점 0 이 띠 점인 격자 셀, 셀 정점은 그 점 색인으로 찾는다
 	static const int32 Corner[8][3] = { {0,0,0},{1,0,0},{0,1,0},{1,1,0},{0,0,1},{1,0,1},{0,1,1},{1,1,1} };
 	static const int32 Edge[12][2] = { {0,1},{2,3},{4,5},{6,7},{0,2},{1,3},{4,6},{5,7},{0,4},{1,5},{2,6},{3,7} };
-	ParallelFor(CD.Z, [&](int32 z)
+	auto Unpack = [&](int32 I, int32& x, int32& y, int32& z) { x = I % GD.X; y = (I / GD.X) % GD.Y; z = I / (GD.X * GD.Y); };
+	const int32 NumChunks = FMath::Max(1, FMath::Min(256, NumBand / 1024));
+	auto ChunkRange = [&](int32 c, int32& b0, int32& b1) { b0 = (int32)((int64)NumBand * c / NumChunks); b1 = (int32)((int64)NumBand * (c + 1) / NumChunks); };
+	TArray<FVector3f> SlotPos; SlotPos.SetNumUninitialized(NumBand);
+	TArray<uint8> SlotHas; SlotHas.SetNumZeroed(NumBand);
+	TArray<int32> ChunkV; ChunkV.SetNumZeroed(NumChunks + 1);
+	ParallelFor(NumChunks, [&](int32 c)
 	{
-		for (int32 y = 0; y < CD.Y; ++y)
-		for (int32 x = 0; x < CD.X; ++x)
+		int32 b0, b1; ChunkRange(c, b0, b1);
+		int32 NV = 0;
+		for (int32 s = b0; s < b1; ++s)
 		{
+			int32 x, y, z; Unpack(BandList[s], x, y, z);
+			if (x >= GD.X - 1 || y >= GD.Y - 1 || z >= GD.Z - 1) { continue; }
 			float V[8]; bool bAll = true; int32 Mask = 0;
-			for (int32 c = 0; c < 8; ++c)
+			for (int32 k = 0; k < 8; ++k)
 			{
-				const int32 I = PtIndex(x + Corner[c][0], y + Corner[c][1], z + Corner[c][2]);
+				const int32 I = PtIndex(x + Corner[k][0], y + Corner[k][1], z + Corner[k][2]);
 				if (!Band[I]) { bAll = false; break; }
-				V[c] = F[I];
-				Mask |= (V[c] > 0.f) ? (1 << c) : 0;
+				V[k] = F[I];
+				Mask |= (V[k] > 0.f) ? (1 << k) : 0;
 			}
 			if (!bAll || Mask == 0 || Mask == 0xFF) { continue; }
 			FVector3f Acc(0.f); int32 Cnt = 0;
@@ -590,92 +610,89 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 				const FVector3f PA(Corner[A][0], Corner[A][1], Corner[A][2]), PB(Corner[B][0], Corner[B][1], Corner[B][2]);
 				Acc += PA + (PB - PA) * T; ++Cnt;
 			}
-			CellPos[CellIdx(x, y, z)] = GOrigin + (FVector3f(x, y, z) + Acc / (float)Cnt) * P.Cell;
-			CellVert[CellIdx(x, y, z)] = 1;
+			SlotPos[s] = GOrigin + (FVector3f(x, y, z) + Acc / (float)Cnt) * P.Cell;
+			SlotHas[s] = 1; ++NV;
+		}
+		ChunkV[c + 1] = NV;
+	});
+	for (int32 c = 0; c < NumChunks; ++c) { ChunkV[c + 1] += ChunkV[c]; }
+	// 정점 번호 — 덩어리별 접두합. CellVert 는 띠 점 자리만 쓰고, 읽을 때 Band 로 먼저 거른다 (전역 초기화 없음)
+	TArray<int32> CellVert; CellVert.SetNumUninitialized(NumPts);
+	TArray<int32> VertPt; VertPt.SetNumUninitialized(ChunkV[NumChunks]);
+	Out.Vertices.SetNumUninitialized(ChunkV[NumChunks]);
+	ParallelFor(NumChunks, [&](int32 c)
+	{
+		int32 b0, b1; ChunkRange(c, b0, b1);
+		int32 V = ChunkV[c];
+		for (int32 s = b0; s < b1; ++s)
+		{
+			const int32 I = BandList[s];
+			if (!SlotHas[s]) { CellVert[I] = INDEX_NONE; continue; }
+			CellVert[I] = V; Out.Vertices[V] = SlotPos[s]; VertPt[V] = I; ++V;
 		}
 	});
-	// 정점 번호 매기기 — 층별 개수 → 접두합 → 병렬 기록
-	{
-		const int32 SliceCells = CD.X * CD.Y;
-		TArray<int32> SliceBase; SliceBase.SetNumZeroed(CD.Z + 1);
-		ParallelFor(CD.Z, [&](int32 z) { int32 C = 0; for (int32 k = 0; k < SliceCells; ++k) { C += CellVert[z * SliceCells + k] != INDEX_NONE; } SliceBase[z + 1] = C; });
-		for (int32 z = 0; z < CD.Z; ++z) { SliceBase[z + 1] += SliceBase[z]; }
-		Out.Vertices.SetNumUninitialized(SliceBase[CD.Z]);
-		ParallelFor(CD.Z, [&](int32 z)
-		{
-			int32 V = SliceBase[z];
-			for (int32 k = 0; k < SliceCells; ++k)
-			{
-				const int32 c = z * SliceCells + k;
-				if (CellVert[c] == INDEX_NONE) { continue; }
-				CellVert[c] = V; Out.Vertices[V] = CellPos[c]; ++V;
-			}
-		});
-	}
 	Out.NumCells = Out.Vertices.Num();
-	// 법선 = −∇f (중앙 차분, 정점 위치에서 삼선형 대신 셀 모서리 기울기 평균)
+	auto VertAt = [&](int32 x, int32 y, int32 z) -> int32
+	{
+		if (x < 0 || y < 0 || z < 0 || x >= GD.X - 1 || y >= GD.Y - 1 || z >= GD.Z - 1) { return INDEX_NONE; }
+		const int32 I = PtIndex(x, y, z);
+		return Band[I] ? CellVert[I] : INDEX_NONE;
+	};
+	// 법선 = −∇f (중앙 차분, 셀 모서리 기울기 평균)
 	Out.Normals.SetNumZeroed(Out.Vertices.Num());
 	auto Fat = [&](int32 x, int32 y, int32 z) -> float
 	{
 		x = FMath::Clamp(x, 0, GD.X - 1); y = FMath::Clamp(y, 0, GD.Y - 1); z = FMath::Clamp(z, 0, GD.Z - 1);
 		return F[PtIndex(x, y, z)];
 	};
-	ParallelFor(CD.Z, [&](int32 z)
+	ParallelFor(Out.Vertices.Num(), [&](int32 Vi)
 	{
-		for (int32 y = 0; y < CD.Y; ++y)
-		for (int32 x = 0; x < CD.X; ++x)
+		int32 x, y, z; Unpack(VertPt[Vi], x, y, z);
+		FVector3f Gsum(0.f);
+		for (int32 c = 0; c < 8; ++c)
 		{
-			const int32 Vi = CellVert[CellIdx(x, y, z)];
-			if (Vi == INDEX_NONE) { continue; }
-			FVector3f Gsum(0.f);
-			for (int32 c = 0; c < 8; ++c)
+			const int32 X = x + Corner[c][0], Y = y + Corner[c][1], Z = z + Corner[c][2];
+			Gsum += FVector3f(Fat(X + 1, Y, Z) - Fat(X - 1, Y, Z), Fat(X, Y + 1, Z) - Fat(X, Y - 1, Z), Fat(X, Y, Z + 1) - Fat(X, Y, Z - 1));
+		}
+		Out.Normals[Vi] = (-Gsum).GetSafeNormal();
+	}, Out.Vertices.Num() < 4096);
+	// 면 — 부호가 바뀌는 격자 모서리마다, 그 모서리를 둘러싼 4 셀의 정점으로 사각형 (덩어리별 → 이어 붙이기)
+	TArray<TArray<int32>> ChunkTris; ChunkTris.SetNum(NumChunks);
+	ParallelFor(NumChunks, [&](int32 c)
+	{
+		int32 b0, b1; ChunkRange(c, b0, b1);
+		TArray<int32>& Tris = ChunkTris[c];
+		for (int32 s = b0; s < b1; ++s)
+		{
+			const int32 I0 = BandList[s];
+			int32 x, y, z; Unpack(I0, x, y, z);
+			if (x < 1 || y < 1 || z < 1 || x >= GD.X - 1 || y >= GD.Y - 1 || z >= GD.Z - 1) { continue; }
+			const bool In0 = F[I0] > 0.f;
+			for (int32 Axis = 0; Axis < 3; ++Axis)
 			{
-				const int32 X = x + Corner[c][0], Y = y + Corner[c][1], Z = z + Corner[c][2];
-				Gsum += FVector3f(Fat(X + 1, Y, Z) - Fat(X - 1, Y, Z), Fat(X, Y + 1, Z) - Fat(X, Y - 1, Z), Fat(X, Y, Z + 1) - Fat(X, Y, Z - 1));
+				const int32 I1 = PtIndex(x + (Axis == 0), y + (Axis == 1), z + (Axis == 2));
+				if (!Band[I1] || (F[I1] > 0.f) == In0) { continue; }
+				// 모서리를 둘러싼 4 셀 (모서리에 수직인 두 축으로 −1, 0)
+				int32 Q[4];
+				bool bOk = true;
+				for (int32 k = 0; k < 4; ++k)
+				{
+					const int32 da = (k == 1 || k == 2) ? 1 : 0, db = (k >= 2) ? 1 : 0;
+					int32 cx = x, cy = y, cz = z;
+					if (Axis == 0) { cy -= 1 - da; cz -= 1 - db; }
+					else if (Axis == 1) { cz -= 1 - da; cx -= 1 - db; }
+					else { cx -= 1 - da; cy -= 1 - db; }
+					Q[k] = VertAt(cx, cy, cz);
+					if (Q[k] == INDEX_NONE) { bOk = false; break; }
+				}
+				if (!bOk) { continue; }
+				// 방향: 안(f > 0) → 밖으로 법선이 나가게
+				if (In0) { Tris.Append({ Q[0], Q[1], Q[2], Q[0], Q[2], Q[3] }); }
+				else     { Tris.Append({ Q[0], Q[2], Q[1], Q[0], Q[3], Q[2] }); }
 			}
-			Out.Normals[Vi] = (-Gsum).GetSafeNormal();
 		}
 	});
-	// 면 — 부호가 바뀌는 격자 모서리마다, 그 모서리를 둘러싼 4 셀의 정점으로 사각형 (층별 병렬 → 이어 붙이기)
-	TArray<TArray<int32>> SliceTris; SliceTris.SetNum(GD.Z);
-	ParallelFor(GD.Z - 2, [&](int32 zz)
-	{
-	const int32 z = zz + 1;
-	TArray<int32>& Tris = SliceTris[z];
-	for (int32 y = 1; y < GD.Y - 1; ++y)
-	for (int32 x = 1; x < GD.X - 1; ++x)
-	{
-		const int32 I0 = PtIndex(x, y, z);
-		if (!Band[I0]) { continue; }
-		const bool In0 = F[I0] > 0.f;
-		for (int32 Axis = 0; Axis < 3; ++Axis)
-		{
-			const int32 x1 = x + (Axis == 0), y1 = y + (Axis == 1), z1 = z + (Axis == 2);
-			if (x1 >= GD.X || y1 >= GD.Y || z1 >= GD.Z) { continue; }
-			const int32 I1 = PtIndex(x1, y1, z1);
-			if (!Band[I1] || (F[I1] > 0.f) == In0) { continue; }
-			// 모서리를 둘러싼 4 셀 (모서리에 수직인 두 축으로 −1, 0)
-			int32 Q[4];
-			bool bOk = true;
-			for (int32 k = 0; k < 4; ++k)
-			{
-				const int32 da = (k == 1 || k == 2) ? 1 : 0, db = (k >= 2) ? 1 : 0;
-				int32 cx = x, cy = y, cz = z;
-				if (Axis == 0) { cy -= 1 - da; cz -= 1 - db; }
-				else if (Axis == 1) { cz -= 1 - da; cx -= 1 - db; }
-				else { cx -= 1 - da; cy -= 1 - db; }
-				if (cx < 0 || cy < 0 || cz < 0 || cx >= CD.X || cy >= CD.Y || cz >= CD.Z) { bOk = false; break; }
-				Q[k] = CellVert[CellIdx(cx, cy, cz)];
-				if (Q[k] == INDEX_NONE) { bOk = false; break; }
-			}
-			if (!bOk) { continue; }
-			// 방향: 안(f > 0) → 밖으로 법선이 나가게
-			if (In0) { Tris.Append({ Q[0], Q[1], Q[2], Q[0], Q[2], Q[3] }); }
-			else     { Tris.Append({ Q[0], Q[2], Q[1], Q[0], Q[3], Q[2] }); }
-		}
-	}
-	});
-	for (const TArray<int32>& Tr : SliceTris) { Out.Triangles.Append(Tr); }
+	for (const TArray<int32>& Tr : ChunkTris) { Out.Triangles.Append(Tr); }
 	const double T4 = FPlatformTime::Seconds();
 	Out.MsNeighbors = (T1 - T0) * 1000.0;
 	Out.MsKernels   = (T2 - T1) * 1000.0;
