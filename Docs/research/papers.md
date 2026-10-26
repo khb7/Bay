@@ -1510,6 +1510,16 @@ k(s) = max(0, (1 − s²)³),  R = 평균 입자 간격의 2 배
 
 ---
 
+### C16. 입자 사이 액체다리 부피 — 입자별 W 의 쌍 점착 근거 (2026-10-27)
+
+**Shi & McCarthy (2008), "Numerical simulation of liquid transfer between particles", Powder Technology 184(1), 64–75**
+- 다리 부피는 두 입자가 각자 내는 액체의 합이고, 각자 몫은 자기 액체량과 반지름으로 정해진다. 벽과 닿으면 입자가 전부 낸다.
+- 끊어질 때 재분배: EDEM 은 Schmelzle & Nirschl 방식, LIGGGHTS/CFDEM 은 반반 나눔.
+- 파단 거리 ∝ 다리 부피^(1/3) (Lian 1993 과 같은 꼴).
+- 출처 확인: [EDEM Liquid Bridge Model](https://help.altair.com/edem/topics/creator_tree_physics/liquid_bridge_model_r.htm) · [CFDEM gran cohesion easo/capillary/viscous](https://www.cfdem.com/media/DEM/docu/gran_cohesion_easo_capillary_viscous.html). 원문 수식은 아직 직접 안 읽음.
+
+**우리 적용**: 입자 반지름이 모두 같으므로 쌍의 W = 두 입자 W 의 평균 → cohesion(W_pair). W 가 시간에 따라 바뀌지 않는 동안은 재분배가 필요 없다 (M5 에서 다시). → [m1-plan-wet.md](../design/m1-plan-wet.md)
+
 ## D. 하이트필드 GPU 침식 ← 가장 먼저 구현할 것
 
 ### D1. Mei, Decaudin, Hu (2007)
