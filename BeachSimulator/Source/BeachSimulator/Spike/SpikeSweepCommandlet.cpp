@@ -856,6 +856,12 @@ namespace
 					*Scene, *Fl, M.NumParticles, M.NumSurfaceParticles, M.NumBandPoints, M.Vertices.Num(), M.Triangles.Num() / 3, *Metric, M.Volume() / PV,
 					M.MsNeighbors, M.MsKernels, M.MsField, M.MsMesh, M.MsTotal, M.Ks, M.Iso);
 				M.SaveObj(Dir / FString::Printf(TEXT("%s_%s.obj"), *Scene, *Fl));
+				{
+					const auto& Pr = M.Prof;
+					UE_LOG(LogSpikeSweep, Display, TEXT("   뿌리기 원인 %s: 앞 %.1f · 병렬 벽 %.1f ms | 활성 영역 %d · 스레드 합 %.1f (준비 %.1f 뿌리기 %.1f 써넣기 %.1f) · 상위 영역 %.1f %.1f %.1f ms | 입자·영역 %lld · 줄 %lld 중 계산 %lld (%.0f%%) · 줄당 %.1f 점"),
+						*Scene, Pr.PreMs, Pr.WallMs, Pr.ActiveBlocks, Pr.PrepMs + Pr.SplatMs + Pr.WriteMs, Pr.PrepMs, Pr.SplatMs, Pr.WriteMs, Pr.TopMs[0], Pr.TopMs[1], Pr.TopMs[2],
+						Pr.Pairs, Pr.Rows, Pr.RowsHit, 100.0 * Pr.RowsHit / FMath::Max<int64>(1, Pr.Rows), (double)M.SplatEvals / FMath::Max<int64>(1, Pr.RowsHit));
+				}
 				UE_LOG(LogSpikeSweep, Display, TEXT("   장 세부 %s: 띠 %.1f · 등위값 %.1f · 거르기 %.1f · 뿌리기 %.1f (목록 %.1f) ms · 격자점 %d · 영역 %d · 계산 %.1fM · SIMD %d"), *Scene, M.MsFieldBand, M.MsFieldIso, M.MsFieldFilter, M.MsField - M.MsFieldBand - M.MsFieldIso - M.MsFieldFilter, M.MsSplatLists, M.NumGridPoints, M.NumBlocks, M.SplatEvals / 1e6, M.SimdWidth);
 				if (bDevDump && Fl == Fields[0])
 				{

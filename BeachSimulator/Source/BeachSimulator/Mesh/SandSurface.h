@@ -50,6 +50,15 @@ struct FSandSurfaceMesh
 	TArray<int32> NeighborCount;
 	TArray<float> Deviation;     // |Σ(x_j − x_i)| / (N·r_i)
 
+	// 부분 영역 뿌리기 원인 측정 (m1-log #8)
+	struct FSplatProfile
+	{
+		double WallMs = 0.0, PreMs = 0.0;                       // ParallelFor 벽시계 · 그 앞(F 초기화 · 활성 영역 · 목록)
+		double PrepMs = 0.0, SplatMs = 0.0, WriteMs = 0.0;      // 영역 합 (스레드 시간)
+		double TopMs[3] = { 0.0, 0.0, 0.0 };                    // 가장 오래 걸린 영역 3 개
+		int32 ActiveBlocks = 0; int64 Pairs = 0, Rows = 0, RowsHit = 0;
+	} Prof;
+
 	// 통계
 	int32 NumParticles = 0, NumSurfaceParticles = 0, NumBandPoints = 0, NumCells = 0;
 	float Ks = 0.f, Iso = 0.f, InteriorPhi = 0.f;

@@ -570,10 +570,15 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 			const double Tl = FPlatformTime::Seconds();
 			Out.MsSplatLists = (Tl - Tf2) * 1000.0;
 			std::atomic<int64> EvalCount{0};
+			// 원인 측정 (#8): 영역별 시간(준비 · 뿌리기 · 써 넣기) · 줄 수
+			TArray<double> BkPrep, BkSplat, BkWrite; BkPrep.SetNumZeroed(NumBlocks); BkSplat.SetNumZeroed(NumBlocks); BkWrite.SetNumZeroed(NumBlocks);
+			TArray<int64> BkRows, BkRowsHit; BkRows.SetNumZeroed(NumBlocks); BkRowsHit.SetNumZeroed(NumBlocks);
+			const double Tp0 = FPlatformTime::Seconds();
 			ParallelFor(NumBlocks, [&](int32 b)
 			{
 				if (BStart[b] == BStart[b + 1]) { return; }
-				int64 LocalEvals = 0;
+				const double Tb0 = FPlatformTime::Seconds();
+				int64 LocalEvals = 0, Rows = 0, RowsHit = 0;
 				const FIntVector B0((b % BD.X) * B, ((b / BD.X) % BD.Y) * B, (b / (BD.X * BD.Y)) * B);
 				const FIntVector B1(FMath::Min(GD.X, B0.X + B) - 1, FMath::Min(GD.Y, B0.Y + B) - 1, FMath::Min(GD.Z, B0.Z + B) - 1);
 				TArray<float> Local; Local.SetNumZeroed(B * B * B);
@@ -587,6 +592,7 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 					const int32 r = (z - B0.Z) * B + (y - B0.Y);
 					SpanLo[r] = FMath::Min<int16>(SpanLo[r], x); SpanHi[r] = FMath::Max<int16>(SpanHi[r], x);
 				}
+				const double Tb1 = FPlatformTime::Seconds();
 				for (int32 k = BStart[b]; k < BStart[b + 1]; ++k)
 				{
 					const FKernel& Kj = K[BItems[k]];
@@ -599,7 +605,9 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 					{
 						const int32 r = (z - B0.Z) * B + (y - B0.Y);
 						const int32 xa = FMath::Max<int32>(L.X, SpanLo[r]), xb = FMath::Min<int32>(H.X, SpanHi[r]);
+						++Rows;
 						if (xa > xb) { continue; }
+						++RowsHit;
 						// 한 줄(x) 안에서 G·r 은 x 에 대해 선형 → 증분
 						LocalEvals += xb - xa + 1;
 						const FVector3f R0 = PtPos(xa, y, z) - Kj.C;
@@ -611,6 +619,7 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 						else { SplatRowScalar(Row, xa, xb, GR, DG, Scale); }
 					}
 				}
+				const double Tb2 = FPlatformTime::Seconds();
 				for (int32 z = B0.Z; z <= B1.Z; ++z)
 				for (int32 y = B0.Y; y <= B1.Y; ++y)
 				for (int32 x = B0.X; x <= B1.X; ++x)
@@ -619,7 +628,25 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 					if (Band[I]) { F[I] = Local[((z - B0.Z) * B + (y - B0.Y)) * B + (x - B0.X)] - Iso; }
 				}
 				EvalCount += LocalEvals;
+				BkPrep[b] = (Tb1 - Tb0) * 1000.0; BkSplat[b] = (Tb2 - Tb1) * 1000.0; BkWrite[b] = (FPlatformTime::Seconds() - Tb2) * 1000.0;
+				BkRows[b] = Rows; BkRowsHit[b] = RowsHit;
 			});
+			{
+				FSandSurfaceMesh::FSplatProfile& Pr = Out.Prof;
+				Pr.WallMs = (FPlatformTime::Seconds() - Tp0) * 1000.0;
+				Pr.PreMs = (Tp0 - Tf2) * 1000.0;
+				TArray<double> Tot;
+				for (int32 b = 0; b < NumBlocks; ++b)
+				{
+					if (BStart[b] == BStart[b + 1]) { continue; }
+					++Pr.ActiveBlocks; Pr.Pairs += BStart[b + 1] - BStart[b];
+					Pr.PrepMs += BkPrep[b]; Pr.SplatMs += BkSplat[b]; Pr.WriteMs += BkWrite[b];
+					Pr.Rows += BkRows[b]; Pr.RowsHit += BkRowsHit[b];
+					Tot.Add(BkPrep[b] + BkSplat[b] + BkWrite[b]);
+				}
+				Tot.Sort([](double A, double Bv) { return A > Bv; });
+				for (int32 i = 0; i < FMath::Min(3, Tot.Num()); ++i) { Pr.TopMs[i] = Tot[i]; }
+			}
 			Out.SplatEvals = EvalCount.load();
 			Out.NumBlocks = NumBlocks;
 		}
