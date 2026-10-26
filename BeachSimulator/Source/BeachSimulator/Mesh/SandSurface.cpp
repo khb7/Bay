@@ -752,6 +752,47 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 		const int32 I = PtIndex(x, y, z);
 		return Band[I] ? CellVert[I] : INDEX_NONE;
 	};
+	// 가중 라플라시안 평활화 (papers C13) — 법선은 평활화 전 장의 기울기 그대로 쓴다
+	if (P.SmoothIters > 0 && Out.Vertices.Num() > 0)
+	{
+		const double Ts0 = FPlatformTime::Seconds();
+		const int32 NV = Out.Vertices.Num();
+		const float R = P.NeighborR, R2 = R * R;
+		TArray<float> Wnn; Wnn.SetNumUninitialized(N);
+		ParallelFor(N, [&](int32 i)
+		{
+			float S = 0.f;
+			NGrid.ForNeighbors(Pos[i], R, [&](int32 j) { const float D2 = (Pos[j] - Pos[i]).SizeSquared(); if (D2 < R2) { S += 1.f - D2 / R2; } });
+			Wnn[i] = S;
+		});
+		TArray<float> Wv; Wv.SetNumUninitialized(NV);
+		TArray<int32> Nb; Nb.SetNumUninitialized(NV * 6);
+		static const int32 Dir6[6][3] = { {1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1} };
+		ParallelFor(NV, [&](int32 v)
+		{
+			// 셰퍼드 보간 (커널 (1 − d²/r²)³)
+			const FVector3f X = Out.Vertices[v];
+			float Sw = 0.f, Swn = 0.f;
+			NGrid.ForNeighbors(X, R, [&](int32 j) { const float D2 = (Pos[j] - X).SizeSquared(); if (D2 < R2) { const float T = 1.f - D2 / R2; const float K = T * T * T; Sw += K; Swn += K * Wnn[j]; } });
+			const float Xn = Sw > 0.f ? FMath::Clamp(Swn / Sw / P.SmoothNorm, 0.f, 1.f) : 0.f;
+			Wv[v] = Xn * Xn * Xn * (Xn * (Xn * 6.f - 15.f) + 10.f);
+			int32 x, y, z; Unpack(VertPt[v], x, y, z);
+			for (int32 k = 0; k < 6; ++k) { Nb[v * 6 + k] = VertAt(x + Dir6[k][0], y + Dir6[k][1], z + Dir6[k][2]); }
+		});
+		TArray<FVector3f> A = Out.Vertices, B; B.SetNumUninitialized(NV);
+		for (int32 It = 0; It < P.SmoothIters; ++It)
+		{
+			ParallelFor(NV, [&](int32 v)
+			{
+				FVector3f Sum(0.f); int32 Cnt = 0;
+				for (int32 k = 0; k < 6; ++k) { const int32 u = Nb[v * 6 + k]; if (u != INDEX_NONE) { Sum += A[u]; ++Cnt; } }
+				B[v] = Cnt > 0 ? A[v] + Wv[v] * (Sum / (float)Cnt - A[v]) : A[v];
+			});
+			Swap(A, B);
+		}
+		Out.Vertices = MoveTemp(A);
+		Out.MsSmooth = (FPlatformTime::Seconds() - Ts0) * 1000.0;
+	}
 	// 법선 = −∇f (중앙 차분, 셀 모서리 기울기 평균)
 	Out.Normals.SetNumZeroed(Out.Vertices.Num());
 	auto Fat = [&](int32 x, int32 y, int32 z) -> float

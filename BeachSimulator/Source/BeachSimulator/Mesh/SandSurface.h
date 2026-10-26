@@ -38,6 +38,12 @@ struct FSandSurfaceParams
 	int32 Block     = 32;      // 장 뿌리기 부분 영역 한 변 (격자점). 영역마다 스레드 하나가 지역 조밀 배열에 뿌린다 — 원자 연산 없음 (splashsurf, C14). 0 = 입자별 원자 뿌리기 (#3)
 	int32 Simd      = 8;       // 부분 영역 뿌리기 줄 루프 폭: 8 = AVX (CPU 가 지원하면), 4 = SSE, 0 = 스칼라 (단계 C)
 	bool  bBandOnly = true;
+	// 가중 라플라시안 평활화 (Löschner 2023 / splashsurf, papers C13). 0 = 끔
+	//   입자 wnn_i = Σ(1 − d²/r²) (r = r_i) → 정점으로 셰퍼드 보간 → x = clamp(wnn/Norm, 0, 1), w = smoothstep(x)
+	//   v ← (1 − w)·v + w·mean(이웃 정점), 이웃 = 면을 맞댄 셀 6 개의 정점 (Surface Nets 의 사각형 모서리와 같다)
+	//   고립 입자 · 얇은 곳은 wnn 이 작아 w ≈ 0 → 덩어리로 남는다
+	int32 SmoothIters = 0;
+	float SmoothNorm  = 13.f;
 	FVector3f GridOriginOverride = FVector3f::ZeroVector;   // GridDimsOverride.X > 0 이면 장 격자를 이것으로 (G3: 시뮬 영역 고정 격자와 같게)
 	FIntVector GridDimsOverride = FIntVector(0);    // 표면 입자 주변 격자점만 (Akinci). false 면 입자 영향권 전부
 };
@@ -74,6 +80,7 @@ struct FSandSurfaceMesh
 	float Ks = 0.f, Iso = 0.f, InteriorPhi = 0.f;
 	double MsSplatLists = 0.0; int64 SplatEvals = 0; int32 NumBlocks = 0, NumGridPoints = 0, SimdWidth = 0;
 	double MsFieldBand = 0.0, MsFieldIso = 0.0, MsFieldFilter = 0.0;   // 장 안쪽: 띠 표시 · 등위값 · 뿌릴 입자 거르기 (나머지 = 뿌리기)
+	double MsSmooth = 0.0;
 	double MsNeighbors = 0.0, MsKernels = 0.0, MsField = 0.0, MsMesh = 0.0, MsTotal = 0.0;
 
 	/** 닫힌 메시 부피 (발산 정리). 열린 경계가 있으면 근사 */

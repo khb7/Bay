@@ -102,6 +102,18 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandMeshParams, )
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, IndexRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, DrawArgsRW)
 	SHADER_PARAMETER(uint32, bRenderOut)
+	SHADER_PARAMETER(uint32, SmoothIters)
+	SHADER_PARAMETER(float, SmoothNorm)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, WnnRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, WnnRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, VertPtRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, VertPtRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, VertWRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, VertWRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<int>, VertNbRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<int>, VertNbRO)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, SmoothSrc)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, SmoothDst)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, RPosRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, RTanRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, RIdxRW)
@@ -149,6 +161,10 @@ SAND_MESH_SHADER(FSandMeshFaceCountCS,    "FaceCountCS")
 SAND_MESH_SHADER(FSandMeshFaceWriteCS,    "FaceWriteCS")
 SAND_MESH_SHADER(FSandMeshMeshArgsCS,     "MeshArgsCS")
 SAND_MESH_SHADER(FSandMeshIndexTailCS,    "IndexTailCS")
+SAND_MESH_SHADER(FSandMeshWnnCS,          "WnnCS")
+SAND_MESH_SHADER(FSandMeshVertWeightCS,   "VertWeightCS")
+SAND_MESH_SHADER(FSandMeshSmoothCS,       "SmoothCS")
+SAND_MESH_SHADER(FSandMeshVertFinalCS,    "VertFinalCS")
 
 #undef SAND_MESH_SHADER
 
@@ -452,6 +468,9 @@ namespace
 			TB.VertexRW = GraphBuilder.CreateUAV(VertexB);
 			TB.NormalRW = GraphBuilder.CreateUAV(NormalB);
 			TB.IndexRW = GraphBuilder.CreateUAV(IndexB);
+			FRDGBufferRef VertPtB = MeshBuffer(GraphBuilder, TEXT("SandMesh.VertPt"), sizeof(uint32), MaxVerts);
+			TB.VertPtRW = GraphBuilder.CreateUAV(VertPtB);
+			TB.VertPtRO = GraphBuilder.CreateSRV(VertPtB);
 			TB.DrawArgsRW = GraphBuilder.CreateUAV(DrawArgs, PF_R32_UINT);
 			AddMeshGroupPass<FSandMeshVertCountCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshVertCount"), ShaderMap, TB, BD);
 			AddMeshScan(GraphBuilder, ShaderMap, TB, BlockVCnt, BlockVSt, NumBlocks);
@@ -461,6 +480,45 @@ namespace
 			AddMeshGroupPass<FSandMeshFaceWriteCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshFaceWrite"), ShaderMap, TB, BD);
 			AddMeshPass<FSandMeshMeshArgsCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshArgs"), ShaderMap, TB, 1, 1);
 			if (RenderOut) { AddMeshPass<FSandMeshIndexTailCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshIndexTail"), ShaderMap, TB, MaxIndices, 64); }
+
+			// ── 가중 라플라시안 평활화 (papers C13) · 최종 정점 → 화면 버퍼 ──
+			{
+				FSandMeshParams TS = TB;
+				TS.SmoothIters = P.SmoothIters;
+				TS.SmoothNorm = P.SmoothNorm;
+				// 이웃 격자 (G1-1) 로 다시 묶는다 — TB 는 커널 격자를 안 쓰므로 T 의 격자가 그대로다
+				FRDGBufferRef Tmp = MeshBuffer(GraphBuilder, TEXT("SandMesh.SmoothTmp"), sizeof(FVector4f), MaxVerts);
+				if (P.SmoothIters > 0)
+				{
+					FRDGBufferRef Wnn   = MeshBuffer(GraphBuilder, TEXT("SandMesh.Wnn"), sizeof(float), N);
+					FRDGBufferRef VertW = MeshBuffer(GraphBuilder, TEXT("SandMesh.VertW"), sizeof(float), MaxVerts);
+					FRDGBufferRef VertNb = MeshBuffer(GraphBuilder, TEXT("SandMesh.VertNb"), sizeof(int32), 6 * MaxVerts);
+					TS.WnnRW = GraphBuilder.CreateUAV(Wnn); TS.WnnRO = GraphBuilder.CreateSRV(Wnn);
+					TS.VertWRW = GraphBuilder.CreateUAV(VertW); TS.VertWRO = GraphBuilder.CreateSRV(VertW);
+					TS.VertNbRW = GraphBuilder.CreateUAV(VertNb); TS.VertNbRO = GraphBuilder.CreateSRV(VertNb);
+					TS.SmoothSrc = GraphBuilder.CreateSRV(VertexB);
+					AddMeshPass<FSandMeshWnnCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshWnn"), ShaderMap, TS, N, 64);
+					AddMeshPass<FSandMeshVertWeightCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshVertWeight"), ShaderMap, TS, MaxVerts, 64);
+					FRDGBufferRef Src = VertexB, Dst = Tmp;
+					for (int32 It = 0; It < P.SmoothIters; ++It)
+					{
+						TS.SmoothSrc = GraphBuilder.CreateSRV(Src);
+						TS.SmoothDst = GraphBuilder.CreateUAV(Dst);
+						AddMeshPass<FSandMeshSmoothCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshSmooth"), ShaderMap, TS, MaxVerts, 64);
+						Swap(Src, Dst);
+					}
+					// 결과(Src) → VertexB · 화면 버퍼
+					TS.SmoothSrc = GraphBuilder.CreateSRV(Src);
+					TS.SmoothDst = GraphBuilder.CreateUAV(Src == VertexB ? Tmp : VertexB);
+					AddMeshPass<FSandMeshVertFinalCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshVertFinal"), ShaderMap, TS, MaxVerts, 64);
+				}
+				else
+				{
+					TS.SmoothSrc = GraphBuilder.CreateSRV(VertexB);
+					TS.SmoothDst = GraphBuilder.CreateUAV(Tmp);
+					AddMeshPass<FSandMeshVertFinalCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshVertFinal"), ShaderMap, TS, MaxVerts, 64);
+				}
+			}
 			Stamp(4);
 			if (RenderOut)
 			{

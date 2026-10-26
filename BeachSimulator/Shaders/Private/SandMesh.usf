@@ -499,6 +499,19 @@ RWStructuredBuffer<uint>   IndexRW;
 RWBuffer<uint>             DrawArgsRW;       // {색인 수, 1, 0, 0, 0} — G2 간접 그리기
 // G2 화면 출력 — FLocalVertexFactory 가 그대로 읽는 형식 (bRenderOut 일 때만)
 uint  bRenderOut;
+// 가중 라플라시안 평활화 (papers C13 · CPU SandSurface.cpp 와 같은 규칙)
+uint  SmoothIters;
+float SmoothNorm;
+RWStructuredBuffer<float>  WnnRW;            // 입자별 Σ(1 − d²/r²)
+StructuredBuffer<float>    WnnRO;
+RWStructuredBuffer<uint>   VertPtRW;         // 정점 → 셀 꼭짓점 0 의 점 색인
+StructuredBuffer<uint>     VertPtRO;
+RWStructuredBuffer<float>  VertWRW;          // 정점 가중 w
+StructuredBuffer<float>    VertWRO;
+RWStructuredBuffer<int>    VertNbRW;         // 정점당 6 이웃 (−1 없음)
+StructuredBuffer<int>      VertNbRO;
+StructuredBuffer<float4>   SmoothSrc;
+RWStructuredBuffer<float4> SmoothDst;
 RWBuffer<float>            RPosRW;           // 정점당 3 (float3 스트림)
 RWBuffer<uint>             RTanRW;           // 정점당 2: TangentX · TangentZ (FPackedNormal, 부호 있는 8 비트 × 4)
 RWBuffer<uint>             RIdxRW;           // 32 비트 색인 버퍼
@@ -731,7 +744,7 @@ void VertWriteCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI 
 	CellVertRW[I] = Vi;
 	if (Vi >= MaxVerts) { return; }
 	VertexRW[Vi] = float4(Vp, 0.f);
-	if (bRenderOut) { RPosRW[Vi * 3 + 0] = Vp.x; RPosRW[Vi * 3 + 1] = Vp.y; RPosRW[Vi * 3 + 2] = Vp.z; }
+	VertPtRW[Vi] = I;
 	float3 G = 0.f;
 	for (uint c = 0; c < 8; ++c)
 	{
@@ -850,4 +863,72 @@ void IndexTailCS(uint3 Tid : SV_DispatchThreadID)
 	if (i >= MaxIndices) { return; }
 	const uint NumBlocks = BD.x * BD.y * BD.z;
 	if (i >= BlockTStart[NumBlocks]) { RIdxRW[i] = 0u; }
+}
+
+// ---- 가중 라플라시안 평활화 (Löschner 2023 / splashsurf, papers C13) ----
+
+// 입자 wnn — 이웃 격자 (셀 = r_i) 를 돈다
+[numthreads(64, 1, 1)]
+void WnnCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x;
+	if (i >= NumParticles) { return; }
+	const float3 Xi = PosRO[i].xyz;
+	const float R2 = NeighborR * NeighborR;
+	float S = 0.f;
+	FOR_NEIGHBORS_ALL(Xi,
+	{
+		const float D2 = dot(PosRO[j].xyz - Xi, PosRO[j].xyz - Xi);
+		if (D2 < R2) { S += 1.f - D2 / R2; }
+	})
+	WnnRW[i] = S;
+}
+
+// 정점 가중: 셰퍼드 보간 → smoothstep, 그리고 면을 맞댄 셀 6 개의 정점
+[numthreads(64, 1, 1)]
+void VertWeightCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint v = Tid.x;
+	if (v >= min(CountersRO[3], MaxVerts)) { return; }
+	const float3 X = SmoothSrc[v].xyz;   // 평활화 전 정점 (VertexB 를 SRV 로)
+	const float R2 = NeighborR * NeighborR;
+	float Sw = 0.f, Swn = 0.f;
+	FOR_NEIGHBORS_ALL(X,
+	{
+		const float D2 = dot(PosRO[j].xyz - X, PosRO[j].xyz - X);
+		if (D2 < R2) { const float T = 1.f - D2 / R2; const float K = T * T * T; Sw += K; Swn += K * WnnRO[j]; }
+	})
+	const float Xn = Sw > 0.f ? clamp(Swn / Sw / SmoothNorm, 0.f, 1.f) : 0.f;
+	VertWRW[v] = Xn * Xn * Xn * (Xn * (Xn * 6.f - 15.f) + 10.f);
+	const uint I = VertPtRO[v];
+	const int3 P = int3(I % GD.x, (I / GD.x) % GD.y, I / (GD.x * GD.y));
+	const int3 D6[6] = { int3(1,0,0), int3(-1,0,0), int3(0,1,0), int3(0,-1,0), int3(0,0,1), int3(0,0,-1) };
+	for (uint k = 0; k < 6; ++k)
+	{
+		const uint U = VertAt(P + D6[k]);
+		VertNbRW[v * 6 + k] = U == INVALID_V ? -1 : (int)U;
+	}
+}
+
+// 한 번 반복: Dst = Src + w·(mean(이웃) − Src)
+[numthreads(64, 1, 1)]
+void SmoothCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint v = Tid.x;
+	if (v >= min(CountersRO[3], MaxVerts)) { return; }
+	const float3 A = SmoothSrc[v].xyz;
+	float3 Sum = 0.f; float Cnt = 0.f;
+	for (uint k = 0; k < 6; ++k) { const int U = VertNbRO[v * 6 + k]; if (U >= 0) { Sum += SmoothSrc[U].xyz; Cnt += 1.f; } }
+	SmoothDst[v] = float4(Cnt > 0.f ? A + VertWRO[v] * (Sum / Cnt - A) : A, 0.f);
+}
+
+// 최종 위치 → 화면 정점 버퍼 (평활화 여부와 무관하게 마지막에)
+[numthreads(64, 1, 1)]
+void VertFinalCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint v = Tid.x;
+	if (v >= min(CountersRO[3], MaxVerts)) { return; }
+	const float3 X = SmoothSrc[v].xyz;
+	if (bRenderOut) { RPosRW[v * 3 + 0] = X.x; RPosRW[v * 3 + 1] = X.y; RPosRW[v * 3 + 2] = X.z; }
+	SmoothDst[v] = float4(X, 0.f);
 }

@@ -749,6 +749,8 @@ namespace
 		FParse::Value(*Params, TEXT("surfdev="), Base.SurfDev);
 		FParse::Value(*Params, TEXT("block="), Base.Block);
 		FParse::Value(*Params, TEXT("simd="), Base.Simd);
+		FParse::Value(*Params, TEXT("smooth="), Base.SmoothIters);
+		FParse::Value(*Params, TEXT("smoothnorm="), Base.SmoothNorm);
 		const bool bDevDump = FParse::Param(*Params, TEXT("devdump"));
 		if (FParse::Param(*Params, TEXT("meshframe")) && SandGpu::IsAvailable())
 		{
@@ -791,7 +793,7 @@ namespace
 			FSandGpuMeshParams GP; GP.NeighborR = Pp.NeighborR; GP.Lambda = Pp.Lambda;
 			GP.Radius = Pp.Radius; GP.H = Pp.H; GP.Kr = Pp.Kr; GP.Kn = Pp.Kn; GP.Ks = Pp.Ks; GP.MinSigma = Pp.MinSigma;
 			GP.MaxStretch = Pp.MaxStretch; GP.IsoFrac = Pp.IsoFrac; GP.NEps = Pp.NEps; GP.KnRamp = Pp.KnRamp;
-			GP.BandNEps = Pp.BandNEps; GP.SurfDev = Pp.SurfDev; GP.BandR = Pp.BandR; GP.Cell = Pp.Cell;
+			GP.BandNEps = Pp.BandNEps; GP.SurfDev = Pp.SurfDev; GP.BandR = Pp.BandR; GP.Cell = Pp.Cell; GP.SmoothIters = Pp.SmoothIters; GP.SmoothNorm = Pp.SmoothNorm;
 			GP.GridOrigin = Pp.GridOriginOverride; GP.GridDims = Pp.GridDimsOverride;
 			UE_LOG(LogSpikeSweep, Display, TEXT("G3 — 장면 %s · 입자 %d · 정지 상자 %s · 영역 격자 %d×%d×%d · 벽 치움 후 %d 프레임"), *SceneKind, Sim.GetPositions().Num(), *Box.ToString(), GP.GridDims.X, GP.GridDims.Y, GP.GridDims.Z, Frames);
 			Sim.ReleaseWalls();
@@ -858,6 +860,22 @@ namespace
 			{
 				Pos.Add(FVector3f(0, 0, 0));
 				for (int32 a = 0; a < 3; ++a) for (int32 s = -1; s <= 1; s += 2) { FVector3f V(0.f); V[a] = s * D; Pos.Add(V); }
+			}
+			else if (Scene.StartsWith(TEXT("pour")))
+			{
+				// 상자에 무작위로 부어 다진 블록 ("pour3000" 처럼 수 지정) — 벽 치우고 Frames 뒤 (기본 150) 무너진 둔덕
+				FSandParams SP;
+				SP.Substeps = 1; SP.WarmStart = 1.f; SP.WarmGapTol = 0.05f; SP.bGpuResident = true;
+				ApplyGpuProfile(TEXT("-gpu2"), SP);
+				SP.bGatherApply = false; SP.bMassSplit = false;
+				const int32 Cnt = Scene.Len() > 4 ? FCString::Atoi(*Scene.Mid(4)) : 3000;
+				FSandSpike Sim;
+				SpikeBatch::PourBoxBlock(Sim, SP, Cnt, 38.f);
+				for (int32 f = 0; f < 300; ++f) { Sim.Step(1.f / 60.f); }
+				int32 After = 150; FParse::Value(*Params, TEXT("pourafter="), After);
+				Sim.ReleaseWalls();
+				for (int32 f = 0; f < After; ++f) { Sim.Step(1.f / 60.f); }
+				Pos = Sim.GetPositions();
 			}
 			else if (Scene.StartsWith(TEXT("column")))
 			{
@@ -938,7 +956,7 @@ namespace
 				{
 					// G1 대조 (m1-plan-gpu.md §1-5): 기본은 핵심값, -meshdiff 면 입자별 최대 오차
 					FSandGpuMeshParams GP; GP.NeighborR = Pp.NeighborR; GP.Lambda = Pp.Lambda;
-					GP.BandNEps = Pp.BandNEps; GP.SurfDev = Pp.SurfDev; GP.BandR = Pp.BandR; GP.Cell = Pp.Cell;
+					GP.BandNEps = Pp.BandNEps; GP.SurfDev = Pp.SurfDev; GP.BandR = Pp.BandR; GP.Cell = Pp.Cell; GP.SmoothIters = Pp.SmoothIters; GP.SmoothNorm = Pp.SmoothNorm;
 					GP.GridOrigin = M.GridOrigin; GP.GridDims = M.GridDims;
 					GP.Radius = Pp.Radius; GP.H = Pp.H; GP.Kr = Pp.Kr; GP.Kn = Pp.Kn; GP.Ks = Pp.Ks; GP.MinSigma = Pp.MinSigma;
 					GP.MaxStretch = Pp.MaxStretch; GP.IsoFrac = Pp.IsoFrac; GP.NEps = Pp.NEps; GP.KnRamp = Pp.KnRamp;

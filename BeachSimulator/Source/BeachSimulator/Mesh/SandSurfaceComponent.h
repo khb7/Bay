@@ -35,6 +35,7 @@ public:
 	// 메시 매개변수 — M1 품질 기준 (이방성 · KnRamp 8 · IsoFrac 0.25 · 셀 1.25 · 띠 7.5 · SurfDev 0.15)
 	float Cell = 1.25f, IsoFrac = 0.25f, BandR = 7.5f, SurfDev = 0.15f;
 	int32 KnRamp = 8;
+	int32 SmoothIters = 25;   // 가중 라플라시안 평활화 (m1-log #17, splashsurf 기본과 같음)
 
 	//~ UPrimitiveComponent
 	virtual FPrimitiveSceneProxy* CreateSceneProxy() override;

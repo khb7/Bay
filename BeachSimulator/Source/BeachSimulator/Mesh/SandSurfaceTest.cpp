@@ -142,6 +142,7 @@ void USandSurfaceTestSubsystem::StartSim(UWorld& World)
 	Actor->SetRootComponent(SimComp);
 	SimComp->RegisterComponent();
 	Actor->SetActorLocation(Offset);
+	FParse::Value(FCommandLine::Get(), TEXT("sandsmooth="), SimComp->SmoothIters);   // 평활화 반복 비교용
 	SimComp->SetSimSource(Sim->GetGpuSim(), DMin, DMax);
 
 	if (ADirectionalLight* Sun = World.SpawnActor<ADirectionalLight>(FVector::ZeroVector, FRotator(-25.0, 120.0, 0.0)))

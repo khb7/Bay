@@ -18,6 +18,9 @@ struct FSandGpuMeshParams
 	float SurfDev = 0.15f, BandR = 7.5f, Cell = 1.25f;
 	FVector3f GridOrigin = FVector3f::ZeroVector;
 	FIntVector GridDims = FIntVector(0);
+	// 가중 라플라시안 평활화 (CPU FSandSurfaceParams 와 같다)
+	int32 SmoothIters = 0;
+	float SmoothNorm = 13.f;
 };
 
 /** 대조용 내려받기 — 입자 순서는 입력과 같다 */

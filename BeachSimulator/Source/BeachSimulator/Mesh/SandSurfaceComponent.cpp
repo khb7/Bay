@@ -200,7 +200,7 @@ FBoxSphereBounds USandSurfaceComponent::CalcBounds(const FTransform& LocalToWorl
 FSandGpuMeshParams USandSurfaceComponent::MakeParams() const
 {
 	FSandGpuMeshParams P;
-	P.Cell = Cell; P.IsoFrac = IsoFrac; P.BandR = BandR; P.SurfDev = SurfDev; P.KnRamp = KnRamp;
+	P.Cell = Cell; P.IsoFrac = IsoFrac; P.BandR = BandR; P.SurfDev = SurfDev; P.KnRamp = KnRamp; P.SmoothIters = SmoothIters;
 	FVector3f Lo = DomainMin, Hi = DomainMax;
 	if (!SimSource)
 	{
