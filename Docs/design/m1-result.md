@@ -44,6 +44,9 @@
 | 기둥 3천 (타일 1 채, 꽉 맞는 격자) | **0.8~1.0 ms** | 23~29 ms | #18 · #23 |
 | 부은 3천, 시뮬과 같은 프레임 (고정 영역) | **1.47 ms** (+ 시뮬 5.2 ms) | — | #23 |
 | 기둥 2만 | 2.7~3.0 ms | 104~123 ms | #18 · #23 |
+| 부은 2만 (타일 ~7 채), 시뮬과 같은 프레임 | 4.9 ms (+ 시뮬 8.9 ms) | — | #26 |
+
+⚠ 한 프로세스의 첫 한두 장면 GPU 시간은 부풀려진다 (#25).
 
 ## 4. 바뀐 · 새로 정한 것 (논문 그대로가 아닌 것)
 
@@ -57,7 +60,7 @@
 
 ## 5. 사용자 판정으로 남은 것
 
-1. **모양 · 질감 전반** — `img/m1-nrm-f270.png` (마름) · `img/m1-wet08-f270.png` (젖음 0.8). 시험: `UnrealEditor.exe BeachSimulator.uproject /Engine/Maps/Templates/Template_Default -game -sandsurfacetest -sandsim -sandscene=pour [-sandwet=0.8] [-sandsmooth=N]`
+1. **모양 · 질감 전반** — `img/m1-nrm-f270.png` (마름) · `img/m1-wet08-f270.png` (젖음 0.8) · `img/m1-big20k-f270.png` (2만 입자 큰 둔덕). 큰 장면: `-sandcount=20000 -sandboxhalf=80`. 시험: `UnrealEditor.exe BeachSimulator.uproject /Engine/Maps/Templates/Template_Default -game -sandsurfacetest -sandsim -sandscene=pour [-sandwet=0.8] [-sandsmooth=N]`
 2. 평활화 25 회의 대가 — 작은 뭉치(3~7 입자) 부피 −21%. 10 회면 −10% 지만 둔덕 혹이 남는다 (`img/m1-smooth0/10/25-f270.png`).
 3. 젖은 모래 거칠기 0.2 (papers L-3 ① 값) — 다소 반들거려 보일 수 있다.
 4. 둔덕 가장자리의 물결 · 작은 돌기 — 바닥에 흩어진 알갱이를 알갱이로 남기는 가중 때문 (의도).

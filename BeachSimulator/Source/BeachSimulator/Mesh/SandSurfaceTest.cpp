@@ -136,7 +136,8 @@ void USandSurfaceTestSubsystem::StartSim(UWorld& World)
 	Sim = MakeUnique<FSandSpike>();
 	if (SceneKind == TEXT("pour"))
 	{
-		SpikeBatch::PourBoxBlock(*Sim, SP, Count, 38.f);
+		float BoxHalf = 38.f; FParse::Value(FCommandLine::Get(), TEXT("sandboxhalf="), BoxHalf);   // 큰 장면: -sandcount=20000 -sandboxhalf=80 (-sandbox= 는 엔진 파일 샌드박스 옵션이라 피함)
+		SpikeBatch::PourBoxBlock(*Sim, SP, Count, BoxHalf);
 		for (int32 f = 0; f < 300; ++f) { Sim->Step(1.f / 60.f); }
 	}
 	else
