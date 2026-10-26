@@ -1207,6 +1207,15 @@ void FSandSpike::SyncToGpu()
 	WarmLambda.Reset();
 }
 
+double FSandSpike::MeasureDownloadMs()
+{
+	if (!GpuSim) { return 0.0; }
+	bGpuStale = true;
+	const double T0 = FPlatformTime::Seconds();
+	SyncFromGpu();
+	return (FPlatformTime::Seconds() - T0) * 1000.0;
+}
+
 void FSandSpike::SyncFromGpu() const
 {
 	if (!bGpuStale || !GpuSim) { return; }
@@ -1320,6 +1329,7 @@ void FSandSpike::StepGpuResident(float Dt)
 	BondsBrokenTotal += S.BondsBroken;
 	LastBoundaryFrac = S.NumPairs > 0 ? (float)S.NumBoundary / S.NumPairs : 0.f;
 	LastAsleep = S.NumAsleep; LastAwakeBlocks = S.NumAwakeBlocks;
+	for (int32 k = 0; k < 4; ++k) { LastStage[k] = S.StageMs[k]; }
 	GpuMs = (float)S.GpuMs;
 	ApplyFrameStats(S.SumSpeed, S.MaxSpeed, S.FreeCount, S.SumLambda);
 	bGpuStale = true;

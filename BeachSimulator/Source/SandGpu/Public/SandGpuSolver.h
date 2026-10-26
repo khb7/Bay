@@ -119,6 +119,7 @@ struct FSandGpuStats
 	int32  PairOverflow = 0;          // > 0 이면 MaxPairs 초과 — 결과 무효
 	int32  MaxBatch = 0, SumBatch = 0, NumBatchBlocks = 0, BatchOverflow = 0;   // 단계 2 블록 안 배치 (접촉 있는 블록 기준)
 	int32  NumAwakeBlocks = 0, NumAsleep = 0;   // C안 — 풀이를 돈 블록 · 잠든 입자
+	float  StageMs[4] = {};          // 3-4 GPU 타임스탬프: [0] 이웃·쌍·깨우기 [1] 워밍·예측·배치 [2] 반복 [3] 파단·통계
 	double GpuMs = 0.0;               // 스텝 벽시계 (통계 리드백 포함)
 };
 

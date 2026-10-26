@@ -466,6 +466,10 @@ public:
 	/** C안 — 마지막 GPU 프레임의 잠든 입자 수 · 풀이를 돈 블록 수 */
 	int32 LastNumAsleep() const { return LastAsleep; }
 	int32 LastNumAwakeBlocks() const { return LastAwakeBlocks; }
+	/** 3-4 — 마지막 GPU 프레임의 단계별 ms (이웃 · 워밍예측 · 반복 · 마무리) */
+	float LastStageMs(int32 k) const { return LastStage[k]; }
+	/** 3-4 — GPU 상태 전량 내려받기를 강제로 한 번 하고 그 벽시계 ms (M1 위치 리드백 비용) */
+	double MeasureDownloadMs();
 	const TArray<float>& GetGpuLiveW() const { SyncFromGpu(); return GpuLiveW; }
 	const TArray<uint32>& GetGpuLiveSleep() const { SyncFromGpu(); return GpuLiveSleep; }
 	const TArray<float>& GetGroundLambda() const { SyncFromGpu(); return GroundLambdaN; }
@@ -496,6 +500,7 @@ private:
 	TArray<int64>     BlockId;          // ①-b 블록 모사용. 셀 좌표를 21비트씩 묶은 정확한 키
 	float LastBoundaryFrac = 0.f;
 	int32 LastAsleep = 0, LastAwakeBlocks = 0;
+	float LastStage[4] = {};
 	bool  bMarginGlobalMode = false;   // #53 잠든 비율이 높으면 입자별 여유를 끄고 전체 여유로 (이력 70% / 50%)
 	TArray<float> GpuLiveW;   // #50 진단 — 내려받은 Pos.w (잠듦 = 0)
 	TArray<uint32> GpuLiveSleep;   // 조사 계측 — 정지 카운터 · 표시 비트

@@ -575,6 +575,7 @@ struct FSandGpuSim::FState
 	FRHIGPUBufferReadback CountersRB{ TEXT("SandGpu.Counters") };
 	FRHIGPUBufferReadback FrameCountsRB{ TEXT("SandGpu.FrameCounts") };
 	FRHIGPUBufferReadback BatchStatsRB{ TEXT("SandGpu.BatchStats") };
+	FRenderQueryRHIRef StageTs[5];   // 3-4 단계별 GPU 타임스탬프 (이웃 · 워밍예측 · 반복 · 마무리 경계)
 	FRHIGPUBufferReadback DlPos{ TEXT("SandGpu.DlPos") }, DlVel{ TEXT("SandGpu.DlVel") }, DlPairIJ{ TEXT("SandGpu.DlPairIJ") },
 		DlLambda{ TEXT("SandGpu.DlLambda") }, DlBond{ TEXT("SandGpu.DlBond") }, DlGround{ TEXT("SandGpu.DlGround") }, DlWall{ TEXT("SandGpu.DlWall") }, DlSleep{ TEXT("SandGpu.DlSleep") };
 
@@ -734,8 +735,9 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 	uint32 Counters[4] = {};
 	uint32 FrameCounts[4] = {};
 	uint32 BatchStats[8] = {};
+	float StageMs[4] = {};
 
-	ENQUEUE_RENDER_COMMAND(SandGpuSimStep)([S, &P, LN, LB, LMax, TableSize, NumStatGroups, &Counters, &FrameCounts, &BatchStats](FRHICommandListImmediate& RHICmdList)
+	ENQUEUE_RENDER_COMMAND(SandGpuSimStep)([S, &P, LN, LB, LMax, TableSize, NumStatGroups, &Counters, &FrameCounts, &BatchStats, &StageMs](FRHICommandListImmediate& RHICmdList)
 	{
 		const int32 Cur = S->Cur, Old = 1 - S->Cur;
 		{
@@ -882,6 +884,16 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			F.StatsRW = GraphBuilder.CreateUAV(Stats);
 
 			// --- 이웃 탐색 · 쌍 생성 · 워밍 · 예측 ---
+			// 3-4 — 단계 경계 GPU 타임스탬프 (UE 5.8 은 옛 GPU 프로파일러가 없어 RHI 쿼리를 직접, papers C11)
+			const bool bStamps = GSupportsTimestampRenderQueries;
+			if (bStamps && !S->StageTs[0].IsValid()) { for (FRenderQueryRHIRef& Q : S->StageTs) { Q = RHICreateRenderQuery(RQT_AbsoluteTime); } }
+			auto Stamp = [&](int32 Idx)
+			{
+				if (!bStamps) { return; }
+				FRHIRenderQuery* Q = S->StageTs[Idx].GetReference();
+				GraphBuilder.AddPass(RDG_EVENT_NAME("SandStamp%d", Idx), ERDGPassFlags::NeverCull, [Q](FRHICommandListImmediate& Cmd) { Cmd.EndRenderQuery(Q); });
+			};
+			Stamp(0);
 			AddDirectPass<FSandCellKeyCS>(GraphBuilder, RDG_EVENT_NAME("SandCellKey"), ShaderMap, F, LN, 64);
 			AddScan(GraphBuilder, ShaderMap, F, CellCount, CellStart, TableSize);
 			AddDirectPass<FSandScatterCS>(GraphBuilder, RDG_EVENT_NAME("SandScatter"), ShaderMap, F, LN, 64);
@@ -905,6 +917,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			{
 				AddDirectPass<FSandBondWarmCS>(GraphBuilder, RDG_EVENT_NAME("SandBondWarm"), ShaderMap, F, LB, 64);
 			}
+			Stamp(1);
 			AddDirectPass<FSandWarmPredictCS>(GraphBuilder, RDG_EVENT_NAME("SandWarmPredict"), ShaderMap, F, LN, 64);
 
 			// --- 반복 ---
@@ -975,7 +988,9 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 				T.BatchStatsRW   = GraphBuilder.CreateUAV(BatchStatsBuf);
 				AddDirectPass<FSandColorBatchCS>(GraphBuilder, RDG_EVENT_NAME("SandColorBatch"), ShaderMap, T, BlockTableSize * 64, 64);
 			}
+			Stamp(2);
 			AddSolverIterations(GraphBuilder, ShaderMap, T, P.Iterations, LN, BlockTableSize, LB, P.bMassSplit, IndirectArgs, 0, P.bColor8, P.FrameIndex, bColor8Par);
+			Stamp(3);
 
 			// --- 파단 · 통계 ---
 			if (LB > 0)
@@ -984,6 +999,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			}
 			AddDirectPass<FSandStatsCS>(GraphBuilder, RDG_EVENT_NAME("SandStats"), ShaderMap, F, NumStatGroups * StatsGroup, StatsGroup);
 
+			Stamp(4);
 			AddEnqueueCopyPass(GraphBuilder, &S->StatsRB, Stats, NumStatGroups * sizeof(FVector4f));
 			AddEnqueueCopyPass(GraphBuilder, &S->CountersRB, CountersBuf, 4 * sizeof(uint32));
 			AddEnqueueCopyPass(GraphBuilder, &S->FrameCountsRB, FrameCountsBuf, 4 * sizeof(uint32));
@@ -995,6 +1011,13 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 		FetchReadback(S->CountersRB, Counters, 4 * sizeof(uint32));
 		FetchReadback(S->FrameCountsRB, FrameCounts, 4 * sizeof(uint32));
 		FetchReadback(S->BatchStatsRB, BatchStats, 8 * sizeof(uint32));
+		if (S->StageTs[0].IsValid())
+		{
+			uint64 Us[5] = {};
+			bool bOk = true;
+			for (int32 k = 0; k < 5; ++k) { bOk &= RHIGetRenderQueryResult(S->StageTs[k].GetReference(), Us[k], true); }
+			if (bOk) { for (int32 k = 0; k < 4; ++k) { StageMs[k] = (float)(Us[k + 1] - Us[k]) * 0.001f; } }
+		}
 		S->Cur = Old;
 		EndGpuFrame(RHICmdList);
 	});
@@ -1018,6 +1041,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 	Out.BatchOverflow   = (int32)BatchStats[3];
 	Out.NumAwakeBlocks  = (int32)BatchStats[4];
 	Out.NumAsleep       = (int32)Counters[3];
+	for (int32 k = 0; k < 4; ++k) { Out.StageMs[k] = StageMs[k]; }
 	LastNumPairs = Out.NumPairs;
 	Out.GpuMs = (FPlatformTime::Seconds() - T0) * 1000.0;
 }

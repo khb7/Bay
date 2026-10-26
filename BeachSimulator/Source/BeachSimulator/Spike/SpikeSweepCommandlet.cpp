@@ -801,6 +801,8 @@ namespace
 			Sim.InitTiltBox(P, S);
 			double Sum = 0.0, SumGpu = 0.0; float MinMs = FLT_MAX, MaxMs = 0.f; int32 Measured = 0;
 			double WinSum = 0.0; int32 WinN = 0;
+			const bool bStages = FParse::Param(*Params, TEXT("stages"));   // 3-4 단계별
+			double WinStage[4] = {};
 			for (int32 f = 0; f < Frames; ++f)
 			{
 				if (W > 0.f && f == BondFrame)
@@ -814,11 +816,23 @@ namespace
 				if (Window > 0)
 				{
 					WinSum += Sim.LastStepMs(); ++WinN;
+					for (int32 k = 0; k < 4; ++k) { WinStage[k] += Sim.LastStageMs(k); }
 					if (WinN == Window)
 					{
 						UE_LOG(LogSpikeSweep, Display, TEXT("   [창] %7d f%5d | %8.1f ms | 쌍/입자 %5.1f | 평균|v| %.3f | 잠듦 %4.1f%% · 깬 블록 %d"),
 							Sim.Num(), f + 1, WinSum / WinN, (float)Sim.GetContacts().Num() / FMath::Max(1, Sim.Num()), Sim.AvgSpeed(),
 							100.f * Sim.LastNumAsleep() / FMath::Max(1, Sim.Num()), Sim.LastNumAwakeBlocks());
+						if (bStages)
+						{
+							// 결과 읽기 — 위치 전량 내려받기 1회 (M1 이 위치를 가져오는 비용). GetPositions 는 상태가 낡았을 때만 내려받는다
+							const double DlMs = Sim.MeasureDownloadMs();
+							const double StSum = WinStage[0] + WinStage[1] + WinStage[2] + WinStage[3];
+							const double Inv = 1.0 / FMath::Max(1, Window);
+							UE_LOG(LogSpikeSweep, Display, TEXT("      [단계] 이웃·쌍 %.2f · 워밍·예측 %.2f · 반복 %.2f · 마무리 %.2f ms  (GPU 합 %.2f · 반복 %.0f%%) | 입자·스텝당 %.3f µs | 위치 전량 내려받기 %.2f ms"),
+								WinStage[0] * Inv, WinStage[1] * Inv, WinStage[2] * Inv, WinStage[3] * Inv, StSum * Inv, 100.0 * WinStage[2] / FMath::Max(1e-6, StSum),
+								1000.0 * StSum * Inv / FMath::Max(1, Sim.Num()), DlMs);
+						}
+						for (double& Ws : WinStage) { Ws = 0.0; }
 						WinSum = 0.0; WinN = 0;
 						if (bDiag) { LogBoilDiag(Sim, P.Radius); }
 					}
