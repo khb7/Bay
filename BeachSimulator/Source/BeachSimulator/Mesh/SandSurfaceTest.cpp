@@ -148,6 +148,16 @@ void USandSurfaceTestSubsystem::StartSim(UWorld& World)
 	}
 	FBox Box(ForceInit);
 	for (const FVector3f& X : Sim->GetPositions()) { Box += FVector(X); }
+	// M1 W2 — 입자별 W 보기: -sandwetmode=half 면 x 가 가운데보다 작은 쪽 젖음(-sandwetval, 기본 0.6) · 나머지 0.1
+	FString WetMode; FParse::Value(FCommandLine::Get(), TEXT("sandwetmode="), WetMode);
+	if (WetMode == TEXT("half"))
+	{
+		float WetVal = 0.6f; FParse::Value(FCommandLine::Get(), TEXT("sandwetval="), WetVal);
+		const float Cx = (float)Box.GetCenter().X;
+		Sim->SetWet([Cx, WetVal](int32, const FVector3f& X) { return X.X < Cx ? WetVal : 0.1f; });
+		double Sum = 0; for (float W : Sim->GetWet()) { Sum += W; }
+		UE_LOG(LogSandSurfaceTest, Display, TEXT("W2 입자별 W — half %.2f / 0.1 · 평균 %.3f"), WetVal, Sum / FMath::Max(1, Sim->GetWet().Num()));
+	}
 	const float Pad = 2.f * 5.f * 2.f + 1.25f;   // 지지(2h·MaxStretch) + 셀
 	const FVector3f DMin = FVector3f(Box.Min) - FVector3f(60.f, 60.f, 0.f) - FVector3f(Pad);
 	const FVector3f DMax = FVector3f(Box.Max) + FVector3f(60.f, 60.f, 10.f) + FVector3f(Pad);

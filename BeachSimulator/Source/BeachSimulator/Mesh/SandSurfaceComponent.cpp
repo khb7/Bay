@@ -48,6 +48,7 @@ namespace
 			PositionVB.ReleaseResource();
 			TangentVB.ReleaseResource();
 			TexCoordVB.ReleaseResource();
+			ColorVB.ReleaseResource();
 			IndexIB.ReleaseResource();
 		}
 
@@ -139,10 +140,11 @@ namespace
 		void InitVertexFactory(FRHICommandListBase& RHICmdList)
 		{
 			VertexFactory.ReleaseResource();
-			PositionVB.ReleaseResource(); TangentVB.ReleaseResource(); TexCoordVB.ReleaseResource(); IndexIB.ReleaseResource();
+			PositionVB.ReleaseResource(); TangentVB.ReleaseResource(); TexCoordVB.ReleaseResource(); ColorVB.ReleaseResource(); IndexIB.ReleaseResource();
 			PositionVB.Set(Buffers.Position->GetRHI()); PositionVB.InitResource(RHICmdList);
 			TangentVB.Set(Buffers.Tangent->GetRHI());   TangentVB.InitResource(RHICmdList);
 			TexCoordVB.Set(Buffers.TexCoord->GetRHI()); TexCoordVB.InitResource(RHICmdList);
+			ColorVB.Set(Buffers.Color->GetRHI());       ColorVB.InitResource(RHICmdList);
 			IndexIB.Set(Buffers.Index->GetRHI());       IndexIB.InitResource(RHICmdList);
 
 			FLocalVertexFactory::FDataType Data;
@@ -155,14 +157,16 @@ namespace
 			Data.PositionComponentSRV = Buffers.Position->GetOrCreateSRV(RHICmdList, FRHIBufferSRVCreateInfo(PF_R32_FLOAT));
 			Data.TangentsSRV = Buffers.Tangent->GetOrCreateSRV(RHICmdList, FRHIBufferSRVCreateInfo(PF_R8G8B8A8_SNORM));
 			Data.TextureCoordinatesSRV = Buffers.TexCoord->GetOrCreateSRV(RHICmdList, FRHIBufferSRVCreateInfo(PF_G32R32F));
-			Data.ColorComponentsSRV = GNullColorVertexBuffer.VertexBufferSRV;
-			Data.ColorIndexMask = 0;
+			// 정점 색 = 정점 W (W2). 재질이 VertexColor.R 을 Wet 에 더한다
+			Data.ColorComponent = FVertexStreamComponent(&ColorVB, 0, sizeof(FColor), VET_Color, EVertexStreamUsage::ManualFetch);
+			Data.ColorComponentsSRV = Buffers.Color->GetOrCreateSRV(RHICmdList, FRHIBufferSRVCreateInfo(PF_R8G8B8A8));
+			Data.ColorIndexMask = ~0u;
 			VertexFactory.SetData(RHICmdList, Data);
 			VertexFactory.InitResource(RHICmdList);
 		}
 
 		FLocalVertexFactory VertexFactory;
-		FSandExternalVB PositionVB, TangentVB, TexCoordVB;
+		FSandExternalVB PositionVB, TangentVB, TexCoordVB, ColorVB;
 		FSandExternalIB IndexIB;
 		FSandGpuMeshRenderBuffers Buffers;
 		UMaterialInterface* Material = nullptr;

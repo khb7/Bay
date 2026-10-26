@@ -148,6 +148,7 @@ void FSandSpike::SpawnPourBase()
 	const float J = Pour.BaseJitter * R2;
 	Pos.Reset();
 	InvMass.Reset();
+	Wet.Reset();
 	for (int32 iz = 0; iz < FMath::Max(1, Pour.BaseLayers); ++iz)
 	{
 		for (int32 iy = -Lat; iy <= Lat; ++iy)
@@ -176,6 +177,7 @@ void FSandSpike::InitCustom(const FSandParams& InParams, const TArray<FVector3f>
 
 	Pos = InPos;
 	InvMass = InInvMass;
+	Wet.Reset();
 	Vel.SetNumZeroed(Pos.Num());
 	PrevPos = Pos;
 	Bonds.Reset();
@@ -359,6 +361,14 @@ void FSandSpike::BreakBonds()
 	}
 }
 
+void FSandSpike::SetWet(TFunctionRef<float(int32, const FVector3f&)> Fn)
+{
+	SyncFromGpu();
+	EnsureWet();
+	for (int32 i = 0; i < Pos.Num(); ++i) { Wet[i] = Fn(i, Pos[i]); }
+	bGpuDirty = true;   // 입자는 그대로라 쌍 목록(워밍)은 건드리지 않는다
+}
+
 int32 FSandSpike::RemoveParticles(TFunctionRef<bool(int32)> ShouldRemove)
 {
 	SyncFromGpu();
@@ -381,7 +391,8 @@ int32 FSandSpike::RemoveParticles(TFunctionRef<bool(int32)> ShouldRemove)
 		for (int32 i = 0; i < Arr.Num(); ++i) { if (NewIndex[i] >= 0) { Arr[w++] = Arr[i]; } }
 		Arr.SetNum(w);
 	};
-	Compact(Pos); Compact(Vel); Compact(PrevPos); Compact(InvMass);
+	EnsureWet();
+	Compact(Pos); Compact(Vel); Compact(PrevPos); Compact(InvMass); Compact(Wet);
 	Compact(GroundLambdaN); Compact(GroundLambdaT); Compact(WallLambda);
 
 	for (int32 b = Bonds.Num() - 1; b >= 0; --b)
@@ -434,6 +445,7 @@ void FSandSpike::SpawnTiltBox()
 
 	Pos.Reset();
 	InvMass.Reset();
+	Wet.Reset();
 
 	// 고정층(거친 바닥) — 간격 D 로 상자를 덮는다. 겹침은 고정이라 무해. 인덱스 앞쪽에 모은다
 	const int32 BaseN = FMath::CeilToInt(Side * SF / S);
@@ -503,6 +515,7 @@ void FSandSpike::SpawnColumn()
 
 	Pos.Reset();
 	InvMass.Reset();
+	Wet.Reset();
 	for (int32 iz = 0; iz < FMath::CeilToInt((H - R2) / S); ++iz)
 	{
 		// 바닥 몇 층은 고정해 거칠게 만든다. 매끄러운 지면 위에서는 밑동이 미끄러져 각이 낮아진다
@@ -1197,6 +1210,8 @@ void FSandSpike::SyncToGpu()
 	}
 	U.GroundLambda = GroundLambdaN;
 	U.WallLambda   = WallLambda;
+	EnsureWet();
+	U.Wet          = Wet;
 	BuildBondUpload(U.BondIJ, U.BondData, U.BondAdjOffset, U.BondAdj);
 	GpuSim->Upload(U, bGpuPairsValid);
 	GpuBondsUploaded = Bonds;

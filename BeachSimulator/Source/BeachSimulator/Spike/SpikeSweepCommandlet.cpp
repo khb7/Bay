@@ -798,6 +798,13 @@ namespace
 			GP.GridOrigin = Pp.GridOriginOverride; GP.GridDims = Pp.GridDimsOverride;
 			UE_LOG(LogSpikeSweep, Display, TEXT("G3 — 장면 %s · 입자 %d · 정지 상자 %s · 영역 격자 %d×%d×%d · 벽 치움 후 %d 프레임"), *SceneKind, Sim.GetPositions().Num(), *Box.ToString(), GP.GridDims.X, GP.GridDims.Y, GP.GridDims.Z, Frames);
 			Sim.ReleaseWalls();
+			// M1 W2 — 입자별 W: -wetmode=half 면 x 가 가운데보다 작은 쪽 0.6 · 나머지 0.1 (부어 쌓은 뒤 고정 — 입자를 따라가는지)
+			FString WetMode; FParse::Value(*Params, TEXT("wetmode="), WetMode);
+			if (WetMode == TEXT("half"))
+			{
+				const float Cx = Box.GetCenter().X;
+				Sim.SetWet([Cx](int32, const FVector3f& X) { return X.X < Cx ? 0.6f : 0.1f; });
+			}
 			double SumSim = 0, SumMesh = 0, MaxSim = 0, MaxMesh = 0; int32 Cnt = 0, Matches = 0, Checks = 0;
 			for (int32 f = 1; f <= Frames; ++f)
 			{
@@ -812,8 +819,21 @@ namespace
 				{
 					// 같은 프레임 확인: 지금 시뮬 위치를 내려받아 CPU 로 같은 격자에 메시 → GPU 메시와 정점 · 삼각형 수 비교
 					FSandSurfaceMesh M;
-					FSandSurfaceBuilder::Build(Sim.GetPositions(), Pp, M);
+					FSandSurfaceBuilder::Build(Sim.GetPositions(), Pp, M, WetMode.IsEmpty() ? TArray<float>() : Sim.GetWet());
 					const bool bSame = M.Vertices.Num() == G.NumVertsTotal && M.Triangles.Num() == G.NumIndicesTotal;
+					if (!WetMode.IsEmpty())
+					{
+						// 정점 W 핵심값 — 정점 번호 순서가 CPU · GPU 에서 달라 합 · 최소 · 최대 · 젖은 정점 수로 본다
+						auto Stat = [](const TArray<float>& A, double& Sum, float& Mn, float& Mx, int32& Hi)
+						{
+							Sum = 0; Mn = 1e9f; Mx = -1e9f; Hi = 0;
+							for (float W : A) { Sum += W; Mn = FMath::Min(Mn, W); Mx = FMath::Max(Mx, W); Hi += W > 0.35f ? 1 : 0; }
+						};
+						double Sc, Sg; float Mnc, Mxc, Mng, Mxg; int32 Hc, Hg;
+						Stat(M.VertexWet, Sc, Mnc, Mxc, Hc); Stat(G.VertexWet, Sg, Mng, Mxg, Hg);
+						UE_LOG(LogSpikeSweep, Display, TEXT("   f %3d: 정점 W 합 CPU %.3f / GPU %.3f (상대 %.1e) · 범위 [%.3f %.3f] / [%.3f %.3f] · 젖은 정점(>0.35) %d / %d"),
+							f, Sc, Sg, FMath::Abs(Sc - Sg) / FMath::Max(1e-9, Sc), Mnc, Mxc, Mng, Mxg, Hc, Hg);
+					}
 					Matches += bSame ? 1 : 0; ++Checks;
 					float VMax = 0.f; for (const FVector3f& X : Sim.GetPositions()) { VMax = FMath::Max(VMax, X.Z); }
 					// 기둥 지표: 바닥에서 15cm 위인데 이웃(10cm 안)이 6 개 이하 — 한 줄로 선 입자 (덩어리 표면은 15~25)

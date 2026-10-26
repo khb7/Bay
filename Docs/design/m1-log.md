@@ -499,3 +499,21 @@ G3 의 고정 영역 격자는 조밀 배열이라 띠 · 장 · 셀 정점 세 
 
 화면 `-sandsim -sandscene=pour -sandcount=20000 -sandboxhalf=80` (`img/m1-big20k-f125.png` · `m1-big20k-f270.png`). 그리는 삼각형 23만 → 무너진 뒤 36만 / 용량 68만. 큰 둔덕에선 입자 크기 요철이 모래 표면 결처럼 보인다.
 - ⚠ 처음에 옵션을 `-sandbox=` 로 지었다가 프로세스가 로그도 없이 끝났다 — **`-sandbox=` 는 엔진의 파일 샌드박스 옵션**(쓰기를 다른 폴더로 돌림). `-sandboxhalf=` 로 바꿈.
+
+## 실행 #28 — 입자별 W (W1 시뮬 버퍼 · W2 정점 색) (2026-10-27)
+
+계획 [m1-plan-wet.md](m1-plan-wet.md), 근거 papers C16 · L-3 ①.
+- **W1**: `FSandSpike::SetWet(Fn)` · `Wet` 배열(짧으면 `WGlobal` 로 채움, 제거 시 함께 압축) → `FSandGpuUpload::Wet` → `FSandGpuSim` 버퍼 `SandSim.Wet` (`GetWetBufferRT`). GPU 시뮬은 입자 순서를 바꾸지 않아 W 는 번호에 붙어 따라간다. 아직 물리에는 안 쓴다 (W3).
+- **W2**: `VertFinalCS` 에서 정점 W = 입자 W 의 셰퍼드 보간 (평활화 뒤 위치, 커널 (1 − d²/r²)³ — VertWeightCS 와 같다) → 정점 색 RGBA8 (R = G = B = W) → `FLocalVertexFactory` 색 스트림. 재질 `Wet` = saturate(파라미터 + VertexColor.R). CPU 판 `FSandSurfaceBuilder::Build(…, Wet)` 도 같은 식.
+
+`-meshframe -scene=pour -count=3000 -smooth=25 -wetmode=half` (x 가 가운데보다 작은 쪽 W 0.6 · 나머지 0.1):
+```
+프레임   정점 W 합 CPU / GPU (상대)      범위            젖은 정점(>0.35)   정점 · 삼각형    GPU 메시
+60       13423.403 / 13423.403 (4e-9)    [0.10 0.60]     19093 / 19093       같음             1.52 ms
+120      13417.092 / 13417.093 (7e-9)    〃              19106 / 19106       같음             1.50
+180      13419.077 / 13419.077 (8e-9)    〃              19103 / 19103       같음             1.51
+```
+- W 는 입자를 따라간다 (180 프레임 동안 젖은 정점 수 ±0.1%). 메시 시간 1.47 → 1.50 ms (+0.03).
+- 화면 (`-sandwetmode=half -sandwetval=1`, `img/m1-w2half1-f270.png`): 젖은 반쪽만 반들거리고 경계가 보인다. **어두워짐은 약하다** — 알베도 × 0.5 가 반사광과 자동 노출에 묻힌다. 실제 젖은 모래보다 밝아 보일 수 있다 (사용자 판정).
+- 버그 하나: 프록시 소멸자에서 새 색 버퍼를 해제하지 않아 크래시 → 고침.
+- 시험 옵션: 게임 `-sandwetmode=half [-sandwetval=0.6]`, 커맨드릿 `-wetmode=half`.

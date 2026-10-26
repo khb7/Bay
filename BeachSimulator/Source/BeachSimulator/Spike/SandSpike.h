@@ -339,6 +339,12 @@ public:
 	 */
 	int32 RemoveParticles(TFunctionRef<bool(int32)> ShouldRemove);
 	void  SetWGlobal(float W) { Params.WGlobal = W; }
+	/**
+	 * 입자별 W (M1 W1, m1-plan-wet.md). 아직 시간에 따라 변하지 않는다 (침투 · 증발은 M5). 설정하지 않은 입자는 WGlobal.
+	 * Fn(입자 번호, 위치) → W. 다음 Step 에 GPU 로 다시 올린다
+	 */
+	void  SetWet(TFunctionRef<float(int32, const FVector3f&)> Fn);
+	const TArray<float>& GetWet() { EnsureWet(); return Wet; }
 	/** cohesion(W) 0~1 — §2-4 구간 선형 */
 	float CohesionOfW(float W) const;
 	/** 결합 컴플라이언스 α [cm/힘]. k = BondStrength·g/((BreakStretch−1)·d) 에 cohesion(W) 를 곱한 것의 역수. 점착 0 이면 0 (비활성) */
@@ -496,6 +502,8 @@ private:
 	TArray<FVector3f> Vel;
 	TArray<FVector3f> PrevPos;  // 스텝 시작 위치. 마찰의 위치 오차가 이 차이를 본다
 	TArray<float>     InvMass;  // 1 = 자유, 0 = 고정(거친 바닥). 접촉이 이 비율로 나뉜다
+	TArray<float>     Wet;      // 입자별 W — 짧으면 WGlobal 로 채운다 (EnsureWet)
+	void EnsureWet() { while (Wet.Num() < Pos.Num()) { Wet.Add(Params.WGlobal); } Wet.SetNum(Pos.Num()); }
 
 	// Jacobi 누적 버퍼. 훑는 동안 Pos 는 읽기 전용이라 모든 접촉이 같은 스냅샷을 본다
 	TArray<FVector3f> Delta;

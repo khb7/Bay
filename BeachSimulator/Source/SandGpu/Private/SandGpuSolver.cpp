@@ -564,6 +564,7 @@ struct FSandGpuSim::FState
 	TRefCountPtr<FRDGPooledBuffer> Pos, Vel, PrevPos, GroundLambda, WallLambda;
 	TRefCountPtr<FRDGPooledBuffer> Sleep;   // C안 — 정지 프레임 수 (uint)
 	TRefCountPtr<FRDGPooledBuffer> SleepRef;   // 조사 H9 (e) — 잠들 때의 Σλn
+	TRefCountPtr<FRDGPooledBuffer> Wet;        // M1 W1 — 입자별 W
 	// 영구 (결합)
 	TRefCountPtr<FRDGPooledBuffer> BondIJ, BondData, BondAdjOffset, BondAdj;
 	// 쌍 목록 두 벌 — [Cur] 이번 프레임 · [1-Cur] 지난 프레임 (워밍 조회)
@@ -639,6 +640,7 @@ void FSandGpuSim::Upload(const FSandGpuUpload& In, bool bKeepPairs)
 			S->WallLambda   = Persist(sizeof(FVector4f), NewCapN, TEXT("SandSim.WallLambda"));
 			S->Sleep        = Persist(sizeof(uint32), NewCapN, TEXT("SandSim.Sleep"));
 			S->SleepRef     = Persist(sizeof(float), NewCapN, TEXT("SandSim.SleepRef"));
+			S->Wet          = Persist(sizeof(float), NewCapN, TEXT("SandSim.Wet"));
 			S->BondAdjOffset = Persist(sizeof(uint32), NewCapN + 1, TEXT("SandSim.BondAdjOffset"));
 			for (int32 k = 0; k < 2; ++k)
 			{
@@ -684,6 +686,7 @@ void FSandGpuSim::Upload(const FSandGpuUpload& In, bool bKeepPairs)
 		Up(S->WallLambda, In.WallLambda.GetData(), LN * sizeof(FVector4f));
 		Up(S->Sleep, nullptr, 0);   // 올리기(도구 조작) = 전부 깸 (계획 1-3 v1). w 는 CPU 의 원래 역질량으로 돌아온다
 		Up(S->SleepRef, nullptr, 0);
+		Up(S->Wet, In.Wet.GetData(), FMath::Min(In.Wet.Num(), LN) * sizeof(float));
 		Up(S->BondIJ, In.BondIJ.GetData(), In.BondIJ.Num() * sizeof(uint32));
 		Up(S->BondData, In.BondData.GetData(), LB * sizeof(FVector4f));
 		Up(S->BondAdjOffset, In.BondAdjOffset.GetData(), In.BondAdjOffset.Num() * sizeof(uint32));
@@ -1102,4 +1105,10 @@ TRefCountPtr<FRDGPooledBuffer> FSandGpuSim::GetPositionBufferRT() const
 {
 	check(IsInRenderingThread());
 	return State ? State->Pos : nullptr;
+}
+
+TRefCountPtr<FRDGPooledBuffer> FSandGpuSim::GetWetBufferRT() const
+{
+	check(IsInRenderingThread());
+	return State ? State->Wet : nullptr;
 }

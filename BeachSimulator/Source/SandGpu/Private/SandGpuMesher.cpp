@@ -124,6 +124,9 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandMeshParams, )
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, RPosRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, RTanRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, RIdxRW)
+	SHADER_PARAMETER(uint32, bHasWet)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, WetRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, RColRW)
 
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ScanIn)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ScanOut)
@@ -254,7 +257,7 @@ namespace
 
 	/** 위치는 Pos4(올리기) 또는 PosExt(시뮬 버퍼, N 개 — G3 같은 프레임) 중 하나 */
 	void BuildRenderThread(FRHICommandListImmediate& RHICmdList, const TArray<FVector4f>& Pos4, const FSandGpuMeshParams& P, FSandGpuMeshResult& Out, FSandGpuMeshRenderBuffers* RenderOut = nullptr,
-		const TRefCountPtr<FRDGPooledBuffer>& PosExt = nullptr, int32 NumExt = 0)
+		const TRefCountPtr<FRDGPooledBuffer>& PosExt = nullptr, int32 NumExt = 0, const TArray<float>& Wet = TArray<float>(), const TRefCountPtr<FRDGPooledBuffer>& WetExt = nullptr)
 	{
 		static FMeshReadbacks* RB = new FMeshReadbacks();   // 렌더 스레드 전용. 프로세스 수명
 		const int32 N = PosExt.IsValid() ? NumExt : Pos4.Num();
@@ -308,6 +311,20 @@ namespace
 			T.InteriorPhiFixed = P.InteriorPhiFixed;
 			T.PosRO = GraphBuilder.CreateSRV(Pos);
 			T.GridPosRO = T.PosRO;
+			// W2 입자 W — 시뮬 버퍼 또는 올리기. 없으면 작은 더미 (묶여는 있어야 한다)
+			{
+				FRDGBufferRef WetB;
+				const bool bWetUp = !WetExt.IsValid() && Wet.Num() >= N;
+				if (WetExt.IsValid()) { WetB = GraphBuilder.RegisterExternalBuffer(WetExt); }
+				else
+				{
+					WetB = MeshBuffer(GraphBuilder, TEXT("SandMesh.Wet"), sizeof(float), bWetUp ? N : 1);
+					if (bWetUp) { GraphBuilder.QueueBufferUpload(WetB, Wet.GetData(), (uint64)N * sizeof(float), ERDGInitialDataFlags::NoCopy); }
+					else { AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(WetB), 0u); }
+				}
+				T.bHasWet = (WetExt.IsValid() || bWetUp) ? 1u : 0u;
+				T.WetRO = GraphBuilder.CreateSRV(WetB);
+			}
 			T.CellKeyRW = GraphBuilder.CreateUAV(CellKey);
 			T.CellKeyRO = GraphBuilder.CreateSRV(CellKey);
 			T.CellSlotRW = GraphBuilder.CreateUAV(CellSlot);
@@ -452,6 +469,8 @@ namespace
 			TB.RPosRW = GraphBuilder.CreateUAV(RPos, PF_R32_FLOAT);
 			TB.RTanRW = GraphBuilder.CreateUAV(RTan, PF_R32_UINT);
 			TB.RIdxRW = GraphBuilder.CreateUAV(RIdx, PF_R32_UINT);
+			FRDGBufferRef RCol = RenderOut ? GraphBuilder.RegisterExternalBuffer(RenderOut->Color) : GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(4, 4), TEXT("SandMesh.RColDummy"));
+			TB.RColRW = GraphBuilder.CreateUAV(RCol, PF_R32_UINT);
 			if (RenderOut)
 			{
 				FRDGBufferRef RUv = GraphBuilder.RegisterExternalBuffer(RenderOut->TexCoord);
@@ -460,6 +479,7 @@ namespace
 				GraphBuilder.SetBufferAccessFinal(RPos, ERHIAccess::VertexOrIndexBuffer | ERHIAccess::SRVMask);
 				GraphBuilder.SetBufferAccessFinal(RTan, ERHIAccess::VertexOrIndexBuffer | ERHIAccess::SRVMask);
 				GraphBuilder.SetBufferAccessFinal(RUv, ERHIAccess::VertexOrIndexBuffer | ERHIAccess::SRVMask);
+				GraphBuilder.SetBufferAccessFinal(RCol, ERHIAccess::VertexOrIndexBuffer | ERHIAccess::SRVMask);
 				GraphBuilder.SetBufferAccessFinal(RIdx, ERHIAccess::VertexOrIndexBuffer);
 				GraphBuilder.SetBufferAccessFinal(DrawArgs, ERHIAccess::IndirectArgs | ERHIAccess::SRVMask);
 			}
@@ -604,6 +624,7 @@ namespace
 			Fetch(RB->Vertex, V4, NV); Fetch(RB->Normal, N4, NV); Fetch(RB->Index, Ix, NI);
 			Out.Vertices.SetNumUninitialized(NV); Out.Normals.SetNumUninitialized(NV); Out.Indices.SetNumUninitialized(NI);
 			for (int32 v = 0; v < NV; ++v) { Out.Vertices[v] = FVector3f(V4[v]); Out.Normals[v] = FVector3f(N4[v]); }
+			if (WetExt.IsValid() || Wet.Num() >= N) { Out.VertexWet.SetNumUninitialized(NV); for (int32 v = 0; v < NV; ++v) { Out.VertexWet[v] = V4[v].W; } }
 			for (int32 k = 0; k < NI; ++k) { Out.Indices[k] = (int32)Ix[k]; }
 		}
 		if (RB->Ts[0].IsValid())
@@ -625,7 +646,7 @@ namespace
 	}
 }
 
-void SandGpuMesh::Build(const TArray<FVector3f>& Positions, const FSandGpuMeshParams& Params, FSandGpuMeshResult& Out)
+void SandGpuMesh::Build(const TArray<FVector3f>& Positions, const FSandGpuMeshParams& Params, FSandGpuMeshResult& Out, const TArray<float>& Wet)
 {
 	check(IsInGameThread());
 	Out = FSandGpuMeshResult();
@@ -633,9 +654,9 @@ void SandGpuMesh::Build(const TArray<FVector3f>& Positions, const FSandGpuMeshPa
 	TArray<FVector4f> Pos4; Pos4.SetNumUninitialized(Positions.Num());
 	for (int32 i = 0; i < Positions.Num(); ++i) { Pos4[i] = FVector4f(Positions[i], 0.f); }
 	const double T0 = FPlatformTime::Seconds();
-	ENQUEUE_RENDER_COMMAND(SandGpuMeshBuild)([&Pos4, &Params, &Out](FRHICommandListImmediate& RHICmdList)
+	ENQUEUE_RENDER_COMMAND(SandGpuMeshBuild)([&Pos4, &Params, &Out, &Wet](FRHICommandListImmediate& RHICmdList)
 	{
-		BuildRenderThread(RHICmdList, Pos4, Params, Out);
+		BuildRenderThread(RHICmdList, Pos4, Params, Out, nullptr, nullptr, 0, Wet);
 	});
 	FlushRenderingCommands();
 	Out.WallMs = (FPlatformTime::Seconds() - T0) * 1000.0;
@@ -653,6 +674,7 @@ void SandGpuMesh::AllocateRenderBuffers(int32 MaxVerts, FSandGpuMeshRenderBuffer
 	Out.Position = AllocatePooledBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(float), 3 * MaxVerts), TEXT("SandMesh.RPosition"));
 	Out.Tangent  = AllocatePooledBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), 2 * MaxVerts), TEXT("SandMesh.RTangent"));
 	Out.TexCoord = AllocatePooledBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(float), 2), TEXT("SandMesh.RTexCoord"));   // 보폭 0 으로 읽는 0 UV
+	Out.Color    = AllocatePooledBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), MaxVerts), TEXT("SandMesh.RColor"));   // 정점 W (W2)
 	FRDGBufferDesc IdxDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), Out.MaxIndices);
 	IdxDesc.Usage = (IdxDesc.Usage & ~EBufferUsageFlags::VertexBuffer) | EBufferUsageFlags::IndexBuffer;
 	Out.Index    = AllocatePooledBuffer(IdxDesc, TEXT("SandMesh.RIndex"));
@@ -678,7 +700,7 @@ void SandGpuMesh::BuildFromSim(const FSandGpuSim& Sim, const FSandGpuMeshParams&
 	ENQUEUE_RENDER_COMMAND(SandGpuMeshFromSim)([SimPtr, N, &Params, &Out](FRHICommandListImmediate& RHICmdList)
 	{
 		static const TArray<FVector4f> None;
-		BuildRenderThread(RHICmdList, None, Params, Out, nullptr, SimPtr->GetPositionBufferRT(), N);
+		BuildRenderThread(RHICmdList, None, Params, Out, nullptr, SimPtr->GetPositionBufferRT(), N, TArray<float>(), SimPtr->GetWetBufferRT());
 	});
 	FlushRenderingCommands();
 	Out.WallMs = (FPlatformTime::Seconds() - T0) * 1000.0;
@@ -691,7 +713,7 @@ void SandGpuMesh::BuildFromSimToRenderBuffers(FRHICommandListImmediate& RHICmdLi
 	if (N == 0) { return; }
 	static const TArray<FVector4f> None;
 	FSandGpuMeshResult Unused;
-	BuildRenderThread(RHICmdList, None, Params, Unused, &Buffers, Sim.GetPositionBufferRT(), N);
+	BuildRenderThread(RHICmdList, None, Params, Unused, &Buffers, Sim.GetPositionBufferRT(), N, TArray<float>(), Sim.GetWetBufferRT());
 }
 
 void SandGpuMesh::ReleaseRenderBuffers(FSandGpuMeshRenderBuffers& Buffers)

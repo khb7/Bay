@@ -70,6 +70,7 @@ struct FSandGpuUpload
 	TArray<uint32>    BondAdj;        // (결합 번호 << 1) | j 쪽
 	TArray<float>     GroundLambda;
 	TArray<FVector4f> WallLambda;
+	TArray<float>     Wet;            // 입자별 수분 W (M1 W1, m1-plan-wet.md). 비면 0
 };
 
 /** 프레임 매개변수 — 매 Step 마다 전부 보낸다 (W · 기울기 · 벽 상태 · 감쇠가 프레임 사이에 바뀐다) */
@@ -154,6 +155,8 @@ public:
 	int32 NumParticles() const { return N; }
 	/** 렌더 스레드 — 위치 버퍼 (float4 xyz · w 역질량, 구조 버퍼). M1 G3 메셔가 내려받기 없이 같은 프레임에 읽는다 */
 	TRefCountPtr<FRDGPooledBuffer> GetPositionBufferRT() const;
+	/** 렌더 스레드 — 입자별 W (float, 구조 버퍼). 메셔가 정점 색으로 보간한다 (W2) */
+	TRefCountPtr<FRDGPooledBuffer> GetWetBufferRT() const;
 	int32 NumBonds() const { return NumB; }
 	int32 MaxPairs() const { return MaxPairCount; }
 

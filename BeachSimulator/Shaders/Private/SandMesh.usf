@@ -540,6 +540,10 @@ RWStructuredBuffer<float4> SmoothDst;
 RWBuffer<float>            RPosRW;           // 정점당 3 (float3 스트림)
 RWBuffer<uint>             RTanRW;           // 정점당 2: TangentX · TangentZ (FPackedNormal, 부호 있는 8 비트 × 4)
 RWBuffer<uint>             RIdxRW;           // 32 비트 색인 버퍼
+// 입자별 W → 정점 색 (M1 W2, m1-plan-wet.md)
+uint  bHasWet;
+StructuredBuffer<float>    WetRO;            // 입자별 W
+RWBuffer<uint>             RColRW;           // 정점당 RGBA8 — R = G = B = W (스위즐 무관), A = 255
 // CountersRW: [0] 최대 이웃 수 [1] 커널 목록 넘침 영역 [2] 쌍 용량 넘침 [3] 정점 총수 [4] 색인 총수 [5] 슬롯 넘침 영역
 
 uint PtIndex(uint3 P) { return (P.z * GD.y + P.y) * GD.x + P.x; }
@@ -993,10 +997,25 @@ void VertFinalCS(uint3 Tid : SV_DispatchThreadID)
 	const float3 N0 = NormalSrc[v].xyz;
 	const float L2 = dot(N0, N0);
 	const float3 Nrm = L2 > 1e-16f ? N0 * rsqrt(L2) : float3(0.f, 0.f, 0.f);
-	SmoothDst[v] = float4(X, 0.f);
+	// 정점 W = 입자 W 의 셰퍼드 보간 (VertWeightCS 와 같은 커널 (1 − d²/r²)³), 평활화 뒤 위치에서
+	float Wv = 0.f;
+	if (bHasWet)
+	{
+		const float R2 = NeighborR * NeighborR;
+		float Sw = 0.f, Sww = 0.f;
+		FOR_NEIGHBORS_ALL(X,
+		{
+			const float D2 = dot(PosRO[j].xyz - X, PosRO[j].xyz - X);
+			if (D2 < R2) { const float T = 1.f - D2 / R2; const float K = T * T * T; Sw += K; Sww += K * WetRO[j]; }
+		})
+		Wv = Sw > 0.f ? Sww / Sw : 0.f;
+	}
+	SmoothDst[v] = float4(X, Wv);
 	NormalDst[v] = float4(Nrm, 0.f);
 	if (bRenderOut)
 	{
+		const uint C8 = (uint)round(saturate(Wv) * 255.f);
+		RColRW[v] = C8 | (C8 << 8) | (C8 << 16) | (255u << 24);
 		RPosRW[v * 3 + 0] = X.x; RPosRW[v * 3 + 1] = X.y; RPosRW[v * 3 + 2] = X.z;
 		// 접선 = 법선에 수직인 아무 방향 (모래는 이방 질감이 없다). TangentZ.w = +1 (종법선 부호)
 		const float3 Nz = L2 > 1e-16f ? Nrm : float3(0.f, 0.f, 1.f);

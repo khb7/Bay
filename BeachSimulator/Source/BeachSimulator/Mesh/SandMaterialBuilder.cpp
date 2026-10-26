@@ -17,6 +17,8 @@
 #include "Materials/MaterialExpressionMultiply.h"
 #include "Materials/MaterialExpressionNoise.h"
 #include "Materials/MaterialExpressionScalarParameter.h"
+#include "Materials/MaterialExpressionSaturate.h"
+#include "Materials/MaterialExpressionVertexColor.h"
 #include "Materials/MaterialFunction.h"
 #include "Misc/PackageName.h"
 #include "UObject/Package.h"
@@ -72,9 +74,15 @@ bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage)
 	UMaterialExpressionNoise* Speck = AddNoise(M, 3.f, 2, 0.8f, 1.12f, -100);         // ~3mm 알갱이 밝기
 	// 젖음 Wet (0 마름 ~ 1 젖음) — papers L-3 ① (Jensen 1999 · Lekner & Dorf 1988):
 	//   알베도 × 0.5 · 거칠기 0.9 → 0.2 · 알갱이 반짝임 사라짐 · 물이 틈을 메워 알갱이 요철 줄어듦 (#22)
-	UMaterialExpressionScalarParameter* Wet = AddExpr<UMaterialExpressionScalarParameter>(M, -900, 400);
-	Wet->ParameterName = TEXT("Wet");
-	Wet->DefaultValue = 0.f;
+	// 입자별 W 는 정점 색 R 로 온다 (M1 W2) — 전역 Wet 파라미터와 더한다
+	UMaterialExpressionScalarParameter* WetParam = AddExpr<UMaterialExpressionScalarParameter>(M, -1100, 400);
+	WetParam->ParameterName = TEXT("Wet");
+	WetParam->DefaultValue = 0.f;
+	UMaterialExpressionVertexColor* VCol = AddExpr<UMaterialExpressionVertexColor>(M, -1100, 500);
+	UMaterialExpressionAdd* WetSum = AddExpr<UMaterialExpressionAdd>(M, -1000, 450);
+	WetSum->A.Connect(0, WetParam); WetSum->B.Connect(1, VCol);   // 출력 1 = R
+	UMaterialExpressionSaturate* Wet = AddExpr<UMaterialExpressionSaturate>(M, -900, 400);
+	Wet->Input.Connect(0, WetSum);
 	UMaterialExpressionConstant* One = AddExpr<UMaterialExpressionConstant>(M, -500, -50);
 	One->R = 1.f;
 	UMaterialExpressionLinearInterpolate* SpeckW = AddExpr<UMaterialExpressionLinearInterpolate>(M, -300, -100);

@@ -43,6 +43,7 @@ struct FSandGpuMeshResult
 	TArray<float>  Field;              // φ − Iso
 	// G1-4
 	TArray<FVector3f> Vertices, Normals;
+	TArray<float>     VertexWet;       // W2 — 입자 W 가 있을 때만
 	TArray<int32>     Indices;
 	int32 NumVertsTotal = 0, NumIndicesTotal = 0;   // 용량과 무관한 실제 수
 	// G1-5 GPU 타임스탬프 (ms): [0] 이웃 [1] 커널 · 등위값 [2] 띠 · 장 [3] 메시
@@ -57,7 +58,7 @@ struct FSandGpuMeshResult
  */
 struct FSandGpuMeshRenderBuffers
 {
-	TRefCountPtr<FRDGPooledBuffer> Position, Tangent, TexCoord, Index, DrawArgs;
+	TRefCountPtr<FRDGPooledBuffer> Position, Tangent, TexCoord, Color, Index, DrawArgs;   // Color = 정점 W (RGBA8, W2)
 	int32 MaxVerts = 0, MaxIndices = 0;
 	bool IsValid() const { return Position.IsValid(); }
 
@@ -90,5 +91,6 @@ namespace SandGpuMesh
 	SANDGPU_API void BuildToRenderBuffers(FRHICommandListImmediate& RHICmdList, const TArray<FVector4f>& Positions, const FSandGpuMeshParams& Params, FSandGpuMeshRenderBuffers& Buffers);
 
 	/** 게임 스레드에서 부르고 끝날 때까지 기다린다 */
-	SANDGPU_API void Build(const TArray<FVector3f>& Positions, const FSandGpuMeshParams& Params, FSandGpuMeshResult& Out);
+	/** Wet: 입자별 W (비면 정점 W 없음, W2) */
+	SANDGPU_API void Build(const TArray<FVector3f>& Positions, const FSandGpuMeshParams& Params, FSandGpuMeshResult& Out, const TArray<float>& Wet = TArray<float>());
 }
