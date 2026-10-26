@@ -296,7 +296,7 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 	const int32 InteriorMin = FMath::Max(P.NEps + 1, (int32)(0.85f * MaxCount));
 	auto IsInterior = [&](int32 i) { return MaxCount > P.NEps && NCount[i] >= InteriorMin; };
 	Out.NumSurfaceParticles = NumSurf;
-	Out.NeighborCount = NCount; Out.Deviation = Dev;
+	Out.NeighborCount = NCount; Out.Deviation = Dev; Out.Smoothed = Smoothed; Out.Cov = Cov;
 	const double T1 = FPlatformTime::Seconds();
 
 	// ── ③ 커널 ──

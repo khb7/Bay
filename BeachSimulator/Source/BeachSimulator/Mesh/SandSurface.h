@@ -49,6 +49,8 @@ struct FSandSurfaceMesh
 	// 입자별 진단 (표면 판정 문턱 측정용)
 	TArray<int32> NeighborCount;
 	TArray<float> Deviation;     // |Σ(x_j − x_i)| / (N·r_i)
+	TArray<FVector3f> Smoothed;  // x̄_i (GPU 대조용)
+	TArray<float> Cov;           // 입자당 6: xx xy xz yy yz zz (GPU 대조용)
 
 	// 부분 영역 뿌리기 원인 측정 (m1-log #8)
 	struct FSplatProfile

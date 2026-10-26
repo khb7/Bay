@@ -1,0 +1,206 @@
+// M1 GPU 메시화 (m1-plan-gpu.md) — 입자 → 메시를 컴퓨트로. CPU 판(FSandSurfaceBuilder, SandSurface.cpp)과 단계마다 1:1.
+//
+// G1-1 이웃:
+//   CellKeyCS        입자 → 셀 키(셀 = 이웃 반경 r_i) · 셀 안 순번(atomic)
+//   Scan(CellCount)  → CellStart
+//   ScatterCS        SortedIdx
+//   NeighborStatsCS  입자별 27 칸: 이웃 수 · 치우침(C14) · 다듬은 중심 x̄ (Yu & Turk λ) · 가중 공분산
+
+#include "/Engine/Public/Platform.ush"
+
+#define SCAN_GROUP 1024          // 그룹당 2048 원소 (SandFrame.usf 와 같은 스캔)
+
+uint  NumParticles;
+uint  TableSize;                 // 셀 해시 표 크기 (2의 거듭제곱)
+uint  ScanCount;
+float NeighborR;                 // r_i — 셀 크기이기도 하다
+float Lambda;                    // 중심 다듬기
+
+StructuredBuffer<float4>   PosRO;
+
+RWStructuredBuffer<uint>   CellKeyRW;
+StructuredBuffer<uint>     CellKeyRO;
+RWStructuredBuffer<uint>   CellSlotRW;
+StructuredBuffer<uint>     CellSlotRO;
+RWStructuredBuffer<uint>   CellCountRW;
+StructuredBuffer<uint>     CellStart;        // TableSize + 1
+RWStructuredBuffer<uint>   SortedIdxRW;
+StructuredBuffer<uint>     SortedIdxRO;
+
+RWStructuredBuffer<uint>   NCountRW;         // 이웃 수 (자기 제외)
+RWStructuredBuffer<float>  DevRW;            // |Σ(x_j − x_i)| / (N · r_i)
+RWStructuredBuffer<float4> SmoothedRW;       // x̄_i
+RWStructuredBuffer<float4> CovARW;           // xx xy xz yy
+RWStructuredBuffer<float4> CovBRW;           // yz zz
+
+StructuredBuffer<uint>     ScanIn;
+RWStructuredBuffer<uint>   ScanOut;          // ScanCount + 1 (마지막 = 총합)
+RWStructuredBuffer<uint>   ScanSumsRW;
+StructuredBuffer<uint>     ScanSumsRO;
+
+// ------------------------------------------------------------------------------------------------
+// 해시 — SandFrame.usf · CPU 와 같은 Teschner 2003
+
+uint HashCell(int3 C, uint Table)
+{
+	const uint H = ((uint)(C.x * 73856093)) ^ ((uint)(C.y * 19349663)) ^ ((uint)(C.z * 83492791));
+	return H & (Table - 1u);
+}
+
+int3 CellOf(float3 P, float Size)
+{
+	return int3(floor(P / Size));
+}
+
+// ------------------------------------------------------------------------------------------------
+// 스캔 (배타 접두합) — SandFrame.usf 와 같은 3 패스. 2048 × 2048 = 4M 원소까지
+
+groupshared uint ScanTemp[2 * SCAN_GROUP];
+
+uint GroupScan(uint Tid, inout uint A, inout uint B)
+{
+	ScanTemp[2 * Tid]     = A;
+	ScanTemp[2 * Tid + 1] = B;
+	GroupMemoryBarrierWithGroupSync();
+	for (uint Offset = 1; Offset < 2 * SCAN_GROUP; Offset <<= 1)
+	{
+		uint v0 = 0, v1 = 0;
+		const uint i0 = 2 * Tid, i1 = 2 * Tid + 1;
+		if (i0 >= Offset) { v0 = ScanTemp[i0 - Offset]; }
+		if (i1 >= Offset) { v1 = ScanTemp[i1 - Offset]; }
+		GroupMemoryBarrierWithGroupSync();
+		ScanTemp[i0] += v0;
+		ScanTemp[i1] += v1;
+		GroupMemoryBarrierWithGroupSync();
+	}
+	const uint Total = ScanTemp[2 * SCAN_GROUP - 1];
+	A = ScanTemp[2 * Tid] - A;
+	B = ScanTemp[2 * Tid + 1] - B;
+	return Total;
+}
+
+[numthreads(SCAN_GROUP, 1, 1)]
+void ScanBlocksCS(uint3 GTid : SV_GroupThreadID, uint3 Gid : SV_GroupID)
+{
+	const uint Base = Gid.x * 2 * SCAN_GROUP + 2 * GTid.x;
+	uint A = Base < ScanCount ? ScanIn[Base] : 0u;
+	uint B = Base + 1 < ScanCount ? ScanIn[Base + 1] : 0u;
+	const uint Total = GroupScan(GTid.x, A, B);
+	if (Base < ScanCount)     { ScanOut[Base] = A; }
+	if (Base + 1 < ScanCount) { ScanOut[Base + 1] = B; }
+	if (GTid.x == 0) { ScanSumsRW[Gid.x] = Total; }
+}
+
+[numthreads(SCAN_GROUP, 1, 1)]
+void ScanTopCS(uint3 GTid : SV_GroupThreadID)
+{
+	const uint NumGroups = (ScanCount + 2 * SCAN_GROUP - 1) / (2 * SCAN_GROUP);
+	const uint Base = 2 * GTid.x;
+	uint A = Base < NumGroups ? ScanSumsRW[Base] : 0u;
+	uint B = Base + 1 < NumGroups ? ScanSumsRW[Base + 1] : 0u;
+	const uint Total = GroupScan(GTid.x, A, B);
+	if (Base < NumGroups)     { ScanSumsRW[Base] = A; }
+	if (Base + 1 < NumGroups) { ScanSumsRW[Base + 1] = B; }
+	if (GTid.x == 0) { ScanOut[ScanCount] = Total; }
+}
+
+[numthreads(SCAN_GROUP, 1, 1)]
+void ScanAddCS(uint3 GTid : SV_GroupThreadID, uint3 Gid : SV_GroupID)
+{
+	const uint Add = ScanSumsRO[Gid.x];
+	const uint Base = Gid.x * 2 * SCAN_GROUP + 2 * GTid.x;
+	if (Base < ScanCount)     { ScanOut[Base] += Add; }
+	if (Base + 1 < ScanCount) { ScanOut[Base + 1] += Add; }
+}
+
+// ------------------------------------------------------------------------------------------------
+// G1-1 이웃
+
+[numthreads(64, 1, 1)]
+void CellKeyCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x;
+	if (i >= NumParticles) { return; }
+	const uint Key = HashCell(CellOf(PosRO[i].xyz, NeighborR), TableSize);
+	CellKeyRW[i] = Key;
+	uint Slot;
+	InterlockedAdd(CellCountRW[Key], 1u, Slot);
+	CellSlotRW[i] = Slot;
+}
+
+[numthreads(64, 1, 1)]
+void ScatterCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x;
+	if (i >= NumParticles) { return; }
+	SortedIdxRW[CellStart[CellKeyRO[i]] + CellSlotRO[i]] = i;
+}
+
+// 27 칸 순회 (자기 포함) — 해시 충돌로 같은 버킷을 두 번 도는 것만 막는다
+#define FOR_NEIGHBORS_ALL(P, BODY) \
+{ \
+	const int3 C0 = CellOf(P, NeighborR); \
+	uint Keys[27]; uint NumKeys = 0; \
+	for (int dz = -1; dz <= 1; ++dz) for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) \
+	{ \
+		const uint K = HashCell(C0 + int3(dx, dy, dz), TableSize); \
+		bool bSeen = false; \
+		for (uint q = 0; q < NumKeys; ++q) { if (Keys[q] == K) { bSeen = true; break; } } \
+		if (!bSeen) { Keys[NumKeys++] = K; } \
+	} \
+	for (uint q = 0; q < NumKeys; ++q) \
+	{ \
+		const uint End = CellStart[Keys[q] + 1]; \
+		for (uint s = CellStart[Keys[q]]; s < End; ++s) \
+		{ \
+			const uint j = SortedIdxRO[s]; \
+			BODY \
+		} \
+	} \
+}
+
+// CPU ① 과 같다: W = 1 − (d/r)³, x̄ = (1−λ)x + λ Σ W x_j / Σ W, C = Σ W (x_j − x̄)(x_j − x̄)ᵀ / Σ W
+[numthreads(64, 1, 1)]
+void NeighborStatsCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x;
+	if (i >= NumParticles) { return; }
+	const float3 Xi = PosRO[i].xyz;
+	float Ws = 0.f; float3 Mean = 0.f; float3 Off = 0.f; uint Cnt = 0;
+	FOR_NEIGHBORS_ALL(Xi,
+	{
+		const float3 Xj = PosRO[j].xyz;
+		const float D = length(Xj - Xi);
+		if (D < NeighborR)
+		{
+			const float Q = D / NeighborR;
+			const float W = 1.f - Q * Q * Q;
+			Ws += W; Mean += W * (Xj - Xi); Off += Xj - Xi; ++Cnt;   // 평균은 x_i 기준 상대 좌표로 (float 정밀도)
+		}
+	})
+	NCountRW[i] = Cnt - 1;
+	DevRW[i] = Cnt > 1 ? length(Off) / ((float)(Cnt - 1) * NeighborR) : 1.f;
+	if (Ws <= 0.f)
+	{
+		SmoothedRW[i] = float4(Xi, 0.f); CovARW[i] = 0.f; CovBRW[i] = 0.f;
+		return;
+	}
+	Mean /= Ws;   // x_i 기준
+	SmoothedRW[i] = float4(Xi + Lambda * Mean, 0.f);
+	float A0 = 0.f, A1 = 0.f, A2 = 0.f, A3 = 0.f, A4 = 0.f, A5 = 0.f;   // 매크로의 C0 와 겹치지 않게
+	FOR_NEIGHBORS_ALL(Xi,
+	{
+		const float3 Xj = PosRO[j].xyz;
+		const float D = length(Xj - Xi);
+		if (D < NeighborR)
+		{
+			const float Q = D / NeighborR;
+			const float W = 1.f - Q * Q * Q;
+			const float3 R = (Xj - Xi) - Mean;
+			A0 += W * R.x * R.x; A1 += W * R.x * R.y; A2 += W * R.x * R.z;
+			A3 += W * R.y * R.y; A4 += W * R.y * R.z; A5 += W * R.z * R.z;
+		}
+	})
+	CovARW[i] = float4(A0, A1, A2, A3) / Ws;
+	CovBRW[i] = float4(A4, A5, 0.f, 0.f) / Ws;
+}

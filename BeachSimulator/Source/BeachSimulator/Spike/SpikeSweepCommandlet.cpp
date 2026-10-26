@@ -6,6 +6,8 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "../Mesh/SandSurface.h"
+#include "SandGpuSolver.h"
+#include "SandGpuMesher.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSpikeSweep, Log, All);
 
@@ -762,6 +764,8 @@ namespace
 		FParse::Value(*Params, TEXT("block="), Base.Block);
 		FParse::Value(*Params, TEXT("simd="), Base.Simd);
 		const bool bDevDump = FParse::Param(*Params, TEXT("devdump"));
+		const bool bGpuMesh = FParse::Param(*Params, TEXT("gpumesh")) && SandGpu::IsAvailable();
+		const bool bMeshDiff = FParse::Param(*Params, TEXT("meshdiff"));
 		Base.bBandOnly = !FParse::Param(*Params, TEXT("fullband"));
 		const FString Dir = FPaths::ProjectSavedDir() / TEXT("MeshRuns");
 
@@ -857,6 +861,42 @@ namespace
 					*Scene, *Fl, M.NumParticles, M.NumSurfaceParticles, M.NumBandPoints, M.Vertices.Num(), M.Triangles.Num() / 3, *Metric, M.Volume() / PV,
 					M.MsNeighbors, M.MsKernels, M.MsField, M.MsMesh, M.MsTotal, M.Ks, M.Iso);
 				M.SaveObj(Dir / FString::Printf(TEXT("%s_%s.obj"), *Scene, *Fl));
+				if (bGpuMesh && Fl == Fields[0])
+				{
+					// G1 대조 (m1-plan-gpu.md §1-5): 기본은 핵심값, -meshdiff 면 입자별 최대 오차
+					FSandGpuMeshParams GP; GP.NeighborR = Pp.NeighborR; GP.Lambda = Pp.Lambda;
+					FSandGpuMeshResult G;
+					SandGpuMesh::Build(Pos, GP, G);
+					const int32 Np = Pos.Num();
+					auto Key = [&](auto&& NC, auto&& Dv, auto&& Cxx, double& SumN, int32& Surf, double& MeanDev, double& MeanDiag)
+					{
+						SumN = 0; Surf = 0; MeanDev = 0; MeanDiag = 0;
+						for (int32 i = 0; i < Np; ++i)
+						{
+							SumN += NC(i); MeanDev += Dv(i); MeanDiag += Cxx(i);
+							Surf += (NC(i) < Pp.BandNEps || (Pp.SurfDev > 0.f && Dv(i) > Pp.SurfDev)) ? 1 : 0;
+						}
+						MeanDev /= Np; MeanDiag /= Np;
+					};
+					double CSum, CDev, CDiag, GSum, GDev, GDiag; int32 CSurf, GSurf;
+					Key([&](int32 i) { return (double)M.NeighborCount[i]; }, [&](int32 i) { return (double)M.Deviation[i]; }, [&](int32 i) { return (double)(M.Cov[i * 6] + M.Cov[i * 6 + 3] + M.Cov[i * 6 + 5]); }, CSum, CSurf, CDev, CDiag);
+					Key([&](int32 i) { return (double)G.NeighborCount[i]; }, [&](int32 i) { return (double)G.Deviation[i]; }, [&](int32 i) { return (double)(G.CovA[i].X + G.CovA[i].W + G.CovB[i].Y); }, GSum, GSurf, GDev, GDiag);
+					UE_LOG(LogSpikeSweep, Display, TEXT("   GPU G1-1 %s: 이웃 합 CPU %.0f / GPU %.0f · 표면 입자 %d / %d · 치우침 평균 %.5f / %.5f · 공분산 대각 평균 %.4f / %.4f · GPU 벽시계 %.1f ms"),
+						*Scene, CSum, GSum, CSurf, GSurf, CDev, GDev, CDiag, GDiag, G.WallMs);
+					if (bMeshDiff)
+					{
+						int32 NDiff = 0; float MaxDev = 0.f, MaxSm = 0.f, MaxCov = 0.f;
+						for (int32 i = 0; i < Np; ++i)
+						{
+							NDiff += M.NeighborCount[i] != (int32)G.NeighborCount[i] ? 1 : 0;
+							MaxDev = FMath::Max(MaxDev, FMath::Abs(M.Deviation[i] - G.Deviation[i]));
+							MaxSm = FMath::Max(MaxSm, (M.Smoothed[i] - FVector3f(G.Smoothed[i])).GetAbsMax());
+							const float Gc[6] = { G.CovA[i].X, G.CovA[i].Y, G.CovA[i].Z, G.CovA[i].W, G.CovB[i].X, G.CovB[i].Y };
+							for (int32 k = 0; k < 6; ++k) { MaxCov = FMath::Max(MaxCov, FMath::Abs(M.Cov[i * 6 + k] - Gc[k])); }
+						}
+						UE_LOG(LogSpikeSweep, Display, TEXT("   GPU G1-1 차이 %s: 이웃 수 다른 입자 %d · 치우침 최대 %.2e · x̄ 최대 %.2e cm · 공분산 최대 %.2e"), *Scene, NDiff, MaxDev, MaxSm, MaxCov);
+					}
+				}
 				{
 					const auto& Pr = M.Prof;
 					UE_LOG(LogSpikeSweep, Display, TEXT("   뿌리기 원인 %s: 앞 %.1f · 병렬 벽 %.1f ms | 활성 영역 %d · 스레드 합 %.1f (준비 %.1f 뿌리기 %.1f 써넣기 %.1f) · 상위 영역 %.1f %.1f %.1f ms | 입자·영역 %lld · 줄 %lld 중 계산 %lld (%.0f%%) · 줄당 %.1f 점"),
