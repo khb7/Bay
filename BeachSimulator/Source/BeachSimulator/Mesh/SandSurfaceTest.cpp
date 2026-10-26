@@ -143,7 +143,6 @@ void USandSurfaceTestSubsystem::StartSim(UWorld& World)
 	SimComp->RegisterComponent();
 	Actor->SetActorLocation(Offset);
 	SimComp->SetSimSource(Sim->GetGpuSim(), DMin, DMax);
-	Sim->ReleaseWalls();
 
 	if (ADirectionalLight* Sun = World.SpawnActor<ADirectionalLight>(FVector::ZeroVector, FRotator(-25.0, 120.0, 0.0)))
 	{
@@ -159,7 +158,7 @@ void USandSurfaceTestSubsystem::StartSim(UWorld& World)
 
 	ShotPath = FPaths::ProjectSavedDir() / TEXT("MeshRuns/sandsim.png");
 	FParse::Value(FCommandLine::Get(), TEXT("sandshot="), ShotPath);
-	ShotFrames = { 5, 45, 150 };
+	ShotFrames = { WarmFrames + 5, WarmFrames + 45, WarmFrames + 150 };
 	Frames = 0;
 	TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &USandSurfaceTestSubsystem::Tick));
 }
@@ -170,6 +169,7 @@ bool USandSurfaceTestSubsystem::Tick(float)
 	if (Sim.IsValid())
 	{
 		// 시뮬 한 스텝 → 같은 프레임 메시 (렌더 명령 순서: 시뮬 · 메시 · 이 프레임 그리기)
+		if (Frames == WarmFrames) { Sim->ReleaseWalls(); }   // 재질 셰이더 준비 뒤에 무너뜨린다
 		Sim->Step(1.f / 60.f);
 		SimComp->UpdateFromSim();
 		const int32 Shot = ShotFrames.IndexOfByKey(Frames);

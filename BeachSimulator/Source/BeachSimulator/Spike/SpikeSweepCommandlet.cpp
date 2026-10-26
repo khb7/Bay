@@ -6,6 +6,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "../Mesh/SandSurface.h"
+#include "../Mesh/SandMaterialBuilder.h"
 #include "SandGpuSolver.h"
 #include "SandGpuMesher.h"
 
@@ -1654,6 +1655,13 @@ int32 USpikeSweepCommandlet::Main(const FString& Params)
 	if (FParse::Param(*Params, TEXT("creeptest")))
 	{
 		return RunCreepTest(Params);
+	}
+	if (FParse::Param(*Params, TEXT("makesandmat")))
+	{
+		FString Msg;
+		const bool bOk = SandMaterial::Build(SandMaterial::DefaultPath(), Msg);
+		UE_LOG(LogSpikeSweep, Display, TEXT("모래 재질: %s"), *Msg);
+		return bOk ? 0 : 1;
 	}
 	if (FParse::Param(*Params, TEXT("mesh")))
 	{

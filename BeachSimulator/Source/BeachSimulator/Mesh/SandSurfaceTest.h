@@ -29,6 +29,7 @@ private:
 	UPROPERTY()
 	TObjectPtr<class USandSurfaceComponent> SimComp = nullptr;
 	TArray<int32> ShotFrames;
+	int32 WarmFrames = 120;                    // 벽을 치우기 전 대기 — 재질 셰이더가 준비될 때까지 (첫 프레임들은 기본 재질로 그려진다)
 
 	FString ShotPath;
 	int32 Frames = 0;

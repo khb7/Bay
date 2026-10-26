@@ -177,7 +177,11 @@ USandSurfaceComponent::USandSurfaceComponent()
 
 UMaterialInterface* USandSurfaceComponent::GetMaterial(int32 ElementIndex) const
 {
-	return Material ? Material.Get() : UMaterial::GetDefaultMaterial(MD_Surface);
+	if (Material) { return Material.Get(); }
+	// 비어 있으면 모래 재질 (-makesandmat 이 만든 /Game/Sand/M_Sand), 그것도 없으면 엔진 기본
+	static TWeakObjectPtr<UMaterialInterface> Sand;
+	if (!Sand.IsValid()) { Sand = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Sand/M_Sand.M_Sand"), nullptr, LOAD_NoWarn | LOAD_Quiet); }
+	return Sand.IsValid() ? Sand.Get() : UMaterial::GetDefaultMaterial(MD_Surface);
 }
 
 void USandSurfaceComponent::GetUsedMaterials(TArray<UMaterialInterface*>& OutMaterials, bool bGetDebugMaterials) const
