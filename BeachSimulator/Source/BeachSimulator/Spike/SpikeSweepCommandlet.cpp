@@ -23,6 +23,33 @@ static void SpikeParallelFor(int32 Num, BodyType&& Body)
 
 namespace
 {
+	/**
+	 * M0-b GPU 기준 프로파일 (2026-10-26, m0-log #54 · #57 · #58) — `-gpu2` 면 명시하지 않은 값을 새 기본값으로 채운다.
+	 * 물리: 8색 블록 GS · 블록 안 배치 병렬 · 블록 15cm · μ 0.17 · Kv 1 · Kc 0.2 · vmax 30 · 반복 60 · 입자별 탐색 여유.
+	 * 재우기는 기본 꺼짐 (`-sleep` 이면 `-wakecold -wakezero -wakelam=1.2` 를 함께 켠다).
+	 * `-legacy` 면 아무것도 바꾸지 않는다 (옛 실행 재현용: Kv 0.1 · Kc 1 · 반복은 시험별 기본).
+	 * 호출은 각 시험의 매개변수 파싱이 끝난 뒤 — 플래그가 문자열에 있으면 그 값을 존중한다.
+	 */
+	void ApplyGpuProfile(const FString& Params, FSandParams& P, int32* InOutIterations = nullptr, float* InOutMu = nullptr)
+	{
+		if (!P.bGpuResident || FParse::Param(*Params, TEXT("legacy"))) { return; }
+		auto Has = [&](const TCHAR* Key) { return Params.Contains(Key); };
+		if (!Has(TEXT("-color8"))) { P.bColor8 = true; P.bColor8Par = true; }
+		if (!Has(TEXT("block="))) { P.BlockSize = 15.f; }
+		if (!Has(TEXT("-mu="))) { P.Friction = 0.17f; if (InOutMu) { *InOutMu = 0.17f; } }
+		if (!Has(TEXT("kv="))) { P.Kv = 1.f; }
+		if (!Has(TEXT("kc="))) { P.Kc = 0.2f; }
+		if (!Has(TEXT("vmax="))) { P.MaxDepenVel = 30.f; }
+		if (!Has(TEXT("iterations="))) { P.Iterations = 60; if (InOutIterations) { *InOutIterations = 60; } }
+		if (!Has(TEXT("-nopmargin"))) { P.bParticleMargin = true; }
+		if (P.bSleep)
+		{
+			if (!Has(TEXT("-nowakecold"))) { P.bWakeCold = true; }
+			if (!Has(TEXT("-nowakezero"))) { P.bWakeZeroPairs = true; }
+			if (!Has(TEXT("wakelam="))) { P.WakeLamRatio = 1.2f; }
+		}
+	}
+
 	// 앵커 셀 — 실시간 뷰에서 26.5° 가 나온 설정. 배치가 이걸 재현해야 나머지를 믿는다
 	constexpr float AnchorMu    = 0.7f;
 	constexpr int32 AnchorSubs  = 10;
@@ -318,6 +345,7 @@ namespace
 			P.bColor8 = P.bColor8 || P.bColor8Par;
 			FParse::Value(*Params, TEXT("colorblock="), P.BlockSize);
 			P.bBlockShift  = FParse::Param(*Params, TEXT("blockshift"));
+			ApplyGpuProfile(Params, P);
 			Cfgs.Add(P);
 
 			FPourSetup S;
@@ -745,6 +773,7 @@ namespace
 			P.bColor8 = FParse::Param(*Params, TEXT("color8"));   // A안 단계 1 (GPU 8색)
 			P.bColor8Par = FParse::Param(*Params, TEXT("color8par"));   // A안 단계 2
 			P.bColor8 = P.bColor8 || P.bColor8Par;
+			ApplyGpuProfile(Params, P);
 			if (P.bColor8) { P.bGatherApply = false; P.bMassSplit = false; }   // CPU 8색은 GS (GPU 는 이 플래그를 안 본다)
 
 			FTiltSetup S;
@@ -1025,6 +1054,7 @@ namespace
 		P.BondStrength = Strength;
 		P.BreakStretch = Stretch;
 		P.BondFormStretch = Form;
+		ApplyGpuProfile(Params, P, &Iterations, &Mu);
 
 		TArray<FTunnelSetup> Setups;
 		for (const FString& Sh : Shapes)
@@ -1150,6 +1180,7 @@ namespace
 		P.BreakStretch = Stretch;
 		P.BondFormStretch = Form;
 
+		ApplyGpuProfile(Params, P);
 		TArray<FCutFaceResult> Results;
 		if (bPourBlock)
 		{
