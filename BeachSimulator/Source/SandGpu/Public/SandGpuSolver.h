@@ -65,7 +65,7 @@ struct FSandGpuUpload
 	TArray<FVector4f> Pos;            // xyz · w 역질량
 	TArray<FVector4f> Vel;
 	TArray<uint32>    BondIJ;
-	TArray<FVector4f> BondData;       // x 휴지 길이 · y λ
+	TArray<FVector4f> BondData;       // x 휴지 길이 · y λ · z 쌍 cohesion (W3, 전역 W 모드면 1)
 	TArray<uint32>    BondAdjOffset;  // N + 1
 	TArray<uint32>    BondAdj;        // (결합 번호 << 1) | j 쪽
 	TArray<float>     GroundLambda;

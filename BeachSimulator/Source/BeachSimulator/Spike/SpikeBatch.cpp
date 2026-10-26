@@ -609,6 +609,20 @@ namespace
 
 	// ② 물을 준다 → 결합 → +X 벽 제거
 	Sim.SetWGlobal(Params.WGlobal);
+	{
+		// M1 W3 시험: -wetpp 면 입자별 모드로 모두 WGlobal (전역 경로와 비트 일치해야), -wetpp=half 면 y < 0 쪽만 젖음 (나머지 0) — 절토면(+X)의 반쪽씩
+		FString WetPP;
+		if (FParse::Value(FCommandLine::Get(), TEXT("wetpp="), WetPP) && WetPP == TEXT("half"))
+		{
+			const float WG = Params.WGlobal;
+			Sim.SetWet([WG](int32, const FVector3f& X) { return X.Y < 0.f ? WG : 0.f; });
+		}
+		else if (FParse::Param(FCommandLine::Get(), TEXT("wetpp")))
+		{
+			const float WG = Params.WGlobal;
+			Sim.SetWet([WG](int32, const FVector3f&) { return WG; });
+		}
+	}
 	R.BondsMade = Sim.FormBonds();
 	R.SlotOverflow = Sim.BondOverflow();
 	if (bOpen) { Sim.OpenFaceXPlus(); }   // 대조: 안 열고 같은 시간을 돌려 상자 자체가 부푸는지 본다

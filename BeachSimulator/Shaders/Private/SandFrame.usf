@@ -599,7 +599,7 @@ void BreakBondsCS(uint3 Tid : SV_DispatchThreadID)
 	if (B.x < 0.f) { return; }
 	const uint i = BondIJ[2 * b], j = BondIJ[2 * b + 1];
 	const float Dist = distance(PosRW[i].xyz, PosRW[j].xyz);
-	if (bBondsDry || Dist > B.x * BondStretchBreak)
+	if (bBondsDry || B.z <= 0.f || Dist > B.x * BondStretchBreak)
 	{
 		B.x = -1.f;
 		B.y = 0.f;

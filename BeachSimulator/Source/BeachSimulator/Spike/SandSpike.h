@@ -304,6 +304,7 @@ struct FSandBond
 	float RestLen = 0.f;
 	float Lambda  = 0.f;   // XPBD 승수 (길이·질량). 인장이면 음수
 	float Gamma   = 0.f;   // APGD 의 투영된 해 (bApgd). Lambda 는 외삽된 y
+	float Coh     = 1.f;   // M1 W3 — cohesion(두 입자 W 평균) (C16). 전역 W 모드면 1 (전역 cohesion 은 따로 곱한다)
 };
 
 /**
@@ -503,6 +504,10 @@ private:
 	TArray<FVector3f> PrevPos;  // 스텝 시작 위치. 마찰의 위치 오차가 이 차이를 본다
 	TArray<float>     InvMass;  // 1 = 자유, 0 = 고정(거친 바닥). 접촉이 이 비율로 나뉜다
 	TArray<float>     Wet;      // 입자별 W — 짧으면 WGlobal 로 채운다 (EnsureWet)
+	bool bWetPerParticle = false;   // SetWet 뒤 — 결합 점착을 쌍의 W 로 (W3). 아니면 WGlobal 하나 (M0 시험의 W 서서히 낮추기)
+	/** 전역 cohesion 배수 — 입자별 모드면 1 (결합마다 Coh 가 대신한다) */
+	float GlobalCoh() const { return bWetPerParticle ? 1.f : CohesionOfW(Params.WGlobal); }
+	float PairCoh(int32 I, int32 J) const { return bWetPerParticle ? CohesionOfW(0.5f * (Wet[I] + Wet[J])) : 1.f; }
 	void EnsureWet() { while (Wet.Num() < Pos.Num()) { Wet.Add(Params.WGlobal); } Wet.SetNum(Pos.Num()); }
 
 	// Jacobi 누적 버퍼. 훑는 동안 Pos 는 읽기 전용이라 모든 접촉이 같은 스냅샷을 본다

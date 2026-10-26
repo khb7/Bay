@@ -438,12 +438,13 @@ void SolveBondsCS(uint3 Tid : SV_DispatchThreadID)
 	const float3 Diff = Pi.xyz - Pj.xyz;
 	const float  Dist = length(Diff);
 	float4 B = BondDataRW[b];
-	if (bBondsActive && WSum > 0.f && Dist >= SMALL && B.x >= 0.f)
+	if (bBondsActive && WSum > 0.f && Dist >= SMALL && B.x >= 0.f && B.z > 0.f)
 	{
 		const float C = Dist - B.x;
-		// XPBD 컴플라이언스, 인장만(λ ≤ 0) · 고원(−λmax)
-		const float DLambda   = -BondOmega * (C + BondAlphaTilde * B.y) / (WSum + BondAlphaTilde);
-		const float NewLambda = clamp(B.y + DLambda, -BondLambdaMax, 0.f);
+		// XPBD 컴플라이언스, 인장만(λ ≤ 0) · 고원(−λmax). z = 쌍의 cohesion (M1 W3) — 강성 · 고원이 비례, 전역 W 모드면 1
+		const float AlphaT    = BondAlphaTilde / B.z;
+		const float DLambda   = -BondOmega * (C + AlphaT * B.y) / (WSum + AlphaT);
+		const float NewLambda = clamp(B.y + DLambda, -(BondLambdaMax * B.z), 0.f);
 		Corr = (Diff / Dist) * (NewLambda - B.y);
 		B.y = NewLambda;
 		BondDataRW[b] = B;

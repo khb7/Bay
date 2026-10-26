@@ -60,16 +60,17 @@
 
 ## 5. 사용자 판정으로 남은 것
 
-1. **모양 · 질감 전반** — `img/m1-nrm-f270.png` (마름) · `img/m1-wet08-f270.png` (젖음 0.8) · `img/m1-big20k-f270.png` (2만 입자 큰 둔덕). 큰 장면: `-sandcount=20000 -sandboxhalf=80`. 시험: `UnrealEditor.exe BeachSimulator.uproject /Engine/Maps/Templates/Template_Default -game -sandsurfacetest -sandsim -sandscene=pour [-sandwet=0.8] [-sandsmooth=N]`
-2. 평활화 25 회의 대가 — 작은 뭉치(3~7 입자) 부피 −21%. 10 회면 −10% 지만 둔덕 혹이 남는다 (`img/m1-smooth0/10/25-f270.png`).
+1. ~~모양 · 질감 전반~~ — **좋음** (사용자, 2026-10-27). — `img/m1-nrm-f270.png` (마름) · `img/m1-wet08-f270.png` (젖음 0.8) · `img/m1-big20k-f270.png` (2만 입자 큰 둔덕). 큰 장면: `-sandcount=20000 -sandboxhalf=80`. 시험: `UnrealEditor.exe BeachSimulator.uproject /Engine/Maps/Templates/Template_Default -game -sandsurfacetest -sandsim -sandscene=pour [-sandwet=0.8] [-sandsmooth=N]`
+2. ~~평활화 25 회의 대가~~ — **25 회로 확정** (사용자, 2026-10-27).
 3. 젖은 모래 거칠기 0.2 (papers L-3 ① 값) — 다소 반들거려 보일 수 있다.
 4. 둔덕 가장자리의 물결 · 작은 돌기 — 바닥에 흩어진 알갱이를 알갱이로 남기는 가중 때문 (의도).
+5. 젖음 어두워짐이 약하다 — 알베도 × 0.5 가 반사광 · 자동 노출에 묻힌다 (`img/m1-w2half1-f270.png`, #28).
 
 ## 6. 남은 일
 
 | 항목 | 상태 |
 |---|---|
-| 입자별 젖음 W → 정점 색 | 시뮬의 W 가 아직 전역 하나 (시뮬 쪽 일). 메셔는 wnn 과 같은 셰퍼드 보간으로 바로 붙일 수 있다 |
+| 입자별 젖음 W → 정점 색 · 결합 점착 | **✓** (#28 · #29, [m1-plan-wet.md](m1-plan-wet.md)). W 의 시간 변화(침투 · 증발)는 M5 |
 | Lumen · 하드웨어 레이트레이싱 · 모션 벡터 | 확인 안 함 |
 | 여러 타일 · 타일 경계 이음 | 컴포넌트 하나 = 고정 영역 하나. 타일 경계는 아직 |
 | 잠든 영역 메시 캐시 | 재우기가 기본 꺼짐이라 미룸 |

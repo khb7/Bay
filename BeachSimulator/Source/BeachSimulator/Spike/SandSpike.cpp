@@ -199,7 +199,7 @@ float FSandSpike::CohesionOfW(float W) const
 
 float FSandSpike::BondCompliance() const
 {
-	const float Coh = CohesionOfW(Params.WGlobal);
+	const float Coh = GlobalCoh();
 	if (Coh <= 0.f) { return 0.f; }
 	// 변형률 BondStiffStrain 에서 힘이 BondStrength·m·g 에 닿는 강성. 그 위는 SolveBondsSP 의 λ 클램프가 고원을 만든다. m = 1
 	const float D = 2.f * Params.Radius;
@@ -209,9 +209,10 @@ float FSandSpike::BondCompliance() const
 
 int32 FSandSpike::FormBonds()
 {
-	if (CohesionOfW(Params.WGlobal) <= 0.f) { return 0; }
+	if (GlobalCoh() <= 0.f) { return 0; }
 	SyncFromGpu();
 	bGpuDirty = true;
+	EnsureWet();
 
 	const float D = 2.f * Params.Radius;
 	const float MaxDist = D * Params.BondFormStretch;
@@ -240,10 +241,12 @@ int32 FSandSpike::FormBonds()
 	int32 Made = 0;
 	for (const FCand& C : Cands)
 	{
+		const float Coh = PairCoh(C.I, C.J);
+		if (Coh <= 0.f) { continue; }   // 마른 쌍 — 다리가 없다 (W3)
 		if (SlotUsed[C.I] >= Params.BondSlots || SlotUsed[C.J] >= Params.BondSlots) { ++BondSlotOverflow; continue; }
 		// 휴지 길이 하한 = D. 살짝 침투한 쌍에 현재 거리를 주면 결합은 D 아래로 당기고 접촉은 D 로 밀어
 		// 매 반복 싸운다 — 실측: 절토 12층에서 벽을 열자 높이 46→81cm 로 솟음. 인장만 받는 결합은 D 에서 시작해야 한다
-		Bonds.Add({ C.I, C.J, FMath::Max(C.Dist, D), 0.f });
+		Bonds.Add({ C.I, C.J, FMath::Max(C.Dist, D), 0.f, 0.f, Coh });
 		++SlotUsed[C.I]; ++SlotUsed[C.J]; ++Made;
 	}
 	return Made;
@@ -264,9 +267,9 @@ void FSandSpike::SolveBondsSP(float StepDt)
 	{
 		return;   // cohesion(W) = 0 — BreakBonds 가 목록을 비운다
 	}
-	const float AlphaTilde = Alpha / (StepDt * StepDt);
+	const float AlphaTilde0 = Alpha / (StepDt * StepDt);
 	// 고원 — 힘 ≤ BondStrength·m·g·cohesion(W). λ 는 위치형 승수라 힘 = λ/h²
-	const float LambdaMax = Params.BondStrength * FMath::Abs(Params.Gravity) * CohesionOfW(Params.WGlobal) * StepDt * StepDt;
+	const float LambdaMax0 = Params.BondStrength * FMath::Abs(Params.Gravity) * GlobalCoh() * StepDt * StepDt;
 
 	const bool bGatherHere = Params.bGatherApply && Params.bGatherBonds;   // 결합만 순차로 두는 진단 (bGatherBonds=false)
 	if (bGatherHere)
@@ -297,6 +300,10 @@ void FSandSpike::SolveBondsSP(float StepDt)
 		}
 		const FVector3f N = Diff / Dist;
 		const float C = Dist - B.RestLen;
+		if (B.Coh <= 0.f) { continue; }
+		// 쌍마다 강성 · 고원이 cohesion 에 비례 (W3). 전역 모드면 Coh = 1 이라 그대로 (GPU SolveBondsCS 와 같다)
+		const float AlphaTilde = AlphaTilde0 / B.Coh;
+		const float LambdaMax = LambdaMax0 * B.Coh;
 
 		float DLambda = -OmegaB * (C + AlphaTilde * B.Lambda) / (WSum + AlphaTilde);
 		const float NewLambda = FMath::Clamp(B.Lambda + DLambda, -LambdaMax, 0.f);   // 인장만 · 고원
@@ -348,12 +355,12 @@ void FSandSpike::BreakBonds()
 	}
 	// 거리 > d_rest·breakStretch (Lian 1993 파단 거리) 또는 말라서 cohesion(W) = 0.
 	// 지운 결합은 돌아오지 않는다 — 되붙이는 것은 FormBonds(도구)만 한다.
-	const bool bDry = CohesionOfW(Params.WGlobal) <= 0.f;
+	const bool bDry = GlobalCoh() <= 0.f;
 	for (int32 b = Bonds.Num() - 1; b >= 0; --b)
 	{
 		const FSandBond& B = Bonds[b];
 		const float Dist = FVector3f::Dist(Pos[B.I], Pos[B.J]);
-		if (bDry || Dist > B.RestLen * Params.BreakStretch)
+		if (bDry || B.Coh <= 0.f || Dist > B.RestLen * Params.BreakStretch)
 		{
 			Bonds.RemoveAtSwap(b);
 			++BondsBrokenTotal;
@@ -366,6 +373,8 @@ void FSandSpike::SetWet(TFunctionRef<float(int32, const FVector3f&)> Fn)
 	SyncFromGpu();
 	EnsureWet();
 	for (int32 i = 0; i < Pos.Num(); ++i) { Wet[i] = Fn(i, Pos[i]); }
+	bWetPerParticle = true;
+	for (FSandBond& B : Bonds) { B.Coh = PairCoh(B.I, B.J); }   // 0 이면 다음 BreakBonds 가 끊는다
 	bGpuDirty = true;   // 입자는 그대로라 쌍 목록(워밍)은 건드리지 않는다
 }
 
@@ -1104,13 +1113,13 @@ void FSandSpike::SolveIterationsGpu(float StepDt)
 		{
 			D.BondIJ[2 * b]     = Bonds[b].I;
 			D.BondIJ[2 * b + 1] = Bonds[b].J;
-			D.BondData[b]       = FVector4f(Bonds[b].RestLen, Bonds[b].Lambda, 0.f, 0.f);
+			D.BondData[b]       = FVector4f(Bonds[b].RestLen, Bonds[b].Lambda, Bonds[b].Coh, 0.f);
 			++D.BondAdjOffset[Bonds[b].I + 1];
 			++D.BondAdjOffset[Bonds[b].J + 1];
 		}
 		FillAdj(D.BondAdjOffset, D.BondAdj, NumB, 0, [&](int32 b, int32& I, int32& J) { I = Bonds[b].I; J = Bonds[b].J; });
 		D.BondAlphaTilde = Alpha / (StepDt * StepDt);
-		D.BondLambdaMax  = Params.BondStrength * FMath::Abs(Params.Gravity) * CohesionOfW(Params.WGlobal) * StepDt * StepDt;
+		D.BondLambdaMax  = Params.BondStrength * FMath::Abs(Params.Gravity) * GlobalCoh() * StepDt * StepDt;
 		D.BondOmega      = Params.BondOmega;
 	}
 
@@ -1182,7 +1191,7 @@ void FSandSpike::BuildBondUpload(TArray<uint32>& IJ, TArray<FVector4f>& Data, TA
 	{
 		IJ[2 * b]     = Bonds[b].I;
 		IJ[2 * b + 1] = Bonds[b].J;
-		Data[b]       = FVector4f(Bonds[b].RestLen, Bonds[b].Lambda, 0.f, 0.f);
+		Data[b]       = FVector4f(Bonds[b].RestLen, Bonds[b].Lambda, Bonds[b].Coh, 0.f);
 		++AdjOffset[Bonds[b].I + 1];
 		++AdjOffset[Bonds[b].J + 1];
 	}
@@ -1323,9 +1332,9 @@ void FSandSpike::StepGpuResident(float Dt)
 	P.Gravity     = GravityDir * (FMath::Abs(Params.Gravity) * GravityScale);
 	const float Alpha = BondCompliance();
 	P.bBondsActive   = Bonds.Num() > 0 && Alpha > 0.f;
-	P.bBondsDry      = CohesionOfW(Params.WGlobal) <= 0.f;
+	P.bBondsDry      = GlobalCoh() <= 0.f;
 	P.BondAlphaTilde = Alpha > 0.f ? Alpha / (Dt * Dt) : 0.f;
-	P.BondLambdaMax  = Params.BondStrength * FMath::Abs(Params.Gravity) * CohesionOfW(Params.WGlobal) * Dt * Dt;
+	P.BondLambdaMax  = Params.BondStrength * FMath::Abs(Params.Gravity) * GlobalCoh() * Dt * Dt;
 	P.BondOmega      = Params.BondOmega;
 	P.BreakStretch   = Params.BreakStretch;
 	P.VelocityDamping = VelocityDamping;

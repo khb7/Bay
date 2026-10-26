@@ -803,7 +803,7 @@ namespace
 			if (WetMode == TEXT("half"))
 			{
 				const float Cx = Box.GetCenter().X;
-				Sim.SetWet([Cx](int32, const FVector3f& X) { return X.X < Cx ? 0.6f : 0.1f; });
+				Sim.SetWet([Cx](int32, const FVector3f& X) { return X.X < Cx ? 0.6f : 0.f; });
 			}
 			double SumSim = 0, SumMesh = 0, MaxSim = 0, MaxMesh = 0; int32 Cnt = 0, Matches = 0, Checks = 0;
 			for (int32 f = 1; f <= Frames; ++f)
