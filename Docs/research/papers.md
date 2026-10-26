@@ -1428,6 +1428,32 @@ k(s) = max(0, (1 − s²)³),  R = 평균 입자 간격의 2 배
 - 등위면: 논문들은 Marching Cubes, 우리는 계획대로 Surface Nets (삼각형 적고 모서리 덜 뭉갬).
 - 잠든 입자는 커널(G, x̄)을 캐시할 수 있다 (system-design §6-2) — 우리 재우기와 맞물린다.
 
+### C13. 가중 라플라시안 평활화 · splashsurf — M1 예산의 근거 (2026-10-26)
+
+**Löschner, Böttcher, Jeske, Bender (2023), "Weighted Laplacian Smoothing for Surface Reconstruction of Particle-based Fluids", VMV 2023.** 원문 PDF 는 서버가 응답하지 않아 못 받았다 — 초록 + **저자들의 공개 구현 `splashsurf` 소스**(GitHub InteractiveComputerGraphics/splashsurf, `reconstruct.rs` · `postprocessing.rs`)로 확인.
+
+**한 줄**: **등방 마칭 큐브 메시를 만든 뒤, 입자 이웃 수로 가중한 라플라시안 평활화**를 한다 — 평평한 곳은 매끈하게, 물보라 · 고립 입자는 평활화에서 빼서 덩어리로 남긴다. 이방성 커널(Yu & Turk) 없이 비슷한 효과.
+
+```
+입자 가중 이웃 수   wnn_i = Σ_j (1 − |x_i − x_j|² / r²)      r = 커널 지지 반경 (2h)
+정점으로 보간        wnn(v) = SPH 보간 (입자 → 정점)
+가중                x = clamp(wnn(v) / 13, 0, 1)   →   w = 6x⁵ − 15x⁴ + 10x³  (smoothstep)    정규화 13 = 기본값
+평활화 (반복 ~25)    v ← (1 − β·w)·v + β·w · mean(이웃 정점),   β = 1
+정리                "barnacle" (정점 차수 4 / [5,5,5,6,6] 패턴) 병합 · 정점 이동 정리 · 법선 평활화
+```
+- **고립 입자 보존이 가중의 목적**: 이웃이 적으면 w ≈ 0 → 안 움직인다. 우리 등방 방식의 문제(고립 입자 소멸)와는 별개 — 그건 등위값 문제라 여전히 처리 필요.
+
+**splashsurf 기본 · 성능 (README)**
+- 커널 지지 = 2 × 평활 길이, 평활 길이 ≈ 2 × 입자 반경 (→ 지지 4R). 등위값 0.6~0.7. **셀 크기 0.5~1.0 × 입자 반경**, 1.0 넘으면 결함.
+- 64³ 셀 부분 영역으로 나눠 병렬 삼각화 후 이어 붙임. 성긴 영역은 해시맵.
+- **1335만 입자 → 2.47 초 (Apple M4 Pro 14 코어, 셀 1.5R, 607만 삼각형)** ≈ **0.185 µs/입자**. 우리 2만이면 ≈ 3.7 ms 수준 — **우리 구현(셀 2.5cm = 1R 에서 55~87 ms, 1.25cm 에서 355 ms)은 15~100 배 느리다** → 알고리즘이 아니라 구현 효율 문제.
+- 수천 입자 이하는 영역 분할을 끄는 편이 빠르다.
+
+**우리에게**
+- 예산 문제는 **구현**부터: 부분 영역 병렬 · 성긴 격자 · 이웃 단계 재사용. splashsurf 가 같은 일(띠 · MC)을 우리보다 수십 배 빠르게 한다.
+- 품질 경로 대안: **등방 + 가중 라플라시안 평활화 (+ 고립 입자는 등위값/작은 커널로 따로)** — 이방성 커널(PCA · SVD 입자마다)을 뺄 수 있다. 셀 2.5cm 에서 품질이 버티는지가 관건.
+- 원문에서 확인 못 한 것: 평활화 후 부피 변화 수치, 이방성 대비 비용 · 품질 표. (Akinci VRIPHYS 2012 파이프라인 · Ihmsen 2014 STAR 는 이번에 안 읽었다.)
+
 **지각 문턱** — **Yeh, Reinman, Patel, Faloutsos (2009), "Fool Me Twice: Exploring and Exploiting Error Tolerance in Physics-Based Animation", TOG 29(1).** GPU 가 CPU 와 다른 답을 낼 때 "얼마나 달라도 되나"의 근거. #35 의 예산 스윕이 쓴 기준(시드 산포 ±1°)을 지각 쪽에서 받친다.
 
 ---
