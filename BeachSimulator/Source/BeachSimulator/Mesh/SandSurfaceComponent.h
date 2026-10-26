@@ -9,6 +9,7 @@
 #include "SandSurfaceComponent.generated.h"
 
 class UMaterialInterface;
+class FSandGpuSim;
 
 UCLASS(ClassGroup = (Sand), meta = (BlueprintSpawnableComponent))
 class USandSurfaceComponent : public UPrimitiveComponent
@@ -20,6 +21,13 @@ public:
 
 	/** 입자 위치(월드 = 컴포넌트 로컬, 컴포넌트는 원점에 둔다)로 메시를 다시 만든다. 게임 스레드 */
 	void SetParticles(const TArray<FVector3f>& Positions);
+
+	/**
+	 * G3 — 시뮬을 원천으로. 매 프레임 UpdateFromSim() 을 시뮬 Step 뒤에 부르면 같은 프레임에 시뮬 위치 버퍼에서 메시를 다시 짓는다
+	 * (내려받기 없음). 격자는 고정 영역 (DomainMin ~ DomainMax, 시뮬 좌표 = 컴포넌트 로컬). 시뮬은 컴포넌트보다 오래 살아야 한다.
+	 */
+	void SetSimSource(const FSandGpuSim* Sim, const FVector3f& DomainMin, const FVector3f& DomainMax);
+	void UpdateFromSim();
 
 	UPROPERTY(EditAnywhere, Category = "Sand")
 	TObjectPtr<UMaterialInterface> Material;
@@ -36,6 +44,11 @@ public:
 	virtual UMaterialInterface* GetMaterial(int32 ElementIndex) const override;
 
 private:
+	struct FSandGpuMeshParams MakeParams() const;
+	void EnqueueBuild(FPrimitiveSceneProxy* Proxy) const;
+
 	TArray<FVector3f> Particles;
+	const FSandGpuSim* SimSource = nullptr;
+	FVector3f DomainMin = FVector3f::ZeroVector, DomainMax = FVector3f::ZeroVector;
 	FBox ParticleBox = FBox(ForceInit);
 };

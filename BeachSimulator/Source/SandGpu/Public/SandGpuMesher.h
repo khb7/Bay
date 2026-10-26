@@ -56,12 +56,19 @@ struct FSandGpuMeshRenderBuffers
 	bool IsValid() const { return Position.IsValid(); }
 };
 
+class FSandGpuSim;
+
 namespace SandGpuMesh
 {
 	/** 렌더 스레드. 용량을 잡는다 (이미 충분하면 그대로) */
 	SANDGPU_API void AllocateRenderBuffers(int32 MaxVerts, FSandGpuMeshRenderBuffers& Out);
 
 	/** 렌더 스레드. 입자 → 메시를 화면용 버퍼에 직접 쓴다 (내려받기 없음). OutStats 는 nullptr 가능 */
+	/** G3 — 시뮬 위치 버퍼를 그대로 읽는다 (내려받기 · 올리기 없음, 같은 프레임). 게임 스레드 · 결과 내려받기 (시험용) */
+	SANDGPU_API void BuildFromSim(const FSandGpuSim& Sim, const FSandGpuMeshParams& Params, FSandGpuMeshResult& Out);
+	/** G3 — 렌더 스레드, 화면용 버퍼로 */
+	SANDGPU_API void BuildFromSimToRenderBuffers(FRHICommandListImmediate& RHICmdList, const FSandGpuSim& Sim, const FSandGpuMeshParams& Params, FSandGpuMeshRenderBuffers& Buffers);
+
 	SANDGPU_API void BuildToRenderBuffers(FRHICommandListImmediate& RHICmdList, const TArray<FVector4f>& Positions, const FSandGpuMeshParams& Params, FSandGpuMeshRenderBuffers& Buffers);
 
 	/** 게임 스레드에서 부르고 끝날 때까지 기다린다 */

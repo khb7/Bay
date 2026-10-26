@@ -7,6 +7,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "RenderGraphResources.h"
 
 /** 1단계 — 서브스텝 하나의 반복 루프 입출력. 배열은 호출 측(FSandSpike)이 채우고, ★ 표시는 결과로 덮어쓴다. */
 struct FSandGpuSolveData
@@ -151,6 +152,8 @@ public:
 	void Download(FSandGpuDownload& Out) const;
 
 	int32 NumParticles() const { return N; }
+	/** 렌더 스레드 — 위치 버퍼 (float4 xyz · w 역질량, 구조 버퍼). M1 G3 메셔가 내려받기 없이 같은 프레임에 읽는다 */
+	TRefCountPtr<FRDGPooledBuffer> GetPositionBufferRT() const;
 	int32 NumBonds() const { return NumB; }
 	int32 MaxPairs() const { return MaxPairCount; }
 

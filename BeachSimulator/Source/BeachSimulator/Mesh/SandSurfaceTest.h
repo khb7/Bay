@@ -8,6 +8,7 @@
 #include "CoreMinimal.h"
 #include "Containers/Ticker.h"
 #include "Subsystems/WorldSubsystem.h"
+#include "../Spike/SandSpike.h"
 #include "SandSurfaceTest.generated.h"
 
 UCLASS()
@@ -22,6 +23,12 @@ public:
 
 private:
 	bool Tick(float DeltaTime);
+	void StartSim(UWorld& World);
+
+	TUniquePtr<class FSandSpike> Sim;          // -sandsim: G3 매 프레임 시뮬 → 메시
+	UPROPERTY()
+	TObjectPtr<class USandSurfaceComponent> SimComp = nullptr;
+	TArray<int32> ShotFrames;
 
 	FString ShotPath;
 	int32 Frames = 0;

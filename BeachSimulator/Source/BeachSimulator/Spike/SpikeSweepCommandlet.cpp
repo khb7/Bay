@@ -35,22 +35,7 @@ namespace
 	 */
 	void ApplyGpuProfile(const FString& Params, FSandParams& P, int32* InOutIterations = nullptr, float* InOutMu = nullptr)
 	{
-		if (!P.bGpuResident || FParse::Param(*Params, TEXT("legacy"))) { return; }
-		auto Has = [&](const TCHAR* Key) { return Params.Contains(Key); };
-		if (!Has(TEXT("-color8"))) { P.bColor8 = true; P.bColor8Par = true; }
-		if (!Has(TEXT("block="))) { P.BlockSize = 15.f; }
-		if (!Has(TEXT("-mu="))) { P.Friction = 0.17f; if (InOutMu) { *InOutMu = 0.17f; } }
-		if (!Has(TEXT("kv="))) { P.Kv = 1.f; }
-		if (!Has(TEXT("kc="))) { P.Kc = 0.2f; }
-		if (!Has(TEXT("vmax="))) { P.MaxDepenVel = 30.f; }
-		if (!Has(TEXT("iterations="))) { P.Iterations = 60; if (InOutIterations) { *InOutIterations = 60; } }
-		if (!Has(TEXT("-nopmargin"))) { P.bParticleMargin = true; }
-		if (P.bSleep)
-		{
-			if (!Has(TEXT("-nowakecold"))) { P.bWakeCold = true; }
-			if (!Has(TEXT("-nowakezero"))) { P.bWakeZeroPairs = true; }
-			if (!Has(TEXT("wakelam="))) { P.WakeLamRatio = 1.2f; }
-		}
+		ApplySandGpuProfile(Params, P, InOutIterations, InOutMu);   // SandSpike.cpp — G3 화면 시험과 공유
 	}
 
 	// 앵커 셀 — 실시간 뷰에서 26.5° 가 나온 설정. 배치가 이걸 재현해야 나머지를 믿는다
@@ -764,6 +749,64 @@ namespace
 		FParse::Value(*Params, TEXT("block="), Base.Block);
 		FParse::Value(*Params, TEXT("simd="), Base.Simd);
 		const bool bDevDump = FParse::Param(*Params, TEXT("devdump"));
+		if (FParse::Param(*Params, TEXT("meshframe")) && SandGpu::IsAvailable())
+		{
+			// G3 (m1-plan-gpu §3): 시뮬이 움직이는 동안 매 프레임 시뮬 위치 버퍼에서 바로 메시 → 같은 프레임 대조 · 시뮬 + 메시 GPU 시간
+			int32 Count = 3000, Frames = 180, Every = 30;
+			FParse::Value(*Params, TEXT("count="), Count);
+			FParse::Value(*Params, TEXT("frames="), Frames);
+			FParse::Value(*Params, TEXT("every="), Every);
+			FSandParams SP;
+			SP.Substeps = 1; SP.WarmStart = 1.f; SP.WarmGapTol = 0.05f; SP.bGpuResident = true;
+			ApplyGpuProfile(TEXT("-gpu2"), SP);
+			SP.bGatherApply = false; SP.bMassSplit = false;
+			FTiltSetup S; S.TargetCount = Count; S.Layers = FMath::Max(4, FMath::RoundToInt(27.f * FMath::Pow(Count / 20000.f, 1.f / 3.f))); S.FixedLayers = 1; S.BaseJitter = 0.3f; S.bOpenDownhill = false;
+			FSandSpike Sim; Sim.InitTiltBox(SP, S);
+			for (int32 f = 0; f < 600; ++f) { Sim.Step(1.f / 60.f); }
+			// 고정 영역 = 정지 더미 상자 + 옆으로 60cm (벽을 치우면 퍼진다) · 위로 10cm
+			FBox Box(ForceInit);
+			for (const FVector3f& X : Sim.GetPositions()) { Box += FVector(X); }
+			FSandSurfaceParams Pp = Base;
+			Pp.Field = ESandSurfaceField::Anisotropic;
+			const float Pad = 2.f * Pp.H * Pp.MaxStretch + Pp.Cell;
+			const FVector3f DMin = FVector3f(Box.Min) - FVector3f(60.f, 60.f, 0.f) - FVector3f(Pad);
+			const FVector3f DMax = FVector3f(Box.Max) + FVector3f(60.f, 60.f, 10.f) + FVector3f(Pad);
+			Pp.GridOriginOverride = DMin;
+			Pp.GridDimsOverride = FIntVector(FMath::CeilToInt((DMax.X - DMin.X) / Pp.Cell) + 1, FMath::CeilToInt((DMax.Y - DMin.Y) / Pp.Cell) + 1, FMath::CeilToInt((DMax.Z - DMin.Z) / Pp.Cell) + 1);
+			FSandGpuMeshParams GP; GP.NeighborR = Pp.NeighborR; GP.Lambda = Pp.Lambda;
+			GP.Radius = Pp.Radius; GP.H = Pp.H; GP.Kr = Pp.Kr; GP.Kn = Pp.Kn; GP.Ks = Pp.Ks; GP.MinSigma = Pp.MinSigma;
+			GP.MaxStretch = Pp.MaxStretch; GP.IsoFrac = Pp.IsoFrac; GP.NEps = Pp.NEps; GP.KnRamp = Pp.KnRamp;
+			GP.BandNEps = Pp.BandNEps; GP.SurfDev = Pp.SurfDev; GP.BandR = Pp.BandR; GP.Cell = Pp.Cell;
+			GP.GridOrigin = Pp.GridOriginOverride; GP.GridDims = Pp.GridDimsOverride;
+			UE_LOG(LogSpikeSweep, Display, TEXT("G3 — 입자 %d · 영역 격자 %d×%d×%d · 벽 치움 후 %d 프레임"), Sim.GetPositions().Num(), GP.GridDims.X, GP.GridDims.Y, GP.GridDims.Z, Frames);
+			Sim.ReleaseWalls();
+			double SumSim = 0, SumMesh = 0, MaxSim = 0, MaxMesh = 0; int32 Cnt = 0, Matches = 0, Checks = 0;
+			for (int32 f = 1; f <= Frames; ++f)
+			{
+				Sim.Step(1.f / 60.f);
+				const FSandGpuSim* Gs = Sim.GetGpuSim();
+				FSandGpuMeshResult G;
+				SandGpuMesh::BuildFromSim(*Gs, GP, G);
+				const double SimMs = Sim.LastStageMs(0) + Sim.LastStageMs(1) + Sim.LastStageMs(2) + Sim.LastStageMs(3);
+				const double MeshMs = G.StageMs[0] + G.StageMs[1] + G.StageMs[2] + G.StageMs[3];
+				if (f > 5) { SumSim += SimMs; SumMesh += MeshMs; MaxSim = FMath::Max(MaxSim, SimMs); MaxMesh = FMath::Max(MaxMesh, MeshMs); ++Cnt; }
+				if (f % Every == 0)
+				{
+					// 같은 프레임 확인: 지금 시뮬 위치를 내려받아 CPU 로 같은 격자에 메시 → GPU 메시와 정점 · 삼각형 수 비교
+					FSandSurfaceMesh M;
+					FSandSurfaceBuilder::Build(Sim.GetPositions(), Pp, M);
+					const bool bSame = M.Vertices.Num() == G.NumVertsTotal && M.Triangles.Num() == G.NumIndicesTotal;
+					Matches += bSame ? 1 : 0; ++Checks;
+					float VMax = 0.f; for (const FVector3f& X : Sim.GetPositions()) { VMax = FMath::Max(VMax, X.Z); }
+					UE_LOG(LogSpikeSweep, Display, TEXT("   f %3d: 정점 CPU %d / GPU %d · 삼각형 %d / %d %s · 띠 점 %d / %d · GPU ms 시뮬 %.2f + 메시 %.2f (이웃 %.2f 커널 %.2f 띠·장 %.2f 메시 %.2f) · 최고점 %.1f"),
+						f, M.Vertices.Num(), G.NumVertsTotal, M.Triangles.Num() / 3, G.NumIndicesTotal / 3, bSame ? TEXT("같음") : TEXT("⚠ 다름"), M.NumBandPoints, G.NumBandPoints,
+						SimMs, MeshMs, G.StageMs[0], G.StageMs[1], G.StageMs[2], G.StageMs[3], VMax);
+				}
+			}
+			UE_LOG(LogSpikeSweep, Display, TEXT("G3 요약 — 같은 프레임 일치 %d / %d · GPU ms 평균 시뮬 %.2f + 메시 %.2f = %.2f · 최대 시뮬 %.2f · 메시 %.2f"),
+				Matches, Checks, SumSim / FMath::Max(1, Cnt), SumMesh / FMath::Max(1, Cnt), (SumSim + SumMesh) / FMath::Max(1, Cnt), MaxSim, MaxMesh);
+			return 0;
+		}
 		const bool bGpuMesh = FParse::Param(*Params, TEXT("gpumesh")) && SandGpu::IsAvailable();
 		const bool bMeshDiff = FParse::Param(*Params, TEXT("meshdiff"));
 		Base.bBandOnly = !FParse::Param(*Params, TEXT("fullband"));

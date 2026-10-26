@@ -37,7 +37,9 @@ struct FSandSurfaceParams
 	float BandR     = 0.f;     // 띠 반경 (표면 입자에서). 0 이면 장 지지 반경 전체. 등위면은 표면 입자 근처라 좁혀도 된다 (#3)
 	int32 Block     = 32;      // 장 뿌리기 부분 영역 한 변 (격자점). 영역마다 스레드 하나가 지역 조밀 배열에 뿌린다 — 원자 연산 없음 (splashsurf, C14). 0 = 입자별 원자 뿌리기 (#3)
 	int32 Simd      = 8;       // 부분 영역 뿌리기 줄 루프 폭: 8 = AVX (CPU 가 지원하면), 4 = SSE, 0 = 스칼라 (단계 C)
-	bool  bBandOnly = true;    // 표면 입자 주변 격자점만 (Akinci). false 면 입자 영향권 전부
+	bool  bBandOnly = true;
+	FVector3f GridOriginOverride = FVector3f::ZeroVector;   // GridDimsOverride.X > 0 이면 장 격자를 이것으로 (G3: 시뮬 영역 고정 격자와 같게)
+	FIntVector GridDimsOverride = FIntVector(0);    // 표면 입자 주변 격자점만 (Akinci). false 면 입자 영향권 전부
 };
 
 struct FSandSurfaceMesh

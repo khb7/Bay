@@ -1993,3 +1993,24 @@ void FSandSpike::Step(float Dt)
 	Time  += Dt;
 	StepMs = (float)((FPlatformTime::Seconds() - T0) * 1000.0);
 }
+
+void ApplySandGpuProfile(const FString& Params, FSandParams& P, int32* InOutIterations, float* InOutMu)
+{
+	if (!P.bGpuResident || FParse::Param(*Params, TEXT("legacy"))) { return; }
+	auto Has = [&](const TCHAR* Key) { return Params.Contains(Key); };
+	if (!Has(TEXT("-color8"))) { P.bColor8 = true; P.bColor8Par = true; }
+	if (!Has(TEXT("block="))) { P.BlockSize = 15.f; }
+	if (!Has(TEXT("-mu="))) { P.Friction = 0.17f; if (InOutMu) { *InOutMu = 0.17f; } }
+	if (!Has(TEXT("kv="))) { P.Kv = 1.f; }
+	if (!Has(TEXT("kc="))) { P.Kc = 0.2f; }
+	if (!Has(TEXT("vmax="))) { P.MaxDepenVel = 30.f; }
+	if (!Has(TEXT("iterations="))) { P.Iterations = 60; if (InOutIterations) { *InOutIterations = 60; } }
+	if (!Has(TEXT("-nopmargin"))) { P.bParticleMargin = true; }
+	if (P.bSleep)
+	{
+		if (!Has(TEXT("-nowakecold"))) { P.bWakeCold = true; }
+		if (!Has(TEXT("-nowakezero"))) { P.bWakeZeroPairs = true; }
+		if (!Has(TEXT("wakelam="))) { P.WakeLamRatio = 1.2f; }
+	}
+}
+

@@ -7,6 +7,7 @@
 #include "PrimitiveSceneProxy.h"
 #include "RenderingThread.h"
 #include "SandGpuMesher.h"
+#include "SandGpuSolver.h"
 #include "SceneInterface.h"
 #include "SceneManagement.h"
 
@@ -51,14 +52,27 @@ namespace
 		/** 렌더 스레드: 버퍼를 잡고(처음 · 모자랄 때) 메시를 만든다 */
 		void Build(FRHICommandListImmediate& RHICmdList, const TArray<FVector4f>& Pos4, const FSandGpuMeshParams& Params)
 		{
-			const int32 Need = FMath::Max(1 << 16, Pos4.Num() * 16);
+			Reserve(RHICmdList, Pos4.Num());
+			SandGpuMesh::BuildToRenderBuffers(RHICmdList, Pos4, Params, Buffers);
+			bReady = true;
+		}
+
+		/** 렌더 스레드: G3 — 시뮬 위치 버퍼에서 바로 */
+		void BuildFromSim(FRHICommandListImmediate& RHICmdList, const FSandGpuSim& Sim, const FSandGpuMeshParams& Params)
+		{
+			Reserve(RHICmdList, Sim.NumParticles());
+			SandGpuMesh::BuildFromSimToRenderBuffers(RHICmdList, Sim, Params, Buffers);
+			bReady = true;
+		}
+
+		void Reserve(FRHICommandListImmediate& RHICmdList, int32 NumParticles)
+		{
+			const int32 Need = FMath::Max(1 << 16, NumParticles * 16);
 			if (!Buffers.IsValid() || Buffers.MaxVerts < Need)
 			{
 				SandGpuMesh::AllocateRenderBuffers(Need, Buffers);
 				InitVertexFactory(RHICmdList);
 			}
-			SandGpuMesh::BuildToRenderBuffers(RHICmdList, Pos4, Params, Buffers);
-			bReady = true;
 		}
 
 		virtual void GetDynamicMeshElements(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily, uint32 VisibilityMap, FMeshElementCollector& Collector) const override
@@ -173,43 +187,79 @@ void USandSurfaceComponent::GetUsedMaterials(TArray<UMaterialInterface*>& OutMat
 
 FBoxSphereBounds USandSurfaceComponent::CalcBounds(const FTransform& LocalToWorld) const
 {
+	if (SimSource) { return FBoxSphereBounds(FBox(FVector(DomainMin), FVector(DomainMax))).TransformBy(LocalToWorld); }
 	if (!ParticleBox.IsValid) { return FBoxSphereBounds(LocalToWorld.GetLocation(), FVector(1.f), 1.f); }
 	// 메시는 입자 AABB 에서 커널 지지(최대 20cm)까지 나갈 수 있다
 	return FBoxSphereBounds(ParticleBox.ExpandBy(25.0)).TransformBy(LocalToWorld);
 }
 
-FPrimitiveSceneProxy* USandSurfaceComponent::CreateSceneProxy()
+FSandGpuMeshParams USandSurfaceComponent::MakeParams() const
 {
-	FSandSurfaceSceneProxy* Proxy = new FSandSurfaceSceneProxy(this);
-	if (Particles.Num() == 0) { return Proxy; }
-
-	// 프록시는 설정 변경(그림자 방식 등) 때마다 다시 만들어진다 — 그때마다 메시를 새 프록시에 다시 짓는다.
-	// 이 명령은 프록시를 장면에 넣는 명령보다 먼저 돌지만 프록시 객체는 이미 있다. 프록시 삭제도 렌더 명령이라 순서가 보장된다.
-	// 격자는 CPU FSandSurfaceBuilder 와 같다 (원점 = AABB − (지지 + 셀))
 	FSandGpuMeshParams P;
 	P.Cell = Cell; P.IsoFrac = IsoFrac; P.BandR = BandR; P.SurfDev = SurfDev; P.KnRamp = KnRamp;
-	const float Pad = 2.f * P.H * P.MaxStretch + P.Cell;
-	FVector3f Min(FLT_MAX), Max(-FLT_MAX);
-	for (const FVector3f& X : Particles) { Min = FVector3f::Min(Min, X); Max = FVector3f::Max(Max, X); }
-	P.GridOrigin = Min - FVector3f(Pad);
-	const FVector3f Ext = (Max + FVector3f(Pad)) - P.GridOrigin;
+	FVector3f Lo = DomainMin, Hi = DomainMax;
+	if (!SimSource)
+	{
+		// 입자 원천: CPU FSandSurfaceBuilder 와 같은 격자 (원점 = AABB − (지지 + 셀))
+		const float Pad = 2.f * P.H * P.MaxStretch + P.Cell;
+		Lo = FVector3f(FLT_MAX); Hi = FVector3f(-FLT_MAX);
+		for (const FVector3f& X : Particles) { Lo = FVector3f::Min(Lo, X); Hi = FVector3f::Max(Hi, X); }
+		Lo -= FVector3f(Pad); Hi += FVector3f(Pad);
+	}
+	P.GridOrigin = Lo;
+	const FVector3f Ext = Hi - Lo;
 	P.GridDims = FIntVector(FMath::CeilToInt(Ext.X / P.Cell) + 1, FMath::CeilToInt(Ext.Y / P.Cell) + 1, FMath::CeilToInt(Ext.Z / P.Cell) + 1);
+	return P;
+}
 
+void USandSurfaceComponent::EnqueueBuild(FPrimitiveSceneProxy* InProxy) const
+{
+	// 프록시 삭제도 렌더 명령이라 이 명령이 먼저 돈다
+	FSandSurfaceSceneProxy* Proxy = static_cast<FSandSurfaceSceneProxy*>(InProxy);
+	const FSandGpuMeshParams P = MakeParams();
+	if (SimSource)
+	{
+		const FSandGpuSim* Sim = SimSource;
+		ENQUEUE_RENDER_COMMAND(SandSurfaceBuildFromSim)([Proxy, Sim, P](FRHICommandListImmediate& RHICmdList) { Proxy->BuildFromSim(RHICmdList, *Sim, P); });
+		return;
+	}
+	if (Particles.Num() == 0) { return; }
 	TArray<FVector4f> Pos4; Pos4.SetNumUninitialized(Particles.Num());
 	for (int32 i = 0; i < Particles.Num(); ++i) { Pos4[i] = FVector4f(Particles[i], 0.f); }
-	ENQUEUE_RENDER_COMMAND(SandSurfaceBuild)([Proxy, Pos4 = MoveTemp(Pos4), P](FRHICommandListImmediate& RHICmdList)
-	{
-		Proxy->Build(RHICmdList, Pos4, P);
-	});
+	ENQUEUE_RENDER_COMMAND(SandSurfaceBuild)([Proxy, Pos4 = MoveTemp(Pos4), P](FRHICommandListImmediate& RHICmdList) { Proxy->Build(RHICmdList, Pos4, P); });
+}
+
+FPrimitiveSceneProxy* USandSurfaceComponent::CreateSceneProxy()
+{
+	// 프록시는 설정 변경(그림자 방식 등) 때마다 다시 만들어진다 — 그때마다 새 프록시에 메시를 다시 짓는다
+	FSandSurfaceSceneProxy* Proxy = new FSandSurfaceSceneProxy(this);
+	EnqueueBuild(Proxy);
 	return Proxy;
 }
 
 void USandSurfaceComponent::SetParticles(const TArray<FVector3f>& Positions)
 {
 	check(IsInGameThread());
+	SimSource = nullptr;
 	Particles = Positions;
 	ParticleBox = FBox(ForceInit);
 	for (const FVector3f& X : Particles) { ParticleBox += FVector(X); }
 	UpdateBounds();
-	MarkRenderStateDirty();   // 다음 갱신에 프록시를 새로 만들며 메시를 짓는다 (G3 에선 프록시를 두고 버퍼만 갱신)
+	MarkRenderStateDirty();   // 다음 갱신에 프록시를 새로 만들며 메시를 짓는다
+}
+
+void USandSurfaceComponent::SetSimSource(const FSandGpuSim* Sim, const FVector3f& InDomainMin, const FVector3f& InDomainMax)
+{
+	check(IsInGameThread());
+	SimSource = Sim;
+	DomainMin = InDomainMin; DomainMax = InDomainMax;
+	Particles.Reset();
+	UpdateBounds();
+	MarkRenderStateDirty();
+}
+
+void USandSurfaceComponent::UpdateFromSim()
+{
+	check(IsInGameThread());
+	if (SimSource && SceneProxy) { EnqueueBuild(SceneProxy); }   // 프록시는 그대로, 버퍼만 다시 쓴다
 }

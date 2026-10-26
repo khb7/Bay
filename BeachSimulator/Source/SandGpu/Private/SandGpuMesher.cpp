@@ -1,4 +1,5 @@
 #include "SandGpuMesher.h"
+#include "SandGpuSolver.h"
 
 #include "DataDrivenShaderPlatformInfo.h"
 #include "GlobalShader.h"
@@ -226,17 +227,24 @@ namespace
 		FRenderQueryRHIRef Ts[5];
 	};
 
-	void BuildRenderThread(FRHICommandListImmediate& RHICmdList, const TArray<FVector4f>& Pos4, const FSandGpuMeshParams& P, FSandGpuMeshResult& Out, FSandGpuMeshRenderBuffers* RenderOut = nullptr)
+	/** 위치는 Pos4(올리기) 또는 PosExt(시뮬 버퍼, N 개 — G3 같은 프레임) 중 하나 */
+	void BuildRenderThread(FRHICommandListImmediate& RHICmdList, const TArray<FVector4f>& Pos4, const FSandGpuMeshParams& P, FSandGpuMeshResult& Out, FSandGpuMeshRenderBuffers* RenderOut = nullptr,
+		const TRefCountPtr<FRDGPooledBuffer>& PosExt = nullptr, int32 NumExt = 0)
 	{
 		static FMeshReadbacks* RB = new FMeshReadbacks();   // 렌더 스레드 전용. 프로세스 수명
-		const int32 N = Pos4.Num();
+		const int32 N = PosExt.IsValid() ? NumExt : Pos4.Num();
 		const uint32 TableSize = FMath::RoundUpToPowerOfTwo((uint32)FMath::Max(64, 2 * N));
 		{
 			FRDGBuilder GraphBuilder(RHICmdList, RDG_EVENT_NAME("SandGpuMesh"));
 			const FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 
-			FRDGBufferRef Pos = MeshBuffer(GraphBuilder, TEXT("SandMesh.Pos"), sizeof(FVector4f), N);
-			GraphBuilder.QueueBufferUpload(Pos, Pos4.GetData(), (uint64)N * sizeof(FVector4f), ERDGInitialDataFlags::NoCopy);
+			FRDGBufferRef Pos;
+			if (PosExt.IsValid()) { Pos = GraphBuilder.RegisterExternalBuffer(PosExt); }
+			else
+			{
+				Pos = MeshBuffer(GraphBuilder, TEXT("SandMesh.Pos"), sizeof(FVector4f), N);
+				GraphBuilder.QueueBufferUpload(Pos, Pos4.GetData(), (uint64)N * sizeof(FVector4f), ERDGInitialDataFlags::NoCopy);
+			}
 			FRDGBufferRef CellKey   = MeshBuffer(GraphBuilder, TEXT("SandMesh.CellKey"), sizeof(uint32), N);
 			FRDGBufferRef CellSlot  = MeshBuffer(GraphBuilder, TEXT("SandMesh.CellSlot"), sizeof(uint32), N);
 			FRDGBufferRef CellCount = MeshBuffer(GraphBuilder, TEXT("SandMesh.CellCount"), sizeof(uint32), TableSize);
@@ -568,4 +576,31 @@ void SandGpuMesh::BuildToRenderBuffers(FRHICommandListImmediate& RHICmdList, con
 	if (Positions.Num() == 0) { return; }
 	FSandGpuMeshResult Unused;
 	BuildRenderThread(RHICmdList, Positions, Params, Unused, &Buffers);
+}
+
+void SandGpuMesh::BuildFromSim(const FSandGpuSim& Sim, const FSandGpuMeshParams& Params, FSandGpuMeshResult& Out)
+{
+	check(IsInGameThread());
+	Out = FSandGpuMeshResult();
+	const int32 N = Sim.NumParticles();
+	if (N == 0) { return; }
+	const FSandGpuSim* SimPtr = &Sim;
+	const double T0 = FPlatformTime::Seconds();
+	ENQUEUE_RENDER_COMMAND(SandGpuMeshFromSim)([SimPtr, N, &Params, &Out](FRHICommandListImmediate& RHICmdList)
+	{
+		static const TArray<FVector4f> None;
+		BuildRenderThread(RHICmdList, None, Params, Out, nullptr, SimPtr->GetPositionBufferRT(), N);
+	});
+	FlushRenderingCommands();
+	Out.WallMs = (FPlatformTime::Seconds() - T0) * 1000.0;
+}
+
+void SandGpuMesh::BuildFromSimToRenderBuffers(FRHICommandListImmediate& RHICmdList, const FSandGpuSim& Sim, const FSandGpuMeshParams& Params, FSandGpuMeshRenderBuffers& Buffers)
+{
+	check(IsInRenderingThread() && Buffers.IsValid());
+	const int32 N = Sim.NumParticles();
+	if (N == 0) { return; }
+	static const TArray<FVector4f> None;
+	FSandGpuMeshResult Unused;
+	BuildRenderThread(RHICmdList, None, Params, Unused, &Buffers, Sim.GetPositionBufferRT(), N);
 }

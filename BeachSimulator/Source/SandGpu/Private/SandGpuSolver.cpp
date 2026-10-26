@@ -1097,3 +1097,9 @@ void FSandGpuSim::Download(FSandGpuDownload& Out) const
 	});
 	FlushRenderingCommands();
 }
+
+TRefCountPtr<FRDGPooledBuffer> FSandGpuSim::GetPositionBufferRT() const
+{
+	check(IsInRenderingThread());
+	return State ? State->Pos : nullptr;
+}

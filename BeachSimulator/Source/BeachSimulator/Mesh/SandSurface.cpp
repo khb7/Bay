@@ -379,9 +379,10 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 	const double T2 = FPlatformTime::Seconds();
 
 	// ── ④ 띠 격자 · ⑤ 장 ──
-	const FVector3f GOrigin = Min - FVector3f(Pad);
-	const FVector3f GExt = (Max + FVector3f(Pad)) - GOrigin;
-	const FIntVector GD(FMath::CeilToInt(GExt.X / P.Cell) + 1, FMath::CeilToInt(GExt.Y / P.Cell) + 1, FMath::CeilToInt(GExt.Z / P.Cell) + 1);
+	const bool bGridOverride = P.GridDimsOverride.X > 0;
+	const FVector3f GOrigin = bGridOverride ? P.GridOriginOverride : Min - FVector3f(Pad);
+	const FIntVector GD = bGridOverride ? P.GridDimsOverride : FIntVector(FMath::CeilToInt(((Max + FVector3f(Pad)) - GOrigin).X / P.Cell) + 1, FMath::CeilToInt(((Max + FVector3f(Pad)) - GOrigin).Y / P.Cell) + 1, FMath::CeilToInt(((Max + FVector3f(Pad)) - GOrigin).Z / P.Cell) + 1);
+	const FVector3f GExt = FVector3f(GD.X - 1, GD.Y - 1, GD.Z - 1) * P.Cell;
 	const int32 NumPts = GD.X * GD.Y * GD.Z;
 	auto PtIndex = [&](int32 x, int32 y, int32 z) { return (z * GD.Y + y) * GD.X + x; };
 	auto PtPos = [&](int32 x, int32 y, int32 z) { return GOrigin + FVector3f(x, y, z) * P.Cell; };

@@ -378,6 +378,8 @@ public:
 
 	// --- 관측 ---
 	const TArray<FVector3f>& GetPositions() const { SyncFromGpu(); return Pos; }
+	/** 2단계 GPU 시뮬 (bGpuResident 일 때만, 아니면 nullptr) — M1 G3 메셔가 위치 버퍼를 직접 읽는다 */
+	const FSandGpuSim* GetGpuSim() const { return GpuSim.Get(); }
 	int32   Num()          const { return Pos.Num(); }
 	const TArray<FVector3f>& GetVelocities() const { SyncFromGpu(); return Vel; }
 	const TArray<FSandContact>& GetContacts() const { SyncFromGpu(); return Contacts; }
@@ -552,3 +554,10 @@ private:
 	int32 SettledFrames = 0;
 	static constexpr int32 SettleFramesRequired = 60;
 };
+
+/**
+ * M0-b GPU 기준 프로파일 (m0b-result.md) — `-gpu2` 면 명시하지 않은 값을 새 기본값으로 채운다.
+ * 8색 블록 GS · 블록 안 배치 병렬 · 블록 15cm · μ 0.17 · Kv 1 · Kc 0.2 · vmax 30 · 반복 60 · 입자별 탐색 여유.
+ * 커맨드릿과 M1 G3 화면 시험이 같이 쓴다.
+ */
+void ApplySandGpuProfile(const FString& Params, FSandParams& P, int32* InOutIterations = nullptr, float* InOutMu = nullptr);
