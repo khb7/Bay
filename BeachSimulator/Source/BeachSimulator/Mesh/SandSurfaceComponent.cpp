@@ -42,6 +42,7 @@ namespace
 
 		virtual ~FSandSurfaceSceneProxy() override
 		{
+			SandGpuMesh::ReleaseRenderBuffers(Buffers);
 			VertexFactory.ReleaseResource();
 			PositionVB.ReleaseResource();
 			TangentVB.ReleaseResource();
@@ -63,11 +64,14 @@ namespace
 			Reserve(RHICmdList, Sim.NumParticles());
 			SandGpuMesh::BuildFromSimToRenderBuffers(RHICmdList, Sim, Params, Buffers);
 			bReady = true;
+			if (++NumBuilds % 60 == 0) { UE_LOG(LogTemp, Display, TEXT("SandSurface: 색인 %d · 그리는 삼각형 %d · 용량 %d"), Buffers.LastIndexCount, Buffers.DrawPrimitives(), Buffers.MaxIndices / 3); }
 		}
 
 		void Reserve(FRHICommandListImmediate& RHICmdList, int32 NumParticles)
 		{
-			const int32 Need = FMath::Max(1 << 16, NumParticles * 16);
+			int32 Need = FMath::Max(1 << 16, NumParticles * 16);
+			// 실제 색인 수(1~2 프레임 늦게)가 용량의 80% 를 넘으면 두 배로 — 퍼진 더미는 입자당 정점이 는다 (#21)
+			if (Buffers.IsValid() && Buffers.LastIndexCount > Buffers.MaxIndices * 4 / 5) { Need = FMath::Max(Need, Buffers.MaxVerts * 2); }
 			if (!Buffers.IsValid() || Buffers.MaxVerts < Need)
 			{
 				SandGpuMesh::AllocateRenderBuffers(Need, Buffers);
@@ -104,7 +108,7 @@ namespace
 				E.FirstIndex = 0;
 				// 간접 인자(NumPrimitives = 0)는 쓰지 않는다 — GPU 장면 인스턴스 컬링 패스(VSM 그림자 등)가 그 인자를 덮어써 0 개를 그린다.
 				// 대신 용량 전체를 그리고, 실제 삼각형 뒤 꼬리는 메셔가 퇴화 삼각형(0,0,0)으로 채운다 (IndexTailCS)
-				E.NumPrimitives = Buffers.MaxIndices / 3;
+				E.NumPrimitives = Buffers.DrawPrimitives();
 				E.MinVertexIndex = 0;
 				E.MaxVertexIndex = Buffers.MaxVerts - 1;
 				E.PrimitiveUniformBuffer = GetUniformBuffer();
@@ -163,6 +167,7 @@ namespace
 		UMaterialInterface* Material = nullptr;
 		FMaterialRelevance MaterialRelevance;
 		bool bReady = false;
+		int32 NumBuilds = 0;
 	};
 }
 

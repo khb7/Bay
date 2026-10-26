@@ -514,7 +514,19 @@ namespace
 			Stamp(4);
 			if (RenderOut)
 			{
-				// 화면 경로 — 내려받기 없음
+				// 화면 경로 — 메시는 내려받지 않고, 색인 수만 비동기로 (그릴 삼각형 수, #21)
+				if (!RenderOut->CountReadback) { RenderOut->CountReadback = new FRHIGPUBufferReadback(TEXT("SandMesh.CountRB")); }
+				if (RenderOut->bCountPending && RenderOut->CountReadback->IsReady())
+				{
+					if (const uint32* C = static_cast<const uint32*>(RenderOut->CountReadback->Lock(8 * sizeof(uint32)))) { RenderOut->LastIndexCount = (int32)C[4]; }
+					RenderOut->CountReadback->Unlock();
+					RenderOut->bCountPending = false;
+				}
+				if (!RenderOut->bCountPending)
+				{
+					AddEnqueueCopyPass(GraphBuilder, RenderOut->CountReadback, Counters, 8 * sizeof(uint32));
+					RenderOut->bCountPending = true;
+				}
 				GraphBuilder.Execute();
 				return;
 			}
@@ -616,6 +628,7 @@ void SandGpuMesh::AllocateRenderBuffers(int32 MaxVerts, FSandGpuMeshRenderBuffer
 	if (Out.IsValid() && Out.MaxVerts >= MaxVerts) { return; }
 	Out.MaxVerts = MaxVerts;
 	Out.MaxIndices = MaxVerts * 6;
+	Out.LastIndexCount = -1;
 	// 정점 · 접선은 정점 버퍼 겸 typed SRV/UAV (CreateBufferDesc = VertexBuffer | UAV | SRV)
 	Out.Position = AllocatePooledBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(float), 3 * MaxVerts), TEXT("SandMesh.RPosition"));
 	Out.Tangent  = AllocatePooledBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), 2 * MaxVerts), TEXT("SandMesh.RTangent"));
@@ -659,4 +672,11 @@ void SandGpuMesh::BuildFromSimToRenderBuffers(FRHICommandListImmediate& RHICmdLi
 	static const TArray<FVector4f> None;
 	FSandGpuMeshResult Unused;
 	BuildRenderThread(RHICmdList, None, Params, Unused, &Buffers, Sim.GetPositionBufferRT(), N);
+}
+
+void SandGpuMesh::ReleaseRenderBuffers(FSandGpuMeshRenderBuffers& Buffers)
+{
+	// 프록시 소멸자에서 부른다 — 렌더 스레드가 아니라 렌더러 작업 스레드일 수 있다 (버퍼는 참조 계수라 어디서든 놓아도 된다)
+	delete Buffers.CountReadback;
+	Buffers = FSandGpuMeshRenderBuffers();
 }

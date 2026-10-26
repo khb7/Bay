@@ -59,6 +59,15 @@ struct FSandGpuMeshRenderBuffers
 	TRefCountPtr<FRDGPooledBuffer> Position, Tangent, TexCoord, Index, DrawArgs;
 	int32 MaxVerts = 0, MaxIndices = 0;
 	bool IsValid() const { return Position.IsValid(); }
+
+	/**
+	 * 그릴 삼각형 수 (#21). 용량 전체 대신 GPU 가 센 색인 수를 비동기로(1~2 프레임 늦게) 받아 × 1.25 + 256 —
+	 * 꼬리는 퇴화 삼각형이라 실제보다 많이 그려도 맞고, 모래는 프레임 사이에 조금씩 변해 여유로 덮인다
+	 */
+	int32 DrawPrimitives() const { return LastIndexCount < 0 ? MaxIndices / 3 : FMath::Min(MaxIndices / 3, LastIndexCount / 3 + LastIndexCount / 12 + 256); }
+	int32 LastIndexCount = -1;
+	class FRHIGPUBufferReadback* CountReadback = nullptr;   // SandGpuMesh::ReleaseRenderBuffers 가 지운다
+	bool bCountPending = false;
 };
 
 class FSandGpuSim;
@@ -67,6 +76,8 @@ namespace SandGpuMesh
 {
 	/** 렌더 스레드. 용량을 잡는다 (이미 충분하면 그대로) */
 	SANDGPU_API void AllocateRenderBuffers(int32 MaxVerts, FSandGpuMeshRenderBuffers& Out);
+	/** 렌더 스레드 — 비동기 내려받기 객체까지 정리 */
+	SANDGPU_API void ReleaseRenderBuffers(FSandGpuMeshRenderBuffers& Buffers);
 
 	/** 렌더 스레드. 입자 → 메시를 화면용 버퍼에 직접 쓴다 (내려받기 없음). OutStats 는 nullptr 가능 */
 	/** G3 — 시뮬 위치 버퍼를 그대로 읽는다 (내려받기 · 올리기 없음, 같은 프레임). 게임 스레드 · 결과 내려받기 (시험용) */
