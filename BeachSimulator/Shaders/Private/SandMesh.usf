@@ -963,22 +963,26 @@ void VertWeightCS(uint3 Tid : SV_DispatchThreadID)
 	}
 }
 
-// 한 번 반복: Dst = Src + w·(mean(이웃) − Src)
+StructuredBuffer<float4>   NormalSrc;
+RWStructuredBuffer<float4> NormalDst;
+
+// 한 번 반복: Dst = Src + w·(mean(이웃) − Src) — 위치와 법선을 한 패스에 (#24, 같은 가중 · 이웃)
 [numthreads(64, 1, 1)]
 void SmoothCS(uint3 Tid : SV_DispatchThreadID)
 {
 	const uint v = Tid.x;
 	if (v >= min(CountersRO[3], MaxVerts)) { return; }
 	const float3 A = SmoothSrc[v].xyz;
-	float3 Sum = 0.f; float Cnt = 0.f;
-	for (uint k = 0; k < 6; ++k) { const int U = VertNbRO[v * 6 + k]; if (U >= 0) { Sum += SmoothSrc[U].xyz; Cnt += 1.f; } }
-	SmoothDst[v] = float4(Cnt > 0.f ? A + VertWRO[v] * (Sum / Cnt - A) : A, 0.f);
+	const float3 An = NormalSrc[v].xyz;
+	float3 Sum = 0.f, SumN = 0.f; float Cnt = 0.f;
+	for (uint k = 0; k < 6; ++k) { const int U = VertNbRO[v * 6 + k]; if (U >= 0) { Sum += SmoothSrc[U].xyz; SumN += NormalSrc[U].xyz; Cnt += 1.f; } }
+	const float W = VertWRO[v];
+	SmoothDst[v] = float4(Cnt > 0.f ? A + W * (Sum / Cnt - A) : A, 0.f);
+	NormalDst[v] = float4(Cnt > 0.f ? An + W * (SumN / Cnt - An) : An, 0.f);
 }
 
 // 최종 위치 · 법선 → 내려받기 버퍼 · 화면 버퍼. 법선은 평활화한 것을 정규화 (splashsurf 의 법선 평활화 — 위치만 평활화하면
 // 조명이 옛 혹 모양대로 비친다, #20)
-StructuredBuffer<float4>   NormalSrc;
-RWStructuredBuffer<float4> NormalDst;
 
 [numthreads(64, 1, 1)]
 void VertFinalCS(uint3 Tid : SV_DispatchThreadID)

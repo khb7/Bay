@@ -69,6 +69,7 @@ struct FSandGpuMeshRenderBuffers
 	int32 LastIndexCount = -1;
 	class FRHIGPUBufferReadback* CountReadback = nullptr;   // SandGpuMesh::ReleaseRenderBuffers 가 지운다
 	bool bCountPending = false;
+	int32 SlotScale = 1;   // 활성 영역 슬롯 용량 배수 — 넘치면 비동기 계수를 보고 두 배 (#24)
 };
 
 class FSandGpuSim;

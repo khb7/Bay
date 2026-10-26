@@ -392,7 +392,7 @@ namespace
 			TB.MaxVerts = MaxVerts;
 			TB.MaxIndices = MaxIndices;
 			// 활성 영역 슬롯 (#23) — 띠 · 장 · 셀 정점은 슬롯 × 512 점만. 활성 영역은 입자 수의 13~27% 였다 (#12) → 여유를 두고 3/4
-			const int32 MaxSlots = FMath::Min(NumBlocks, FMath::Max(1024, N * 3 / 4));
+			const int32 MaxSlots = FMath::Min(NumBlocks, FMath::Max(1024, N * 3 / 4 * (RenderOut ? RenderOut->SlotScale : 1)));
 			const int32 SlotPts = MaxSlots * 512;
 			TB.MaxSlots = MaxSlots;
 			FRDGBufferRef BlockSlot  = MeshBuffer(GraphBuilder, TEXT("SandMesh.BlockSlot"), sizeof(uint32), NumBlocks);
@@ -508,20 +508,18 @@ namespace
 					TS.SmoothSrc = GraphBuilder.CreateSRV(VertexB);
 					AddMeshPass<FSandMeshWnnCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshWnn"), ShaderMap, TS, N, 64);
 					AddMeshPass<FSandMeshVertWeightCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshVertWeight"), ShaderMap, TS, MaxVerts, 64);
-					// 위치 · 법선을 같은 가중 · 이웃으로 (SmoothCS 는 버퍼만 바꿔 두 번 쓴다)
-					auto Iterate = [&](FRDGBufferRef& Cur, FRDGBufferRef Other)
+					// 위치 · 법선을 같은 가중 · 이웃으로 한 패스에 (#24)
+					FRDGBufferRef Dst = Tmp, NDst = NTmp;
+					for (int32 It = 0; It < P.SmoothIters; ++It)
 					{
-						FRDGBufferRef Dst = Other;
-						for (int32 It = 0; It < P.SmoothIters; ++It)
-						{
-							TS.SmoothSrc = GraphBuilder.CreateSRV(Cur);
-							TS.SmoothDst = GraphBuilder.CreateUAV(Dst);
-							AddMeshPass<FSandMeshSmoothCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshSmooth"), ShaderMap, TS, MaxVerts, 64);
-							Swap(Cur, Dst);
-						}
-					};
-					Iterate(Src, Tmp);
-					Iterate(NSrc, NTmp);
+						TS.SmoothSrc = GraphBuilder.CreateSRV(Src);
+						TS.SmoothDst = GraphBuilder.CreateUAV(Dst);
+						TS.NormalSrc = GraphBuilder.CreateSRV(NSrc);
+						TS.NormalDst = GraphBuilder.CreateUAV(NDst);
+						AddMeshPass<FSandMeshSmoothCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshSmooth"), ShaderMap, TS, MaxVerts, 64);
+						Swap(Src, Dst);
+						Swap(NSrc, NDst);
+					}
 				}
 				TS.SmoothSrc = GraphBuilder.CreateSRV(Src);
 				TS.NormalSrc = GraphBuilder.CreateSRV(NSrc);
@@ -536,7 +534,11 @@ namespace
 				if (!RenderOut->CountReadback) { RenderOut->CountReadback = new FRHIGPUBufferReadback(TEXT("SandMesh.CountRB")); }
 				if (RenderOut->bCountPending && RenderOut->CountReadback->IsReady())
 				{
-					if (const uint32* C = static_cast<const uint32*>(RenderOut->CountReadback->Lock(8 * sizeof(uint32)))) { RenderOut->LastIndexCount = (int32)C[4]; }
+					if (const uint32* C = static_cast<const uint32*>(RenderOut->CountReadback->Lock(8 * sizeof(uint32))))
+					{
+						RenderOut->LastIndexCount = (int32)C[4];
+						if (C[5] > 0) { RenderOut->SlotScale *= 2; }   // 슬롯이 넘쳤다 — 다음 프레임부터 두 배 (#24)
+					}
 					RenderOut->CountReadback->Unlock();
 					RenderOut->bCountPending = false;
 				}
