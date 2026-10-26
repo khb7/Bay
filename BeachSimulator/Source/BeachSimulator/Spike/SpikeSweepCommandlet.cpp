@@ -737,6 +737,7 @@ namespace
 		const TArray<int32> CountList = ParseList<int32>(Params, TEXT("particles="), { 20000 });
 		int32 Frames = 100; FParse::Value(*Params, TEXT("frames="), Frames);
 		int32 Iterations = 120; FParse::Value(*Params, TEXT("iterations="), Iterations);
+		if (FParse::Param(*Params, TEXT("gpu2")) && !FParse::Param(*Params, TEXT("legacy")) && !Params.Contains(TEXT("iterations="))) { Iterations = 60; }   // 기준 프로파일과 같게 (머리말 표시)
 		float Mu = 0.17f; FParse::Value(*Params, TEXT("mu="), Mu);
 		const int32 WarmupFrames = 20;
 
