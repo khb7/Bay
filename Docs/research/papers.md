@@ -1362,6 +1362,14 @@ SPOOK (C7)         ≈ 1 (속도 제약)              4Υ ≈ 0.44 (2 스텝에 
 
 **굳음을 근본적으로 피하는 다른 길 (기록만)** — **Yue, Smith, Chen, Chantharayukhonthorn, Kamrin, Grinspun (2018), "Hybrid Grains: Adaptive Coupling of Discrete and Continuum Simulations of Granular Media", SIGGRAPH Asia / TOG 37(6).** 검색 요약으로만 확인 (원문 미독). 자유 표면은 입자(DEM), 내부는 연속체로 풀고, 오라클이 실행 중 어느 쪽을 쓸지 정하며, 겹치는 전이 구간으로 둘을 맞춘다. 강체 토끼 예에서 입자 88% 감소 · 6.84 배. 내부가 굳지 않고 연속체로 계속 변형된다. 관련: Chantharayukhonthorn (2019) MIT 석사논문 (Kamrin 지도, MPM 연속체). 우리에겐 연속체 솔버가 하나 더 필요해 M0 범위 밖.
 
+### C10. 결정성 · 재현성 — 3-3 의 근거 (2026-10-26 조사)
+
+**결론: GPU 입상체 시뮬레이션의 "같은 입력 반복 실행" 흩어짐을 정량화한 논문은 찾지 못했다.** 허용 오차는 m0b-spike §2-1 (아래 Yeh 2009 근거, 시드 산포 ±1°) 을 그대로 쓴다.
+
+- **Saomoto & Irazábal (2023), "Round robin test on angle of repose: DEM simulation results collected from 16 groups around the world", Soils and Foundations 63(1):101272.** 16 개 그룹 · 여러 DEM 코드가 같은 안식각 문제를 풀었다 — 대부분 실험 평균과 **몇 도** 안, 산포 정도도 그룹끼리 비슷 (요약만 확인, 본문 수치 미독). → 안식각에는 코드 · 분석자 수준에서 수 도의 자연 산포가 있다. 우리 ±1° 는 그보다 엄격하다.
+- **Chrono DEM-Engine (2023), arXiv 2311.04648** — 이중 GPU DEM. 본문에 결정성 · 재현성 논의 없음 (확인, 2026-10-26).
+- 우리 실측 (조사 중): 같은 설정 반복에서 최대 속도 575 ↔ 94 (#57), 더미 각 33.1~34.8° (시드 · 설정 혼재). GPU 원자적 합산 순서 → 부동소수 끝자리 → 혼돈적 증폭 (m0b-spike §2-1 이 이미 비트 재현을 포기한 이유).
+
 **지각 문턱** — **Yeh, Reinman, Patel, Faloutsos (2009), "Fool Me Twice: Exploring and Exploiting Error Tolerance in Physics-Based Animation", TOG 29(1).** GPU 가 CPU 와 다른 답을 낼 때 "얼마나 달라도 되나"의 근거. #35 의 예산 스윕이 쓴 기준(시드 산포 ±1°)을 지각 쪽에서 받친다.
 
 ---
