@@ -38,6 +38,7 @@ namespace
 			, Material(Component->GetMaterial(0))
 		{
 			if (!Material) { Material = UMaterial::GetDefaultMaterial(MD_Surface); }
+			bAlwaysHasVelocity = true;   // 정점이 버퍼 안에서 움직인다 — 변환이 그대로여도 속도 패스에 (R1)
 			MaterialRelevance = Material->GetRelevance_Concurrent(GetScene().GetShaderPlatform());
 		}
 
@@ -151,8 +152,10 @@ namespace
 			Data.PositionComponent = FVertexStreamComponent(&PositionVB, 0, sizeof(FVector3f), VET_Float3);
 			Data.TangentBasisComponents[0] = FVertexStreamComponent(&TangentVB, 0, 2 * sizeof(uint32), VET_PackedNormal);
 			Data.TangentBasisComponents[1] = FVertexStreamComponent(&TangentVB, sizeof(uint32), 2 * sizeof(uint32), VET_PackedNormal);
-			Data.TextureCoordinates.Add(FVertexStreamComponent(&TexCoordVB, 0, 0, VET_Float2));   // 보폭 0 — 모든 정점 UV (0, 0)
-			Data.NumTexCoords = 1;
+			// UV0 = (dx, dy) · UV1 = (dz, 0) — 이번 프레임 정점 변위 (R1). 재질 WPO 가 지난 프레임 위치를 만든다
+			Data.TextureCoordinates.Add(FVertexStreamComponent(&TexCoordVB, 0, 4 * sizeof(float), VET_Float2));
+			Data.TextureCoordinates.Add(FVertexStreamComponent(&TexCoordVB, 2 * sizeof(float), 4 * sizeof(float), VET_Float2));
+			Data.NumTexCoords = 2;
 			Data.LightMapCoordinateIndex = 0;
 			Data.PositionComponentSRV = Buffers.Position->GetOrCreateSRV(RHICmdList, FRHIBufferSRVCreateInfo(PF_R32_FLOAT));
 			Data.TangentsSRV = Buffers.Tangent->GetOrCreateSRV(RHICmdList, FRHIBufferSRVCreateInfo(PF_R8G8B8A8_SNORM));

@@ -819,7 +819,15 @@ namespace
 				{
 					// 같은 프레임 확인: 지금 시뮬 위치를 내려받아 CPU 로 같은 격자에 메시 → GPU 메시와 정점 · 삼각형 수 비교
 					FSandSurfaceMesh M;
-					FSandSurfaceBuilder::Build(Sim.GetPositions(), Pp, M, WetMode.IsEmpty() ? TArray<float>() : Sim.GetWet());
+					FSandSurfaceBuilder::Build(Sim.GetPositions(), Pp, M, WetMode.IsEmpty() ? TArray<float>() : Sim.GetWet(), Sim.GetVelocities());
+					{
+						// R1 정점 속력 핵심값 — 합 · 최대 · 움직이는 정점(> 5 cm/s)
+						auto St = [](const TArray<float>& A, double& Sum, float& Mx, int32& Mv) { Sum = 0; Mx = 0; Mv = 0; for (float S : A) { Sum += S; Mx = FMath::Max(Mx, S); Mv += S > 5.f ? 1 : 0; } };
+						double Sc, Sg; float Mc, Mg; int32 Vc, Vg;
+						St(M.VertexSpeed, Sc, Mc, Vc); St(G.VertexSpeed, Sg, Mg, Vg);
+						UE_LOG(LogSpikeSweep, Display, TEXT("   f %3d: 정점 속력 합 CPU %.1f / GPU %.1f (상대 %.1e) · 최대 %.1f / %.1f cm/s · 움직이는 정점(>5) %d / %d"),
+							f, Sc, Sg, FMath::Abs(Sc - Sg) / FMath::Max(1e-9, Sc), Mc, Mg, Vc, Vg);
+					}
 					const bool bSame = M.Vertices.Num() == G.NumVertsTotal && M.Triangles.Num() == G.NumIndicesTotal;
 					if (!WetMode.IsEmpty())
 					{

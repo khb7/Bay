@@ -157,6 +157,8 @@ public:
 	TRefCountPtr<FRDGPooledBuffer> GetPositionBufferRT() const;
 	/** 렌더 스레드 — 입자별 W (float, 구조 버퍼). 메셔가 정점 색으로 보간한다 (W2) */
 	TRefCountPtr<FRDGPooledBuffer> GetWetBufferRT() const;
+	/** 렌더 스레드 — 입자 속도 (float4 xyz cm/s). 메셔가 정점 속도 → 모션 벡터 (m1-plan-render R1) */
+	TRefCountPtr<FRDGPooledBuffer> GetVelocityBufferRT() const;
 	int32 NumBonds() const { return NumB; }
 	int32 MaxPairs() const { return MaxPairCount; }
 

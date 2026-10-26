@@ -238,7 +238,7 @@ bool FSandSurfaceMesh::SaveObj(const FString& Path) const
 	return FFileHelper::SaveStringToFile(S, *Path);
 }
 
-void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurfaceParams& P, FSandSurfaceMesh& Out, const TArray<float>& Wet)
+void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurfaceParams& P, FSandSurfaceMesh& Out, const TArray<float>& Wet, const TArray<FVector3f>& Vel)
 {
 	Out = FSandSurfaceMesh();
 	const int32 N = Pos.Num();
@@ -847,6 +847,19 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 			float Sw = 0.f, Sww = 0.f;
 			NGrid.ForNeighbors(X, R, [&](int32 j) { const float D2 = (Pos[j] - X).SizeSquared(); if (D2 < R2) { const float T = 1.f - D2 / R2; const float K = T * T * T; Sw += K; Sww += K * Wet[j]; } });
 			Out.VertexWet[v] = Sw > 0.f ? Sww / Sw : 0.f;
+		});
+	}
+	if (Vel.Num() >= N)
+	{
+		// 정점 속도 — 같은 셰퍼드 보간 (GPU VertFinalCS, R1)
+		const float R = P.NeighborR, R2 = R * R;
+		Out.VertexSpeed.SetNumUninitialized(Out.Vertices.Num());
+		ParallelFor(Out.Vertices.Num(), [&](int32 v)
+		{
+			const FVector3f X = Out.Vertices[v];
+			float Sw = 0.f; FVector3f Swv(0.f);
+			NGrid.ForNeighbors(X, R, [&](int32 j) { const float D2 = (Pos[j] - X).SizeSquared(); if (D2 < R2) { const float T = 1.f - D2 / R2; const float K = T * T * T; Sw += K; Swv += K * Vel[j]; } });
+			Out.VertexSpeed[v] = Sw > 0.f ? (Swv / Sw).Size() : 0.f;
 		});
 	}
 	// 면 — 부호가 바뀌는 격자 모서리마다, 그 모서리를 둘러싼 4 셀의 정점으로 사각형 (덩어리별 → 이어 붙이기)

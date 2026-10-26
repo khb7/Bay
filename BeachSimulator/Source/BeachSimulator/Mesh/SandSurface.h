@@ -54,6 +54,7 @@ struct FSandSurfaceMesh
 	TArray<FVector3f> Vertices;
 	TArray<FVector3f> Normals;
 	TArray<float>     VertexWet;   // 정점 W — 입자 W 를 줬을 때만 (M1 W2)
+	TArray<float>     VertexSpeed; // 정점 속력 |v| — 입자 속도를 줬을 때만 (모션 벡터 대조, m1-plan-render R1)
 	TArray<int32>     Triangles;   // 3 개씩
 
 	// 입자별 진단 (표면 판정 문턱 측정용)
@@ -95,5 +96,5 @@ class FSandSurfaceBuilder
 {
 public:
 	/** Wet: 입자별 W (비면 정점 W 없음, M1 W2) */
-	static void Build(const TArray<FVector3f>& Positions, const FSandSurfaceParams& Params, FSandSurfaceMesh& Out, const TArray<float>& Wet = TArray<float>());
+	static void Build(const TArray<FVector3f>& Positions, const FSandSurfaceParams& Params, FSandSurfaceMesh& Out, const TArray<float>& Wet = TArray<float>(), const TArray<FVector3f>& Vel = TArray<FVector3f>());
 };

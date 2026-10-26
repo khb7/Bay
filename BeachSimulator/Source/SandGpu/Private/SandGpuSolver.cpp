@@ -1112,3 +1112,9 @@ TRefCountPtr<FRDGPooledBuffer> FSandGpuSim::GetWetBufferRT() const
 	check(IsInRenderingThread());
 	return State ? State->Wet : nullptr;
 }
+
+TRefCountPtr<FRDGPooledBuffer> FSandGpuSim::GetVelocityBufferRT() const
+{
+	check(IsInRenderingThread());
+	return State ? State->Vel : nullptr;
+}

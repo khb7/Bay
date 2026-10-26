@@ -18,6 +18,10 @@
 #include "Materials/MaterialExpressionNoise.h"
 #include "Materials/MaterialExpressionScalarParameter.h"
 #include "Materials/MaterialExpressionSaturate.h"
+#include "Materials/MaterialExpressionAppendVector.h"
+#include "Materials/MaterialExpressionComponentMask.h"
+#include "Materials/MaterialExpressionPreviousFrameSwitch.h"
+#include "Materials/MaterialExpressionTextureCoordinate.h"
 #include "Materials/MaterialExpressionVertexColor.h"
 #include "Materials/MaterialFunction.h"
 #include "Misc/PackageName.h"
@@ -121,6 +125,27 @@ bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage)
 	UMaterialExpressionLinearInterpolate* Rough = AddExpr<UMaterialExpressionLinearInterpolate>(M, -150, 250);
 	Rough->A.Connect(0, RoughDry); Rough->B.Connect(0, RoughWet); Rough->Alpha.Connect(0, Wet);
 	Ed->Roughness.Connect(0, Rough);
+
+	// 모션 벡터 (m1-plan-render R1): 정점이 버퍼 안에서 움직이므로 엔진은 정지로 본다.
+	// UV0 = (dx, dy), UV1.x = dz = 이번 프레임 변위 → 지난 프레임 위치 = 지금 − d. 이번 프레임 WPO 는 0
+	UMaterialExpressionTextureCoordinate* Uv0 = AddExpr<UMaterialExpressionTextureCoordinate>(M, -900, 700);
+	Uv0->CoordinateIndex = 0;
+	UMaterialExpressionTextureCoordinate* Uv1 = AddExpr<UMaterialExpressionTextureCoordinate>(M, -900, 800);
+	Uv1->CoordinateIndex = 1;
+	UMaterialExpressionComponentMask* Dz = AddExpr<UMaterialExpressionComponentMask>(M, -750, 800);
+	Dz->R = true; Dz->G = false; Dz->B = false; Dz->A = false;
+	Dz->Input.Connect(0, Uv1);
+	UMaterialExpressionAppendVector* D3 = AddExpr<UMaterialExpressionAppendVector>(M, -600, 750);
+	D3->A.Connect(0, Uv0); D3->B.Connect(0, Dz);
+	UMaterialExpressionConstant* MinusOne = AddExpr<UMaterialExpressionConstant>(M, -600, 850);
+	MinusOne->R = -1.f;
+	UMaterialExpressionMultiply* Back = AddExpr<UMaterialExpressionMultiply>(M, -450, 780);
+	Back->A.Connect(0, D3); Back->B.Connect(0, MinusOne);
+	UMaterialExpressionConstant3Vector* Zero = AddExpr<UMaterialExpressionConstant3Vector>(M, -450, 680);
+	Zero->Constant = FLinearColor(0.f, 0.f, 0.f);
+	UMaterialExpressionPreviousFrameSwitch* Prev = AddExpr<UMaterialExpressionPreviousFrameSwitch>(M, -300, 720);
+	Prev->CurrentFrame.Connect(0, Zero); Prev->PreviousFrame.Connect(0, Back);
+	Ed->WorldPositionOffset.Connect(0, Prev);
 	UMaterialExpressionConstant* Spec = AddExpr<UMaterialExpressionConstant>(M, -150, 330);
 	Spec->R = 0.35f;
 	Ed->Specular.Connect(0, Spec);

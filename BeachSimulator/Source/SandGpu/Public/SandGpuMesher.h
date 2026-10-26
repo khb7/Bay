@@ -22,6 +22,7 @@ struct FSandGpuMeshParams
 	int32 SmoothIters = 0;
 	float SmoothNorm = 13.f;
 	float InteriorPhiFixed = 0.6f;  // > 0 이면 내부 φ 고정 (CPU 와 같다, #19)
+	float VelDt = 1.f / 60.f;       // 시뮬 한 프레임 — 정점 변위 = 속도 × VelDt (모션 벡터, R1)
 };
 
 /** 대조용 내려받기 — 입자 순서는 입력과 같다 */
@@ -44,6 +45,7 @@ struct FSandGpuMeshResult
 	// G1-4
 	TArray<FVector3f> Vertices, Normals;
 	TArray<float>     VertexWet;       // W2 — 입자 W 가 있을 때만
+	TArray<float>     VertexSpeed;     // R1 — 입자 속도가 있을 때만 (|v| cm/s, 대조용)
 	TArray<int32>     Indices;
 	int32 NumVertsTotal = 0, NumIndicesTotal = 0;   // 용량과 무관한 실제 수
 	// G1-5 GPU 타임스탬프 (ms): [0] 이웃 [1] 커널 · 등위값 [2] 띠 · 장 [3] 메시
@@ -58,7 +60,7 @@ struct FSandGpuMeshResult
  */
 struct FSandGpuMeshRenderBuffers
 {
-	TRefCountPtr<FRDGPooledBuffer> Position, Tangent, TexCoord, Color, Index, DrawArgs;   // Color = 정점 W (RGBA8, W2)
+	TRefCountPtr<FRDGPooledBuffer> Position, Tangent, TexCoord, Color, Index, DrawArgs;   // Color = 정점 W (RGBA8, W2) · TexCoord = 정점 변위 UV0 · UV1 (R1)
 	int32 MaxVerts = 0, MaxIndices = 0;
 	bool IsValid() const { return Position.IsValid(); }
 

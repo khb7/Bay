@@ -544,6 +544,11 @@ RWBuffer<uint>             RIdxRW;           // 32 비트 색인 버퍼
 uint  bHasWet;
 StructuredBuffer<float>    WetRO;            // 입자별 W
 RWBuffer<uint>             RColRW;           // 정점당 RGBA8 — R = G = B = W (스위즐 무관), A = 255
+// 정점 속도 → 모션 벡터 (m1-plan-render.md R1)
+uint  bHasVel;
+StructuredBuffer<float4>   VelRO;            // 입자 속도 (시뮬 버퍼, xyz cm/s)
+float VelDt;                                 // 시뮬 한 프레임 (s) — 이번 프레임 변위 = v·VelDt
+RWBuffer<float>            RUvRW;            // 정점당 4: UV0 = (dx, dy) · UV1 = (dz, 0). 재질 WPO 가 지난 프레임에 −d
 // CountersRW: [0] 최대 이웃 수 [1] 커널 목록 넘침 영역 [2] 쌍 용량 넘침 [3] 정점 총수 [4] 색인 총수 [5] 슬롯 넘침 영역
 
 uint PtIndex(uint3 P) { return (P.z * GD.y + P.y) * GD.x + P.x; }
@@ -998,24 +1003,30 @@ void VertFinalCS(uint3 Tid : SV_DispatchThreadID)
 	const float L2 = dot(N0, N0);
 	const float3 Nrm = L2 > 1e-16f ? N0 * rsqrt(L2) : float3(0.f, 0.f, 0.f);
 	// 정점 W = 입자 W 의 셰퍼드 보간 (VertWeightCS 와 같은 커널 (1 − d²/r²)³), 평활화 뒤 위치에서
+	// 정점 속도도 같은 보간 (R1) — Surface Nets 정점은 프레임 사이 대응이 없어 위치 차분 대신 입자 속도로
 	float Wv = 0.f;
-	if (bHasWet)
+	float3 Vv = 0.f;
+	if (bHasWet || bHasVel)
 	{
 		const float R2 = NeighborR * NeighborR;
 		float Sw = 0.f, Sww = 0.f;
+		float3 Swv = 0.f;
 		FOR_NEIGHBORS_ALL(X,
 		{
 			const float D2 = dot(PosRO[j].xyz - X, PosRO[j].xyz - X);
-			if (D2 < R2) { const float T = 1.f - D2 / R2; const float K = T * T * T; Sw += K; Sww += K * WetRO[j]; }
+			if (D2 < R2) { const float T = 1.f - D2 / R2; const float K = T * T * T; Sw += K; Sww += K * WetRO[j]; Swv += K * VelRO[j].xyz; }
 		})
-		Wv = Sw > 0.f ? Sww / Sw : 0.f;
+		Wv = (bHasWet && Sw > 0.f) ? Sww / Sw : 0.f;
+		Vv = (bHasVel && Sw > 0.f) ? Swv / Sw : 0.f;
 	}
 	SmoothDst[v] = float4(X, Wv);
-	NormalDst[v] = float4(Nrm, 0.f);
+	NormalDst[v] = float4(Nrm, length(Vv));   // w = 속력 (대조용)
 	if (bRenderOut)
 	{
 		const uint C8 = (uint)round(saturate(Wv) * 255.f);
 		RColRW[v] = C8 | (C8 << 8) | (C8 << 16) | (255u << 24);
+		const float3 Dv = Vv * VelDt;
+		RUvRW[v * 4 + 0] = Dv.x; RUvRW[v * 4 + 1] = Dv.y; RUvRW[v * 4 + 2] = Dv.z; RUvRW[v * 4 + 3] = 0.f;
 		RPosRW[v * 3 + 0] = X.x; RPosRW[v * 3 + 1] = X.y; RPosRW[v * 3 + 2] = X.z;
 		// 접선 = 법선에 수직인 아무 방향 (모래는 이방 질감이 없다). TangentZ.w = +1 (종법선 부호)
 		const float3 Nz = L2 > 1e-16f ? Nrm : float3(0.f, 0.f, 1.f);
