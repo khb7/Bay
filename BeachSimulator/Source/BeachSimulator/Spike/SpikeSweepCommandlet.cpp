@@ -793,14 +793,15 @@ namespace
 				Pos.Add(FVector3f(0, 0, 0));
 				for (int32 a = 0; a < 3; ++a) for (int32 s = -1; s <= 1; s += 2) { FVector3f V(0.f); V[a] = s * D; Pos.Add(V); }
 			}
-			else if (Scene == TEXT("column"))
+			else if (Scene.StartsWith(TEXT("column")))
 			{
-				// M0-b 기준 프로파일 기둥 2만을 600 프레임 돌린 정지 더미
+				// M0-b 기준 프로파일 기둥(기본 2만, "column3000" 처럼 수 지정)을 600 프레임 돌린 정지 더미. 층 수는 2만 · 27 층에서 세제곱근 비례 (모양 유지)
 				FSandParams SP;
 				SP.Substeps = 1; SP.WarmStart = 1.f; SP.WarmGapTol = 0.05f; SP.bGpuResident = true;
 				ApplyGpuProfile(TEXT("-gpu2"), SP);
 				SP.bGatherApply = false; SP.bMassSplit = false;
-				FTiltSetup S; S.TargetCount = 20000; S.Layers = 27; S.FixedLayers = 1; S.BaseJitter = 0.3f; S.bOpenDownhill = false;
+				const int32 Cnt = Scene.Len() > 6 ? FCString::Atoi(*Scene.Mid(6)) : 20000;
+				FTiltSetup S; S.TargetCount = Cnt; S.Layers = FMath::Max(4, FMath::RoundToInt(27.f * FMath::Pow(Cnt / 20000.f, 1.f / 3.f))); S.FixedLayers = 1; S.BaseJitter = 0.3f; S.bOpenDownhill = false;
 				FSandSpike Sim; Sim.InitTiltBox(SP, S);
 				for (int32 f = 0; f < 600; ++f) { Sim.Step(1.f / 60.f); }
 				Pos = Sim.GetPositions();
