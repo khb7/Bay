@@ -16,8 +16,8 @@
 | 단계 | 내용 | 검증 |
 |---|---|---|
 | **R1** 모션 벡터 ✓ #30 | 정점 속도 = 입자 속도의 셰퍼드 보간 (W2 와 같은 커널) → 정점 UV 채널 (UV0 = vx vy, UV1 = vz ·). 재질 WPO = PreviousFrameSwitch(0, −v·Δt) — 엔진 정점 팩토리 그대로. 프록시 `bAlwaysHasVelocity` | 무너질 때 모래에 모션 벡터가 나오는가 · 쌓인 뒤 0 인가 · CPU 판과 정점 속도 합 일치 |
-| **R2** Lumen 켜고 보기 | 명령줄로만 (`r.DynamicGlobalIlluminationMethod 1 · r.ReflectionMethod 1`) 화면 비교 — 프로젝트 설정은 사용자 결정 | 모래가 GI 를 받는가 · 바닥에 그늘 · 반사가 지는가 |
-| R3 하드웨어 RT | 프로젝트 RT 를 켜야 하고 (전 셰이더 재컴파일) 동적 RT 형상 경로가 필요 — **미룸**. 사용자가 RT 를 쓰기로 정하면 | — |
+| **R2** Lumen 켜고 보기 ✓ #31 — 받기만 된다, Lumen 장면엔 없음 | 명령줄로만 (`r.DynamicGlobalIlluminationMethod 1 · r.ReflectionMethod 1`) 화면 비교 — 프로젝트 설정은 사용자 결정 | 모래가 GI 를 받는가 · 바닥에 그늘 · 반사가 지는가 |
+| R3 하드웨어 RT | 프로젝트 RT 를 켜야 하고 (전 셰이더 재컴파일) 동적 RT 형상 경로가 필요 — **사용자 결정 대기** (#31) | Lumen 개요에 모래가 보이는가 · BLAS 갱신 ms |
 
 ## 하지 않는 것
 - 정점 대응 (프레임 사이 같은 정점) — Surface Nets 정점은 셀에 붙어 있어 대응이 없다. 그래서 위치 차분이 아니라 **입자 속도**로 준다.
