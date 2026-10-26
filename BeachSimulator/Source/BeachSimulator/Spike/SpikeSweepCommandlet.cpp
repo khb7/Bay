@@ -5,6 +5,7 @@
 #include "Math/RandomStream.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "../Mesh/SandSurface.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSpikeSweep, Log, All);
 
@@ -732,6 +733,120 @@ namespace
 		}
 	};
 
+	/**
+	 * M1 — 입자 → 메시 시험 (Docs/design/m1-plan.md §2~3). 장면마다 세 장 함수(등방 · 이방성 · Zhu & Bridson)로 메시를 만들고
+	 * 대리 지표(평면 RMS · 벽 두께비 · 구형도 · 부피비 · ms)를 찍고 OBJ 로 저장한다.
+	 */
+	int32 RunMesh(const FString& Params)
+	{
+		const float R = 2.5f, D = 5.f;
+		FRandomStream Rng(1337);
+		FString SceneArg = TEXT("slab,wall,debris1,debris3,debris7,column");
+		FParse::Value(*Params, TEXT("scenes="), SceneArg, false);
+		TArray<FString> Scenes; SceneArg.ParseIntoArray(Scenes, TEXT(","), true);
+		FString FieldArg = TEXT("iso,aniso,zb");
+		FParse::Value(*Params, TEXT("fields="), FieldArg, false);
+		TArray<FString> Fields; FieldArg.ParseIntoArray(Fields, TEXT(","), true);
+		FSandSurfaceParams Base;
+		FParse::Value(*Params, TEXT("cell="), Base.Cell);
+		FParse::Value(*Params, TEXT("isofrac="), Base.IsoFrac);
+		FParse::Value(*Params, TEXT("lambda="), Base.Lambda);
+		FParse::Value(*Params, TEXT("kr="), Base.Kr);
+		FParse::Value(*Params, TEXT("h="), Base.H);
+		Base.bBandOnly = !FParse::Param(*Params, TEXT("fullband"));
+		const FString Dir = FPaths::ProjectSavedDir() / TEXT("MeshRuns");
+
+		UE_LOG(LogSpikeSweep, Display, TEXT("메시 — 셀 %.2f · h %.1f · λ %.2f · k_r %.1f · IsoFrac %.2f · 띠 %s"), Base.Cell, Base.H, Base.Lambda, Base.Kr, Base.IsoFrac, Base.bBandOnly ? TEXT("표면 입자") : TEXT("전부"));
+		UE_LOG(LogSpikeSweep, Display, TEXT("   장면 | 장 | 입자 표면 | 띠점 정점 삼각형 | 지표 | 부피비 | ms (이웃 커널 장 메시 = 합) | k_s iso"));
+
+		for (const FString& Scene : Scenes)
+		{
+			TArray<FVector3f> Pos;
+			if (Scene == TEXT("slab"))
+			{
+				for (int32 z = 0; z < 6; ++z) for (int32 y = 0; y < 40; ++y) for (int32 x = 0; x < 40; ++x)
+				{
+					Pos.Add(FVector3f(x * D, y * D, R + z * D) + FVector3f(Rng.FRandRange(-1, 1), Rng.FRandRange(-1, 1), Rng.FRandRange(-1, 1)) * 0.3f * R);
+				}
+			}
+			else if (Scene == TEXT("wall"))
+			{
+				for (int32 z = 0; z < 8; ++z) for (int32 y = 0; y < 20; ++y) for (int32 x = 0; x < 2; ++x)
+				{
+					Pos.Add(FVector3f(x * D, y * D, R + z * D) + FVector3f(Rng.FRandRange(-1, 1), Rng.FRandRange(-1, 1), Rng.FRandRange(-1, 1)) * 0.3f * R);
+				}
+			}
+			else if (Scene == TEXT("debris1")) { Pos.Add(FVector3f(0, 0, 0)); }
+			else if (Scene == TEXT("debris3")) { Pos.Add(FVector3f(0, 0, 0)); Pos.Add(FVector3f(D, 0, 0)); Pos.Add(FVector3f(0.5f * D, 0.866f * D, 0)); }
+			else if (Scene == TEXT("debris7"))
+			{
+				Pos.Add(FVector3f(0, 0, 0));
+				for (int32 a = 0; a < 3; ++a) for (int32 s = -1; s <= 1; s += 2) { FVector3f V(0.f); V[a] = s * D; Pos.Add(V); }
+			}
+			else if (Scene == TEXT("column"))
+			{
+				// M0-b 기준 프로파일 기둥 2만을 600 프레임 돌린 정지 더미
+				FSandParams SP;
+				SP.Substeps = 1; SP.WarmStart = 1.f; SP.WarmGapTol = 0.05f; SP.bGpuResident = true;
+				ApplyGpuProfile(TEXT("-gpu2"), SP);
+				SP.bGatherApply = false; SP.bMassSplit = false;
+				FTiltSetup S; S.TargetCount = 20000; S.Layers = 27; S.FixedLayers = 1; S.BaseJitter = 0.3f; S.bOpenDownhill = false;
+				FSandSpike Sim; Sim.InitTiltBox(SP, S);
+				for (int32 f = 0; f < 600; ++f) { Sim.Step(1.f / 60.f); }
+				Pos = Sim.GetPositions();
+			}
+			if (Pos.Num() == 0) { continue; }
+
+			for (const FString& Fl : Fields)
+			{
+				FSandSurfaceParams Pp = Base;
+				Pp.Field = Fl == TEXT("iso") ? ESandSurfaceField::Isotropic : (Fl == TEXT("zb") ? ESandSurfaceField::ZhuBridson : ESandSurfaceField::Anisotropic);
+				FSandSurfaceMesh M;
+				FSandSurfaceBuilder::Build(Pos, Pp, M);
+
+				// 지표
+				FString Metric;
+				if (Scene == TEXT("slab"))
+				{
+					double S = 0, S2 = 0; int32 C = 0;
+					for (int32 v = 0; v < M.Vertices.Num(); ++v)
+					{
+						const FVector3f& X = M.Vertices[v];
+						if (M.Normals[v].Z > 0.9f && X.Z > 3.f * D && X.X > 4 * D && X.X < 35 * D && X.Y > 4 * D && X.Y < 35 * D) { S += X.Z; S2 += X.Z * X.Z; ++C; }
+					}
+					const double Mean = C ? S / C : 0, Rms = C ? FMath::Sqrt(FMath::Max(0.0, S2 / C - Mean * Mean)) : 0;
+					Metric = FString::Printf(TEXT("윗면 RMS %.3fR (n %d, 높이 %.2f)"), Rms / R, C, Mean);
+				}
+				else if (Scene == TEXT("wall"))
+				{
+					double Xp = 0, Xm = 0; int32 Cp = 0, Cm = 0;
+					for (int32 v = 0; v < M.Vertices.Num(); ++v)
+					{
+						const FVector3f& X = M.Vertices[v];
+						if (X.Z < 2.5f * D || X.Z > 5.5f * D || X.Y < 4 * D || X.Y > 15 * D) { continue; }
+						if (M.Normals[v].X > 0.8f) { Xp += X.X; ++Cp; } else if (M.Normals[v].X < -0.8f) { Xm += X.X; ++Cm; }
+					}
+					float PMin = FLT_MAX, PMax = -FLT_MAX; for (const FVector3f& X : Pos) { PMin = FMath::Min(PMin, X.X); PMax = FMath::Max(PMax, X.X); }
+					const double Th = (Cp && Cm) ? Xp / Cp - Xm / Cm : 0, PTh = (PMax + R) - (PMin - R);
+					Metric = FString::Printf(TEXT("두께 %.2f / 입자 %.2f = %.2f"), Th, PTh, Th / FMath::Max(1e-3, PTh));
+				}
+				else if (Scene.StartsWith(TEXT("debris")))
+				{
+					const double V = M.Volume(), A = M.Area();
+					const double Psi = A > 0 ? FMath::Pow(PI, 1.0 / 3.0) * FMath::Pow(6.0 * V, 2.0 / 3.0) / A : 0;
+					Metric = FString::Printf(TEXT("구형도 %.3f (V %.1f A %.1f)"), Psi, V, A);
+				}
+				else { Metric = TEXT("-"); }
+				const double PV = Pos.Num() * (4.0 / 3.0) * PI * R * R * R / 0.6;
+				UE_LOG(LogSpikeSweep, Display, TEXT("%8s | %5s | %6d %6d | %7d %7d %7d | %s | %.2f | %.1f %.1f %.1f %.1f = %.1f | %.4f %.3f"),
+					*Scene, *Fl, M.NumParticles, M.NumSurfaceParticles, M.NumBandPoints, M.Vertices.Num(), M.Triangles.Num() / 3, *Metric, M.Volume() / PV,
+					M.MsNeighbors, M.MsKernels, M.MsField, M.MsMesh, M.MsTotal, M.Ks, M.Iso);
+				M.SaveObj(Dir / FString::Printf(TEXT("%s_%s.obj"), *Scene, *Fl));
+			}
+		}
+		return 0;
+	}
+
 	int32 RunPerf(const FString& Params)
 	{
 		const TArray<int32> CountList = ParseList<int32>(Params, TEXT("particles="), { 20000 });
@@ -1338,6 +1453,10 @@ int32 USpikeSweepCommandlet::Main(const FString& Params)
 	if (FParse::Param(*Params, TEXT("creeptest")))
 	{
 		return RunCreepTest(Params);
+	}
+	if (FParse::Param(*Params, TEXT("mesh")))
+	{
+		return RunMesh(Params);
 	}
 	if (FParse::Param(*Params, TEXT("perf")))
 	{
