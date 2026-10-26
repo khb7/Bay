@@ -2,6 +2,13 @@
 
 > 계획은 [m1-plan.md](m1-plan.md), 근거는 [papers.md C12](../research/papers.md). 이 문서는 실제로 돌린 것과 판단만 쌓는다.
 > 실행: `-run=SpikeSweep -mesh [-scenes=… -fields=iso,aniso,zb -cell= -isofrac= -lambda= -kr= -h= -fullband]`, OBJ 는 `Saved/MeshRuns/`.
+> 2026-10-27 기준 자주 쓰는 것:
+> - 품질 기준 설정: `-fields=aniso -knramp=8 -isofrac=0.25 -cell=1.25 -bandr=7.5 -smooth=25` (SurfDev 0.15 · 내부 φ 0.6 고정 · 슬롯은 기본)
+> - 장면: `slab wall debris1/3/7 columnN pourN` (N = 입자 수. pour 는 상자에 부어 다지고 벽 치운 뒤 150 프레임)
+> - GPU 대조: `-gpumesh [-meshdiff]` · 시뮬과 같은 프레임: `-meshframe -scene=pour|jitter|lattice -count= -frames= -every=`
+> - 화면: `UnrealEditor.exe <uproject> /Engine/Maps/Templates/Template_Default -game -RenderOffscreen -sandsurfacetest -sandsim -sandscene=pour [-sandwet= -sandsmooth=]` → `Saved/MeshRuns/sandsim_f*.png`
+> - 모래 재질 다시 만들기: `-run=SpikeSweep -makesandmat`
+> - ⚠ GPU ms 는 한 프로세스의 **첫 한두 장면이 부풀려진다** (클럭 · 첫 사용 비용 — 판이 첫 장면이면 22~27 ms, 뒤에 재면 2.0 ms, #25). 비교는 뒤 장면 · 2 회째 값으로.
 
 ---
 
@@ -471,3 +478,7 @@ G3 의 고정 영역 격자는 조밀 배열이라 띠 · 장 · 셀 정점 세 
 - 위치와 법선 평활화를 한 `SmoothCS` 로 (같은 가중 · 이웃이라 수식 같음) — 디스패치 50 → 25. 메시 단계 기둥 3천 0.47 → 0.41 ms, 부은 3천 0.65 → 0.58.
 - 화면 경로: 비동기 계수에서 슬롯 넘침(`Counters[5]`)이 보이면 다음 프레임부터 슬롯 용량 두 배.
 - GPU = CPU 전 장면 일치 · 2 회 비트 같음 그대로.
+
+## 실행 #25 — 측정 주의: 첫 장면 GPU 시간 (2026-10-27)
+
+판의 GPU 메시가 2 회째에도 22~27 ms 로 기둥 2만(2.8 ms)보다 느렸다. 순서를 `column3000, slab, wall, slab` 로 바꾸니 **판 2.0 ms · 벽 0.49 ms** — 첫 한두 장면은 클럭 상승 · 첫 사용 비용이 섞인다. 이전 기록의 판 · 벽 GPU 시간(#12 · #17~#24)은 그 영향을 받은 값이다. 머리말에 주의를 적었다.
