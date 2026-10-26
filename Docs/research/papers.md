@@ -1388,6 +1388,46 @@ SPOOK (C7)         ≈ 1 (속도 제약)              4Υ ≈ 0.44 (2 스텝에 
 - 옛 GPU 프로파일러는 5.8 에서 **제거**됐다 — `RDG_GPU_STAT_SCOPE` 는 비권장 · 아무것도 안 함 (`RenderGraphEvent.h:520`). 새 방식은 `RDG_EVENT_SCOPE_STAT` → `stat GPU` · `ProfileGPU` · Unreal Insights (5.6 새 프로파일러). 뷰포트 · 트레이스 기반이라 **커맨드릿 배치 측정엔 불편**.
 - RHI 타임스탬프 쿼리 `RQT_AbsoluteTime` 은 있다 (`RHIDefinitions.h:257`, 지원 여부 `GRHISupportsTimestampRenderQueries` 계열) → **패스 경계마다 타임스탬프를 직접 찍어 커맨드릿 로그로** 내는 것이 우리 배치에 맞다.
 
+### C12. 입자 → 표면 재구성 — M1 메시화의 근거 (2026-10-26, 세 편 원문 읽음)
+
+**① Yu & Turk (2010), "Reconstructing Surfaces of Particle-Based Fluids Using Anisotropic Kernels", SCA.** system-design §6-2 의 기준 방법.
+```
+1. 커널 중심 다듬기 (라플라시안 1회)    x̄_i = (1−λ)·x_i + λ·Σ w_ij x_j / Σ w_ij,   λ = 0.9 ~ 1
+2. 가중 PCA                              w_ij = 1 − (|x_i−x_j|/r_i)³ (r_i 안),  r_i = 2·h_i
+                                         C_i = Σ w_ij (x_j − x_i^w)(x_j − x_i^w)ᵀ / Σ w_ij  → SVD C = R Σ Rᵀ
+3. 이방성 행렬                           σ̃_k = max(σ_k, σ_1/k_r)  (축비 상한 k_r)
+                                         Σ̃ = k_s·diag(σ_1, σ̃_2, σ̃_3)  if N > N_ε,  else k_n·I  (이웃 적으면 구로)
+                                         G_i = (1/h_i) · R Σ̃⁻¹ Rᵀ
+4. 장                                    φ(x) = Σ_j (m_j/ρ_j) · W(x − x̄_j, G_j),  W(r,G) = σ‖G‖P(‖G r‖)  (B-cubic spline)
+5. 등위면                                Marching Cubes
+논문값: k_r = 4 · k_s = 1400 · k_n = 0.5 · N_ε = 25 · λ = 0.9 · r_i = 2h_i
+```
+- 비교 (Fig 5, 14만 입자 이중 댐 붕괴): 등방 = "받아들일 수 없게 울퉁불퉁", Zhu & Bridson = 더 매끈하지만 혹이 보임, Adams 2007 = 더 매끈, **이방성 = 가장 매끈 · 얇은 막이 안 끊김**.
+- 비용 (Table 1, 230×190×350 격자): 등방 0.39 · Z&B 0.50 · 이방성 0.96 분/프레임 — **등방의 약 2 배**.
+- 한계: 중심 다듬기 때문에 **부피가 약간 준다** (평면 근처 입자가 커널 반경의 일부만큼 안으로, 부록 A: ≤ 9λr/28). 확대하면 작은 혹이 남는다 → 메시 평활화 권장.
+- **우리 값으로**: 입자 지름 5cm · 간격 ≈ 5cm → h ≈ 5cm, r_i ≈ 10cm. 그 반경 안 이웃 수 ≈ 충전율 0.6 × (2d/d)³ × 8 ≈ 38 (내부) → N_ε 25 는 "표면 · 모서리" 와 "내부" 를 가르는 값으로 맞다. k_s 는 ‖k_s C‖ ≈ 1 이 되게 우리 간격에 맞춰 다시 정해야 한다 (논문 1400 은 그들의 단위).
+
+**② Zhu & Bridson (2005), "Animating Sand as a Fluid", SIGGRAPH — 모래 쪽 원전** (§5)
+```
+φ(x) = |x − x̄| − r̄,   x̄ = Σ w_i x_i,  r̄ = Σ w_i r_i,  w_i = k(|x−x_i|/R) / Σ_j k(|x−x_j|/R)
+k(s) = max(0, (1 − s²)³),  R = 평균 입자 간격의 2 배
+```
+- 원리: **고립 입자 하나의 부호 거리장을 정확히 재현** (`|x − x0| − r0`) — 부스러기가 자연히 구가 된다.
+- 문제: **오목한 곳에 가짜 덩어리** (x̄ 가 표면 밖으로) → 고해상도 격자 + 간단 평활화로 제거. 반지름을 표면까지 거리로 정확히 못 정해 상수로 두고, "φ 를 줄이는 쪽으로만" 격자 평활화를 조금.
+- 비용: 250³ 전체 격자 40~50 초/프레임 (최적화 안 함, 대부분 I/O). 프레임마다 독립 → 병렬.
+- 모래 렌더링은 표면 위에 **입자를 따라 흐르는 볼륨 텍스처**를 섞었다 (§6).
+
+**③ Akinci, Ihmsen, Akinci, Teschner (2012), "Parallel Surface Reconstruction for Particle-Based Fluids", CGF 31(6)** — 좁은 띠 · 병렬
+- **표면 입자만으로 띠를 정한다**: 이웃 25 개 미만 = 표면 입자 (Yu & Turk N_ε 와 같은 수). 표면 입자 가까운 격자점만 장을 계산 → 비용이 부피가 아니라 **표면적에 비례**.
+- 격자 셀 크기가 품질을 정한다: 2r · r · r/2 (r = 입자 평형 거리) 비교 — 작을수록 깨끗하지만 비싸다. 멀티코어 CPU 에서 거의 선형, GPU 는 기존 대비 최대 50 배.
+
+**우리에게**
+- **Yu & Turk 를 기본으로** 간다 (평면 · 얇은 벽 · 부스러기 셋을 다 겨냥, 비용은 등방의 2 배). Zhu & Bridson 은 더 단순하지만 평면 혹이 남고 오목부 가짜 덩어리 처리가 필요하다 — **비교 기준선**으로 같이 구현한다 (같은 띠 · 같은 격자, 장 함수만 다름).
+- 띠: Akinci 식 표면 입자(이웃 < 25) 주변만. 우리 정지 더미는 표면 입자가 적어 이득이 크다.
+- 격자: system-design 의 2.5cm(= r) 는 Akinci 의 "중간" 해상도. 품질이 모자라면 r/2.
+- 등위면: 논문들은 Marching Cubes, 우리는 계획대로 Surface Nets (삼각형 적고 모서리 덜 뭉갬).
+- 잠든 입자는 커널(G, x̄)을 캐시할 수 있다 (system-design §6-2) — 우리 재우기와 맞물린다.
+
 **지각 문턱** — **Yeh, Reinman, Patel, Faloutsos (2009), "Fool Me Twice: Exploring and Exploiting Error Tolerance in Physics-Based Animation", TOG 29(1).** GPU 가 CPU 와 다른 답을 낼 때 "얼마나 달라도 되나"의 근거. #35 의 예산 스윕이 쓴 기준(시드 산포 ±1°)을 지각 쪽에서 받친다.
 
 ---
