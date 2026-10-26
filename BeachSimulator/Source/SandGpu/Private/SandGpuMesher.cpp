@@ -240,7 +240,7 @@ namespace
 		FRHIGPUBufferReadback Vertex{ TEXT("SandMesh.Vertex") };
 		FRHIGPUBufferReadback Normal{ TEXT("SandMesh.Normal") };
 		FRHIGPUBufferReadback Index{ TEXT("SandMesh.Index") };
-		FRenderQueryRHIRef Ts[5];
+		FRenderQueryRHIRef Ts[8];   // [5..7] 커널 단계 안 (G1-5 세부)
 	};
 
 	/** 위치는 Pos4(올리기) 또는 PosExt(시뮬 버퍼, N 개 — G3 같은 프레임) 중 하나 */
@@ -292,7 +292,7 @@ namespace
 			T.H = P.H; T.Kr = P.Kr; T.NEps = P.NEps; T.Kn = P.Kn; T.KnRamp = P.KnRamp; T.KsFixed = P.Ks;
 			T.MinSigma = P.MinSigma; T.MaxStretch = P.MaxStretch; T.IsoFrac = P.IsoFrac;
 			T.PVol = (4.f / 3.f) * PI * P.Radius * P.Radius * P.Radius;
-			const int32 SampleStep = FMath::Max(1, N / 2000);
+			const int32 SampleStep = FMath::Max(1, N / 512);
 			const int32 NumSamples = FMath::DivideAndRoundUp(N, SampleStep);
 			const int32 NumPartials = FMath::DivideAndRoundUp(N, 64);
 			T.SampleStep = SampleStep; T.NumSamples = NumSamples; T.NumPartials = NumPartials;
@@ -352,32 +352,13 @@ namespace
 			AddMeshPass<FSandMeshEigenCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshEigen"), ShaderMap, T, N, 64);
 			AddMeshPass<FSandMeshFinalizeKsCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshFinalizeKs"), ShaderMap, T, 1, 1);
 			AddMeshPass<FSandMeshKernelCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshKernel"), ShaderMap, T, N, 64);
+			Stamp(5);
 
-			// 커널 격자 — 점 = x̄, 셀 = 장 지지 반경 (CPU 의 KGrid)
-			const float Support = 2.f * P.H * P.MaxStretch;
-			FRDGBufferRef KCellKey   = MeshBuffer(GraphBuilder, TEXT("SandMesh.KCellKey"), sizeof(uint32), N);
-			FRDGBufferRef KCellSlot  = MeshBuffer(GraphBuilder, TEXT("SandMesh.KCellSlot"), sizeof(uint32), N);
-			FRDGBufferRef KCellCount = MeshBuffer(GraphBuilder, TEXT("SandMesh.KCellCount"), sizeof(uint32), TableSize);
-			FRDGBufferRef KCellStart = MeshBuffer(GraphBuilder, TEXT("SandMesh.KCellStart"), sizeof(uint32), TableSize + 1);
-			FRDGBufferRef KSortedIdx = MeshBuffer(GraphBuilder, TEXT("SandMesh.KSortedIdx"), sizeof(uint32), N);
-			FSandMeshParams TK = T;
-			TK.GridCell = Support;
-			TK.GridPosRO = T.SmoothedRO;
-			TK.CellKeyRW = GraphBuilder.CreateUAV(KCellKey);
-			TK.CellKeyRO = GraphBuilder.CreateSRV(KCellKey);
-			TK.CellSlotRW = GraphBuilder.CreateUAV(KCellSlot);
-			TK.CellSlotRO = GraphBuilder.CreateSRV(KCellSlot);
-			TK.CellCountRW = GraphBuilder.CreateUAV(KCellCount);
-			TK.CellStart = GraphBuilder.CreateSRV(KCellStart);
-			TK.SortedIdxRW = GraphBuilder.CreateUAV(KSortedIdx);
-			TK.SortedIdxRO = GraphBuilder.CreateSRV(KSortedIdx);
-			AddClearUAVPass(GraphBuilder, TK.CellCountRW, 0u);
-			AddMeshPass<FSandMeshCellKeyCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshKCellKey"), ShaderMap, TK, N, 64);
-			AddMeshScan(GraphBuilder, ShaderMap, TK, KCellCount, KCellStart, TableSize);
-			AddMeshPass<FSandMeshScatterCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshKScatter"), ShaderMap, TK, N, 64);
-			AddMeshPass<FSandMeshSortCellsCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshKSortCells"), ShaderMap, TK, TableSize, 64);
-			AddMeshPass<FSandMeshIsoSampleCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshIsoSample"), ShaderMap, TK, NumSamples, 64);
-			AddMeshPass<FSandMeshFinalizeIsoCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshFinalizeIso"), ShaderMap, TK, 1, 1);
+			// 등위값 표본은 이웃 격자를 ±3 칸 돈다 (#18 — 커널 격자 · 셀 정렬 제거)
+			Stamp(6);
+			AddMeshGroupPass<FSandMeshIsoSampleCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshIsoSample"), ShaderMap, T, FIntVector(NumSamples, 1, 1));   // 그룹 = 표본
+			Stamp(7);
+			AddMeshPass<FSandMeshFinalizeIsoCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshFinalizeIso"), ShaderMap, T, 1, 1);
 			Stamp(2);
 
 			// ── G1-3 띠 · 영역 · 장 ──
@@ -584,10 +565,16 @@ namespace
 		}
 		if (RB->Ts[0].IsValid())
 		{
-			uint64 Us[5] = {};
+			uint64 Us[8] = {};
 			bool bOk = true;
-			for (int32 k = 0; k < 5; ++k) { bOk &= RHIGetRenderQueryResult(RB->Ts[k].GetReference(), Us[k], true); }
-			if (bOk) { for (int32 k = 0; k < 4; ++k) { Out.StageMs[k] = (float)(Us[k + 1] - Us[k]) * 0.001f; } }
+			for (int32 k = 0; k < 8; ++k) { bOk &= RHIGetRenderQueryResult(RB->Ts[k].GetReference(), Us[k], true); }
+			if (bOk)
+			{
+				for (int32 k = 0; k < 4; ++k) { Out.StageMs[k] = (float)(Us[k + 1] - Us[k]) * 0.001f; }
+				// 커널 단계 안: 고유분해·커널 | 커널 격자·정렬 | 등위값 표본 | 등위값 마무리
+				Out.KernelSubMs[0] = (float)(Us[5] - Us[1]) * 0.001f; Out.KernelSubMs[1] = (float)(Us[6] - Us[5]) * 0.001f;
+				Out.KernelSubMs[2] = (float)(Us[7] - Us[6]) * 0.001f; Out.KernelSubMs[3] = (float)(Us[2] - Us[7]) * 0.001f;
+			}
 		}
 		// 커맨드릿은 프레임 틱이 없다 — RDG 풀 · RHI 프레임을 직접 넘긴다 (SandGpuSolver.cpp EndGpuFrame 과 같은 이유)
 		FRDGBuilder::TickPoolElements();

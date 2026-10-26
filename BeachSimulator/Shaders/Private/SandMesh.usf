@@ -411,36 +411,53 @@ float BCubic(float Q)
 	return (1.f / SAND_PI) * 0.25f * T * T * T;
 }
 
-// 점 X 의 φ — 커널 격자(셀 = 지지 반경, 점 = x̄)를 돈다
-float EvalField(float3 X)
-{
-	float Phi = 0.f;
-	FOR_NEIGHBORS_ALL(X,
-	{
-		const float4 K0 = KernelRO[j * 4 + 0]; const float4 K1 = KernelRO[j * 4 + 1]; const float4 K2 = KernelRO[j * 4 + 2];   /* 매크로 인자라 쉼표 금지 */
-		const float3 R = X - SmoothedRO[j].xyz;
-		float3 GR; GR.x = dot(K0.xyz, R); GR.y = dot(K1.xyz, R); GR.z = dot(K2.xyz, R);
-		Phi += PVol * K0.w * BCubic(length(GR));
-	})
-	return Phi;
-}
 
-// 등위값 표본: 후보 k → 입자 k·SampleStep. 내부면 φ (CPU 는 앞에서부터 내부 2000 개)
-[numthreads(64, 1, 1)]
-void IsoSampleCS(uint3 Tid : SV_DispatchThreadID)
+
+// 등위값 표본: 그룹 하나 = 후보 k 하나 (입자 k·SampleStep), 스레드 하나 = 이웃 격자 칸 하나 (±3 → 7³ = 343).
+// 커널 중심 x̄ 는 x 에서 λ·r_i(9cm) 안이라 지지 20cm + 9cm 를 덮는다 (#18 — 커널 격자 · 셀 정렬 제거).
+// 해시 충돌로 같은 버킷을 두 번 돌 수 있어 "입자의 실제 셀 = 이 칸" 을 확인한다. 합은 고정 트리 순서 (결정적)
+groupshared float IsoShared[343];
+
+[numthreads(7, 7, 7)]
+void IsoSampleCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex)
 {
-	const uint k = Tid.x;
-	if (k >= NumSamples) { return; }
+	const uint k = Gid.x;
 	const uint i = k * SampleStep;
-	if (i >= NumParticles || !IsInteriorP(NCountRO[i], CountersRO[0])) { SamplePhiRW[k] = float2(0.f, 0.f); return; }
-	SamplePhiRW[k] = float2(EvalField(PosRO[i].xyz), 1.f);
+	const bool bValid = k < NumSamples && i < NumParticles && IsInteriorP(NCountRO[min(i, NumParticles - 1)], CountersRO[0]);
+	float Phi = 0.f;
+	if (bValid)
+	{
+		const float3 X = PosRO[i].xyz;
+		const int3 Cc = CellOf(X, GridCell) + int3(GTid) - 3;
+		const uint Key = HashCell(Cc, TableSize);
+		const uint End = CellStart[Key + 1];
+		for (uint s = CellStart[Key]; s < End; ++s)
+		{
+			const uint j = SortedIdxRO[s];
+			if (any(CellOf(PosRO[j].xyz, GridCell) != Cc)) { continue; }
+			const float4 K0 = KernelRO[j * 4 + 0];
+			const float4 K1 = KernelRO[j * 4 + 1];
+			const float4 K2 = KernelRO[j * 4 + 2];
+			const float3 R = X - SmoothedRO[j].xyz;
+			const float3 GR = float3(dot(K0.xyz, R), dot(K1.xyz, R), dot(K2.xyz, R));
+			Phi += PVol * K0.w * BCubic(length(GR));
+		}
+	}
+	IsoShared[GI] = Phi;
+	GroupMemoryBarrierWithGroupSync();
+	for (uint Sz = 256; Sz > 0; Sz >>= 1)
+	{
+		if (GI < Sz && GI + Sz < 343) { IsoShared[GI] += IsoShared[GI + Sz]; }
+		GroupMemoryBarrierWithGroupSync();
+	}
+	if (GI == 0 && k < NumSamples) { SamplePhiRW[k] = float2(IsoShared[0], bValid ? 1.f : 0.f); }
 }
 
 [numthreads(1, 1, 1)]
 void FinalizeIsoCS()
 {
 	float Sum = 0.f; uint Cnt = 0;
-	for (uint k = 0; k < NumSamples && Cnt < 2000u; ++k)
+	for (uint k = 0; k < NumSamples && Cnt < 512u; ++k)
 	{
 		const float2 V = SamplePhiRO[k];
 		if (V.y > 0.f) { Sum += V.x; ++Cnt; }

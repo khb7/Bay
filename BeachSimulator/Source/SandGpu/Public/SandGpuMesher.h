@@ -45,6 +45,7 @@ struct FSandGpuMeshResult
 	int32 NumVertsTotal = 0, NumIndicesTotal = 0;   // 용량과 무관한 실제 수
 	// G1-5 GPU 타임스탬프 (ms): [0] 이웃 [1] 커널 · 등위값 [2] 띠 · 장 [3] 메시
 	float StageMs[4] = {};
+	float KernelSubMs[4] = {};   // 커널 단계 안: 고유분해·커널 · 커널 격자·정렬 · 등위값 표본 · 등위값 마무리
 	double WallMs = 0.0;               // 올리기 + 패스 + 내려받기 (벽시계)
 };
 

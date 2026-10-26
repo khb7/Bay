@@ -997,6 +997,7 @@ namespace
 						const bool bSame = G2.Vertices.Num() == G.Vertices.Num() && G2.Indices == G.Indices
 							&& FMemory::Memcmp(G2.Vertices.GetData(), G.Vertices.GetData(), G.Vertices.Num() * sizeof(FVector3f)) == 0
 							&& FMemory::Memcmp(G2.Normals.GetData(), G.Normals.GetData(), G.Normals.Num() * sizeof(FVector3f)) == 0;
+						UE_LOG(LogSpikeSweep, Display, TEXT("   GPU 커널 세부 %s: 고유분해·커널 %.3f · 커널 격자·정렬 %.3f · 등위값 표본 %.3f · 마무리 %.3f ms"), *Scene, G2.KernelSubMs[0], G2.KernelSubMs[1], G2.KernelSubMs[2], G2.KernelSubMs[3]);
 						UE_LOG(LogSpikeSweep, Display, TEXT("   GPU G1-5 %s 2회째: %s · GPU ms 이웃 %.3f · 커널 %.3f · 띠·장 %.3f · 메시 %.3f = %.3f"),
 							*Scene, bSame ? TEXT("비트 단위 같음") : TEXT("⚠ 다름"), G2.StageMs[0], G2.StageMs[1], G2.StageMs[2], G2.StageMs[3], G2.StageMs[0] + G2.StageMs[1] + G2.StageMs[2] + G2.StageMs[3]);
 					}

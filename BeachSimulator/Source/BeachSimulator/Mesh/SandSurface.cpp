@@ -466,7 +466,7 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 	if (P.Field != ESandSurfaceField::ZhuBridson)
 	{
 		TArray<int32> Samples;
-		for (int32 i = 0; i < N && Samples.Num() < 2000; i += FMath::Max(1, N / 2000)) { if (IsInterior(i)) { Samples.Add(i); } }
+		for (int32 i = 0; i < N && Samples.Num() < 512; i += FMath::Max(1, N / 512)) { if (IsInterior(i)) { Samples.Add(i); } }   // 내부 φ 평균 — 512 표본이면 충분 (#18, GPU 와 같은 규칙)
 		TArray<float> SPhi; SPhi.SetNumUninitialized(Samples.Num());
 		ParallelFor(Samples.Num(), [&](int32 k) { SPhi[k] = EvalField(Pos[Samples[k]]); });
 		double Sum = 0.0; const int32 Cnt = Samples.Num();
