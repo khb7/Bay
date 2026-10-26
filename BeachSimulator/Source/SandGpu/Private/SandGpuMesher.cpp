@@ -391,8 +391,8 @@ namespace
 			TB.MaxPairsK = MaxPairsK;
 			TB.MaxVerts = MaxVerts;
 			TB.MaxIndices = MaxIndices;
-			// 활성 영역 슬롯 (#23) — 띠 · 장 · 셀 정점은 슬롯 × 512 점만. 활성 영역은 입자 수의 13~27% 였다 (#12) → 여유를 두고 3/4
-			const int32 MaxSlots = FMath::Min(NumBlocks, FMath::Max(1024, N * 3 / 4 * (RenderOut ? RenderOut->SlotScale : 1)));
+			// 활성 영역 슬롯 (#23) — 띠 · 장 · 셀 정점은 슬롯 × 512 점만. 활성 영역은 입자 수의 13~31% (#12 · #23 · #26) → 여유를 두고 2/5
+			const int32 MaxSlots = FMath::Min(NumBlocks, FMath::Max(1024, N * 2 / 5 * (RenderOut ? RenderOut->SlotScale : 1)));
 			const int32 SlotPts = MaxSlots * 512;
 			TB.MaxSlots = MaxSlots;
 			FRDGBufferRef BlockSlot  = MeshBuffer(GraphBuilder, TEXT("SandMesh.BlockSlot"), sizeof(uint32), NumBlocks);
