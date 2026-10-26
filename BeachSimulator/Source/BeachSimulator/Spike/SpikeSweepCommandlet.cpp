@@ -759,10 +759,12 @@ namespace
 		FParse::Value(*Params, TEXT("knramp="), Base.KnRamp);
 		FParse::Value(*Params, TEXT("bandr="), Base.BandR);
 		FParse::Value(*Params, TEXT("surfdev="), Base.SurfDev);
+		FParse::Value(*Params, TEXT("block="), Base.Block);
 		const bool bDevDump = FParse::Param(*Params, TEXT("devdump"));
 		Base.bBandOnly = !FParse::Param(*Params, TEXT("fullband"));
 		const FString Dir = FPaths::ProjectSavedDir() / TEXT("MeshRuns");
 
+		UE_LOG(LogSpikeSweep, Display, TEXT("작업 스레드 %d · 논리 코어 %d"), FPlatformMisc::NumberOfWorkerThreadsToSpawn(), FPlatformMisc::NumberOfCoresIncludingHyperthreads());
 		UE_LOG(LogSpikeSweep, Display, TEXT("메시 — 셀 %.2f · h %.1f · λ %.2f · k_r %.1f · IsoFrac %.2f · 띠 %s"), Base.Cell, Base.H, Base.Lambda, Base.Kr, Base.IsoFrac, Base.bBandOnly ? TEXT("표면 입자") : TEXT("전부"));
 		UE_LOG(LogSpikeSweep, Display, TEXT("   장면 | 장 | 입자 표면 | 띠점 정점 삼각형 | 지표 | 부피비 | ms (이웃 커널 장 메시 = 합) | k_s iso"));
 
@@ -853,6 +855,7 @@ namespace
 					*Scene, *Fl, M.NumParticles, M.NumSurfaceParticles, M.NumBandPoints, M.Vertices.Num(), M.Triangles.Num() / 3, *Metric, M.Volume() / PV,
 					M.MsNeighbors, M.MsKernels, M.MsField, M.MsMesh, M.MsTotal, M.Ks, M.Iso);
 				M.SaveObj(Dir / FString::Printf(TEXT("%s_%s.obj"), *Scene, *Fl));
+				UE_LOG(LogSpikeSweep, Display, TEXT("   장 세부 %s: 띠 %.1f · 등위값 %.1f · 거르기 %.1f · 뿌리기 %.1f (목록 %.1f) ms · 격자점 %d · 영역 %d · 계산 %.1fM"), *Scene, M.MsFieldBand, M.MsFieldIso, M.MsFieldFilter, M.MsField - M.MsFieldBand - M.MsFieldIso - M.MsFieldFilter, M.MsSplatLists, M.NumGridPoints, M.NumBlocks, M.SplatEvals / 1e6);
 				if (bDevDump && Fl == Fields[0])
 				{
 					// 표면 판정 문턱 측정 (C14): 무리별 이웃 수 · 치우침 분위수

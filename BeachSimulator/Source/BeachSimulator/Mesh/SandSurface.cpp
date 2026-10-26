@@ -4,6 +4,8 @@
 #include "HAL/PlatformTime.h"
 #include "Misc/FileHelper.h"
 
+#include <atomic>
+
 namespace
 {
 	// 균일 격자 — 셀 크기 CellSize, AABB 기준 조밀 배열 + counting sort
@@ -323,9 +325,11 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 			}
 		});
 	}
+	const double Tf0 = FPlatformTime::Seconds();
 	int32 NumBand = 0;
 	for (uint8 B : Band) { NumBand += B; }
 	Out.NumBandPoints = NumBand;
+	Out.NumGridPoints = NumPts;
 
 	// 커널 중심으로 격자 (장 모으기용)
 	TArray<FVector3f> Centers; Centers.SetNumUninitialized(N);
@@ -377,6 +381,7 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 	}
 	Out.Iso = Iso;
 
+	const double Tf1 = FPlatformTime::Seconds();
 	TArray<float> F; F.Init(-1.f, NumPts);   // f − iso, 띠 밖은 표시만 (−1)
 	if (P.Field == ESandSurfaceField::ZhuBridson)
 	{
@@ -394,7 +399,7 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 	else
 	{
 		// 선형 합 → 입자마다 자기 지지 AABB 안의 띠 점에 뿌린다 (모으기보다 이웃 검사가 훨씬 적다)
-		TArray<float> Phi; Phi.SetNumZeroed(NumPts);
+		TArray<float> Phi; if (P.Block <= 0) { Phi.SetNumZeroed(NumPts); }
 		// 뿌릴 입자 = 띠 점에 닿을 수 있는 것만 — 표면 입자에서 (띠 반경 + 자기 지지) 안 (splashsurf 의 "표면 입자 + 두 고리" 와 같은 생각, 여기선 기하로 판정)
 		TArray<uint8> Contributes; Contributes.SetNumZeroed(N);
 		{
@@ -411,6 +416,121 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 				Contributes[j] = bHit ? 1 : 0;
 			});
 		}
+		const double Tf2 = FPlatformTime::Seconds();
+		Out.MsFieldFilter = (Tf2 - Tf1) * 1000.0;
+		if (P.Block > 0)
+		{
+			// 부분 영역: 격자점을 B³ 영역으로 나누고, 입자를 지지 AABB 가 겹치는 영역마다 목록에 넣는다 (counting sort).
+			// 영역마다 스레드 하나가 지역 배열에 뿌린 뒤 자기 띠 점에만 써 넣는다 — 영역끼리 점이 겹치지 않아 원자 연산이 없다
+			const int32 B = P.Block;
+			const FIntVector BD((GD.X + B - 1) / B, (GD.Y + B - 1) / B, (GD.Z + B - 1) / B);
+			const int32 NumBlocks = BD.X * BD.Y * BD.Z;
+			auto PtRange = [&](const FKernel& Kj, FIntVector& L, FIntVector& H)
+			{
+				const FVector3f Lo = (Kj.C - Kj.Ext - GOrigin) / P.Cell, Hi = (Kj.C + Kj.Ext - GOrigin) / P.Cell;
+				L = FIntVector(FMath::Max(0, FMath::CeilToInt(Lo.X)), FMath::Max(0, FMath::CeilToInt(Lo.Y)), FMath::Max(0, FMath::CeilToInt(Lo.Z)));
+				H = FIntVector(FMath::Min(GD.X - 1, FMath::FloorToInt(Hi.X)), FMath::Min(GD.Y - 1, FMath::FloorToInt(Hi.Y)), FMath::Min(GD.Z - 1, FMath::FloorToInt(Hi.Z)));
+			};
+			// 띠 점이 있는 영역만
+			TArray<uint8> BlockActive; BlockActive.SetNumZeroed(NumBlocks);
+			ParallelFor(NumBlocks, [&](int32 b)
+			{
+				const int32 bx = b % BD.X, by = (b / BD.X) % BD.Y, bz = b / (BD.X * BD.Y);
+				for (int32 z = bz * B; z < FMath::Min(GD.Z, bz * B + B); ++z)
+				for (int32 y = by * B; y < FMath::Min(GD.Y, by * B + B); ++y)
+				for (int32 x = bx * B; x < FMath::Min(GD.X, bx * B + B); ++x)
+				{
+					if (Band[PtIndex(x, y, z)]) { BlockActive[b] = 1; return; }
+				}
+			});
+			TArray<int32> BStart; BStart.Init(0, NumBlocks + 1);
+			for (int32 j = 0; j < N; ++j)
+			{
+				if (!Contributes[j]) { continue; }
+				FIntVector L, H; PtRange(K[j], L, H);
+				if (L.X > H.X || L.Y > H.Y || L.Z > H.Z) { continue; }
+				for (int32 bz = L.Z / B; bz <= H.Z / B; ++bz) for (int32 by = L.Y / B; by <= H.Y / B; ++by) for (int32 bx = L.X / B; bx <= H.X / B; ++bx)
+				{
+					const int32 b = (bz * BD.Y + by) * BD.X + bx;
+					BStart[b + 1] += BlockActive[b];
+				}
+			}
+			for (int32 b = 0; b < NumBlocks; ++b) { BStart[b + 1] += BStart[b]; }
+			TArray<int32> BItems; BItems.SetNumUninitialized(BStart[NumBlocks]);
+			{
+				TArray<int32> Cur = BStart;
+				for (int32 j = 0; j < N; ++j)
+				{
+					if (!Contributes[j]) { continue; }
+					FIntVector L, H; PtRange(K[j], L, H);
+					if (L.X > H.X || L.Y > H.Y || L.Z > H.Z) { continue; }
+					for (int32 bz = L.Z / B; bz <= H.Z / B; ++bz) for (int32 by = L.Y / B; by <= H.Y / B; ++by) for (int32 bx = L.X / B; bx <= H.X / B; ++bx)
+					{
+						const int32 b = (bz * BD.Y + by) * BD.X + bx;
+						if (BlockActive[b]) { BItems[Cur[b]++] = j; }
+					}
+				}
+			}
+			const double Tl = FPlatformTime::Seconds();
+			Out.MsSplatLists = (Tl - Tf2) * 1000.0;
+			std::atomic<int64> EvalCount{0};
+			ParallelFor(NumBlocks, [&](int32 b)
+			{
+				if (BStart[b] == BStart[b + 1]) { return; }
+				int64 LocalEvals = 0;
+				const FIntVector B0((b % BD.X) * B, ((b / BD.X) % BD.Y) * B, (b / (BD.X * BD.Y)) * B);
+				const FIntVector B1(FMath::Min(GD.X, B0.X + B) - 1, FMath::Min(GD.Y, B0.Y + B) - 1, FMath::Min(GD.Z, B0.Z + B) - 1);
+				TArray<float> Local; Local.SetNumZeroed(B * B * B);
+				// 줄(y,z)마다 띠 점의 x 범위 — 띠 밖 점은 계산하지 않는다
+				TArray<int16> SpanLo, SpanHi; SpanLo.Init(MAX_int16, B * B); SpanHi.Init(-1, B * B);
+				for (int32 z = B0.Z; z <= B1.Z; ++z)
+				for (int32 y = B0.Y; y <= B1.Y; ++y)
+				for (int32 x = B0.X; x <= B1.X; ++x)
+				{
+					if (!Band[PtIndex(x, y, z)]) { continue; }
+					const int32 r = (z - B0.Z) * B + (y - B0.Y);
+					SpanLo[r] = FMath::Min<int16>(SpanLo[r], x); SpanHi[r] = FMath::Max<int16>(SpanHi[r], x);
+				}
+				for (int32 k = BStart[b]; k < BStart[b + 1]; ++k)
+				{
+					const FKernel& Kj = K[BItems[k]];
+					FIntVector L, H; PtRange(Kj, L, H);
+					L = FIntVector(FMath::Max(L.X, B0.X), FMath::Max(L.Y, B0.Y), FMath::Max(L.Z, B0.Z));
+					H = FIntVector(FMath::Min(H.X, B1.X), FMath::Min(H.Y, B1.Y), FMath::Min(H.Z, B1.Z));
+					const float Scale = PVol * Kj.DetG;
+					for (int32 z = L.Z; z <= H.Z; ++z)
+					for (int32 y = L.Y; y <= H.Y; ++y)
+					{
+						const int32 r = (z - B0.Z) * B + (y - B0.Y);
+						const int32 xa = FMath::Max<int32>(L.X, SpanLo[r]), xb = FMath::Min<int32>(H.X, SpanHi[r]);
+						if (xa > xb) { continue; }
+						// 한 줄(x) 안에서 G·r 은 x 에 대해 선형 → 증분
+						LocalEvals += xb - xa + 1;
+						const FVector3f R0 = PtPos(xa, y, z) - Kj.C;
+						FVector3f GR(Kj.G[0] * R0.X + Kj.G[1] * R0.Y + Kj.G[2] * R0.Z, Kj.G[3] * R0.X + Kj.G[4] * R0.Y + Kj.G[5] * R0.Z, Kj.G[6] * R0.X + Kj.G[7] * R0.Y + Kj.G[8] * R0.Z);
+						const FVector3f DG(Kj.G[0] * P.Cell, Kj.G[3] * P.Cell, Kj.G[6] * P.Cell);
+						float* Row = Local.GetData() + ((z - B0.Z) * B + (y - B0.Y)) * B - B0.X;
+						for (int32 x = xa; x <= xb; ++x, GR += DG)
+						{
+							const float Q2 = GR.SizeSquared();
+							if (Q2 < 4.f) { Row[x] += Scale * BCubic(FMath::Sqrt(Q2)); }
+						}
+					}
+				}
+				for (int32 z = B0.Z; z <= B1.Z; ++z)
+				for (int32 y = B0.Y; y <= B1.Y; ++y)
+				for (int32 x = B0.X; x <= B1.X; ++x)
+				{
+					const int32 I = PtIndex(x, y, z);
+					if (Band[I]) { F[I] = Local[((z - B0.Z) * B + (y - B0.Y)) * B + (x - B0.X)] - Iso; }
+				}
+				EvalCount += LocalEvals;
+			});
+			Out.SplatEvals = EvalCount.load();
+			Out.NumBlocks = NumBlocks;
+		}
+		else
+		{
 		ParallelFor(N, [&](int32 j)
 		{
 			if (!Contributes[j]) { return; }
@@ -433,8 +553,11 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 			}
 		});
 		ParallelFor(NumPts, [&](int32 I) { if (Band[I]) { F[I] = Phi[I] - Iso; } });
+		}
 	}
 	const double T3 = FPlatformTime::Seconds();
+	Out.MsFieldBand = (Tf0 - T2) * 1000.0;
+	Out.MsFieldIso = (Tf1 - Tf0) * 1000.0;
 
 	// ── ⑥ Surface Nets ──
 	const FIntVector CD(GD.X - 1, GD.Y - 1, GD.Z - 1);
