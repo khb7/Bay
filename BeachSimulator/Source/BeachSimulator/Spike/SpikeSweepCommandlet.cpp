@@ -787,8 +787,11 @@ namespace
 			FSandSurfaceParams Pp = Base;
 			Pp.Field = ESandSurfaceField::Anisotropic;
 			const float Pad = 2.f * Pp.H * Pp.MaxStretch + Pp.Cell;
-			const FVector3f DMin = FVector3f(Box.Min) - FVector3f(60.f, 60.f, 0.f) - FVector3f(Pad);
-			const FVector3f DMax = FVector3f(Box.Max) + FVector3f(60.f, 60.f, 10.f) + FVector3f(Pad);
+			// 영역 여유 (기본 60cm). 해변 크기 영역 하나로 될지 재기: -domainpad=500 이면 사방 5m (타일 필요성)
+			float DomainPad = 60.f; FParse::Value(*Params, TEXT("domainpad="), DomainPad);
+			float DomainTop = 10.f; FParse::Value(*Params, TEXT("domaintop="), DomainTop);
+			const FVector3f DMin = FVector3f(Box.Min) - FVector3f(DomainPad, DomainPad, 0.f) - FVector3f(Pad);
+			const FVector3f DMax = FVector3f(Box.Max) + FVector3f(DomainPad, DomainPad, DomainTop) + FVector3f(Pad);
 			Pp.GridOriginOverride = DMin;
 			Pp.GridDimsOverride = FIntVector(FMath::CeilToInt((DMax.X - DMin.X) / Pp.Cell) + 1, FMath::CeilToInt((DMax.Y - DMin.Y) / Pp.Cell) + 1, FMath::CeilToInt((DMax.Z - DMin.Z) / Pp.Cell) + 1);
 			FSandGpuMeshParams GP; GP.NeighborR = Pp.NeighborR; GP.Lambda = Pp.Lambda;

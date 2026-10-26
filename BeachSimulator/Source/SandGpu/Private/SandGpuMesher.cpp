@@ -84,6 +84,10 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandMeshParams, )
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BlockSlotRW)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BlockSlotRO)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BlockSlotStart)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, SlotBlockRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, SlotBlockRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, SlotArgsRW)
+	RDG_BUFFER_ACCESS(SlotArgs, ERHIAccess::IndirectArgs)
 	SHADER_PARAMETER(uint32, MaxSlots)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BandRW)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BandRO)
@@ -168,6 +172,7 @@ SAND_MESH_SHADER(FSandMeshFinalizeIsoCS,  "FinalizeIsoCS")
 SAND_MESH_SHADER(FSandMeshMarkBandCS,     "MarkBandCS")
 SAND_MESH_SHADER(FSandMeshMarkBlocksCS,   "MarkBlocksCS")
 SAND_MESH_SHADER(FSandMeshSlotAssignCS,   "SlotAssignCS")
+SAND_MESH_SHADER(FSandMeshSlotArgsCS,     "SlotArgsCS")
 SAND_MESH_SHADER(FSandMeshKCountCS,       "KCountCS")
 SAND_MESH_SHADER(FSandMeshKFillCS,        "KFillCS")
 SAND_MESH_SHADER(FSandMeshFieldCS,        "FieldCS")
@@ -201,6 +206,19 @@ namespace
 		*Params = Template;
 		TShaderMapRef<TShader> Shader(ShaderMap);
 		FComputeShaderUtils::AddPass(GraphBuilder, MoveTemp(Name), Shader, Params, Groups);
+	}
+
+	/** 활성 슬롯만 — 그룹 수 = SlotArgs (#32) */
+	template <typename TShader>
+	void AddMeshSlotPass(FRDGBuilder& GraphBuilder, FRDGEventName&& Name, const FGlobalShaderMap* ShaderMap, const FSandMeshParams& Template, FRDGBufferRef Args)
+	{
+		FSandMeshParams* Params = GraphBuilder.AllocParameters<FSandMeshParams>();
+		*Params = Template;
+		Params->SlotArgs = Args;
+		Params->SlotArgsRW = nullptr;
+		Params->SlotBlockRW = nullptr;
+		TShaderMapRef<TShader> Shader(ShaderMap);
+		FComputeShaderUtils::AddPass(GraphBuilder, MoveTemp(Name), Shader, Params, Args, 0);
 	}
 
 	template <typename TShader>
@@ -429,6 +447,11 @@ namespace
 			TB.BlockSlotRW = GraphBuilder.CreateUAV(BlockSlot);
 			TB.BlockSlotRO = GraphBuilder.CreateSRV(BlockSlot);
 			TB.BlockSlotStart = GraphBuilder.CreateSRV(BlockSlotSt);
+			FRDGBufferRef SlotBlock = MeshBuffer(GraphBuilder, TEXT("SandMesh.SlotBlock"), sizeof(uint32), MaxSlots);
+			FRDGBufferRef SlotArgs  = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateIndirectDesc(3), TEXT("SandMesh.SlotArgs"));
+			TB.SlotBlockRW = GraphBuilder.CreateUAV(SlotBlock);
+			TB.SlotBlockRO = GraphBuilder.CreateSRV(SlotBlock);
+			TB.SlotArgsRW = GraphBuilder.CreateUAV(SlotArgs, PF_R32_UINT);
 			FRDGBufferRef BandB      = MeshBuffer(GraphBuilder, TEXT("SandMesh.Band"), sizeof(uint32), SlotPts);
 			FRDGBufferRef BlockAct   = MeshBuffer(GraphBuilder, TEXT("SandMesh.BlockActive"), sizeof(uint32), NumBlocks);
 			FRDGBufferRef BlockKCnt  = MeshBuffer(GraphBuilder, TEXT("SandMesh.BlockKCount"), sizeof(uint32), NumBlocks);
@@ -456,11 +479,12 @@ namespace
 			AddMeshPass<FSandMeshMarkBlocksCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshMarkBlocks"), ShaderMap, TB, N, 64);
 			AddMeshScan(GraphBuilder, ShaderMap, TB, BlockAct, BlockSlotSt, NumBlocks);
 			AddMeshPass<FSandMeshSlotAssignCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshSlotAssign"), ShaderMap, TB, NumBlocks, 64);
+			AddMeshPass<FSandMeshSlotArgsCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshSlotArgs"), ShaderMap, TB, 1, 1);
 			AddMeshPass<FSandMeshMarkBandCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshMarkBand"), ShaderMap, TB, N, 64);
 			AddMeshPass<FSandMeshKCountCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshKCount"), ShaderMap, TB, N, 64);
 			AddMeshScan(GraphBuilder, ShaderMap, TB, BlockKCnt, BlockKSt, NumBlocks);
 			AddMeshPass<FSandMeshKFillCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshKFill"), ShaderMap, TB, N, 64);
-			AddMeshGroupPass<FSandMeshFieldCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshField"), ShaderMap, TB, BD);
+			AddMeshSlotPass<FSandMeshFieldCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshField"), ShaderMap, TB, SlotArgs);
 			Stamp(3);
 
 			// ── G1-4 Surface Nets ──
@@ -508,12 +532,15 @@ namespace
 			TB.VertPtRW = GraphBuilder.CreateUAV(VertPtB);
 			TB.VertPtRO = GraphBuilder.CreateSRV(VertPtB);
 			TB.DrawArgsRW = GraphBuilder.CreateUAV(DrawArgs, PF_R32_UINT);
-			AddMeshGroupPass<FSandMeshVertCountCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshVertCount"), ShaderMap, TB, BD);
+			// 슬롯 없는 영역은 돌지 않는다 — 개수 0 으로 먼저 (#32)
+			AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(BlockVCnt), 0u);
+			AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(BlockTCnt), 0u);
+			AddMeshSlotPass<FSandMeshVertCountCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshVertCount"), ShaderMap, TB, SlotArgs);
 			AddMeshScan(GraphBuilder, ShaderMap, TB, BlockVCnt, BlockVSt, NumBlocks);
-			AddMeshGroupPass<FSandMeshVertWriteCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshVertWrite"), ShaderMap, TB, BD);
-			AddMeshGroupPass<FSandMeshFaceCountCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshFaceCount"), ShaderMap, TB, BD);
+			AddMeshSlotPass<FSandMeshVertWriteCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshVertWrite"), ShaderMap, TB, SlotArgs);
+			AddMeshSlotPass<FSandMeshFaceCountCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshFaceCount"), ShaderMap, TB, SlotArgs);
 			AddMeshScan(GraphBuilder, ShaderMap, TB, BlockTCnt, BlockTSt, NumBlocks);
-			AddMeshGroupPass<FSandMeshFaceWriteCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshFaceWrite"), ShaderMap, TB, BD);
+			AddMeshSlotPass<FSandMeshFaceWriteCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshFaceWrite"), ShaderMap, TB, SlotArgs);
 			AddMeshPass<FSandMeshMeshArgsCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshArgs"), ShaderMap, TB, 1, 1);
 			if (RenderOut) { AddMeshPass<FSandMeshIndexTailCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshIndexTail"), ShaderMap, TB, MaxIndices, 64); }
 

@@ -501,6 +501,10 @@ RWStructuredBuffer<uint>   BlockSlotRW;      // 영역별 슬롯 (없으면 INVA
 StructuredBuffer<uint>     BlockSlotRO;
 StructuredBuffer<uint>     BlockSlotStart;   // BlockActive 접두합
 uint  MaxSlots;
+// 활성 슬롯만 디스패치 (#32) — 그룹 = 슬롯. 슬롯은 영역 번호 순서로 매겨져(BlockActive 접두합) 정점 · 면 번호가 영역 전체 디스패치와 같다
+RWStructuredBuffer<uint>   SlotBlockRW;      // 슬롯 → 영역
+StructuredBuffer<uint>     SlotBlockRO;
+RWBuffer<uint>             SlotArgsRW;       // 간접 디스패치 {슬롯 수, 1, 1}
 RWStructuredBuffer<uint>   BandRW;           // 슬롯 점별 0/1
 StructuredBuffer<uint>     BandRO;
 RWStructuredBuffer<uint>   BlockActiveRW;    // 영역별 0/1
@@ -616,10 +620,26 @@ void SlotAssignCS(uint3 Tid : SV_DispatchThreadID)
 	uint Sl = INVALID_V;
 	if (BlockActiveRO[b])
 	{
-		if (BlockSlotStart[b] < MaxSlots) { Sl = BlockSlotStart[b]; }
+		if (BlockSlotStart[b] < MaxSlots) { Sl = BlockSlotStart[b]; SlotBlockRW[Sl] = b; }
 		else { InterlockedAdd(CountersRW[5], 1u); }
 	}
 	BlockSlotRW[b] = Sl;
+}
+
+[numthreads(1, 1, 1)]
+void SlotArgsCS()
+{
+	const uint NumBlocks = BD.x * BD.y * BD.z;
+	SlotArgsRW[0] = min(BlockSlotStart[NumBlocks], MaxSlots);
+	SlotArgsRW[1] = 1u;
+	SlotArgsRW[2] = 1u;
+}
+
+// 슬롯 그룹 → 영역 좌표
+uint3 SlotGid(uint Slot)
+{
+	const uint b = SlotBlockRO[Slot];
+	return uint3(b % BD.x, (b / BD.x) % BD.y, b / (BD.x * BD.y));
 }
 
 // 커널 지지 AABB 의 점 범위 (CPU PtRange 와 같다)
@@ -671,8 +691,9 @@ groupshared uint KList[KLIST_MAX];
 
 // 영역 하나 = 그룹 하나 (8³ 스레드, 점 하나씩). 영역 커널 목록을 공유 메모리에 올려 입자 번호 순으로 정렬(결정성) 후 점마다 모은다
 [numthreads(MB, MB, MB)]
-void FieldCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex)
+void FieldCS(uint3 SGid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex)
 {
+	const uint3 Gid = SlotGid(SGid.x);
 	const uint b = BlockIndex(Gid);
 	if (!BlockActiveRO[b]) { return; }
 	const uint S0 = BlockKStart[b];
@@ -787,8 +808,9 @@ uint GroupPrefix(uint GI, inout uint V)
 
 // 영역 안 점 순서 = 스레드 순서(GI) → 정점 · 면 번호가 실행마다 같다
 [numthreads(MB, MB, MB)]
-void VertCountCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex)
+void VertCountCS(uint3 SGid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex)
 {
+	const uint3 Gid = SlotGid(SGid.x);
 	const uint b = BlockIndex(Gid);
 	if (!BlockActiveRO[b]) { if (GI == 0) { BlockVCountRW[b] = 0u; } return; }
 	const uint3 P = Gid * MB + GTid;
@@ -799,8 +821,9 @@ void VertCountCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI 
 }
 
 [numthreads(MB, MB, MB)]
-void VertWriteCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex)
+void VertWriteCS(uint3 SGid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex)
 {
+	const uint3 Gid = SlotGid(SGid.x);
 	const uint b = BlockIndex(Gid);
 	if (!BlockActiveRO[b]) { return; }
 	const uint3 P = Gid * MB + GTid;
@@ -879,8 +902,9 @@ uint FaceQuads(uint3 P, bool bWrite, uint Base)
 }
 
 [numthreads(MB, MB, MB)]
-void FaceCountCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex)
+void FaceCountCS(uint3 SGid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex)
 {
+	const uint3 Gid = SlotGid(SGid.x);
 	const uint b = BlockIndex(Gid);
 	if (!BlockActiveRO[b]) { if (GI == 0) { BlockTCountRW[b] = 0u; } return; }
 	const uint3 P = Gid * MB + GTid;
@@ -890,8 +914,9 @@ void FaceCountCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI 
 }
 
 [numthreads(MB, MB, MB)]
-void FaceWriteCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex)
+void FaceWriteCS(uint3 SGid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex)
 {
+	const uint3 Gid = SlotGid(SGid.x);
 	const uint b = BlockIndex(Gid);
 	if (!BlockActiveRO[b]) { return; }
 	const uint3 P = Gid * MB + GTid;
