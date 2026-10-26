@@ -178,7 +178,7 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 	const float Support = (P.Field == ESandSurfaceField::ZhuBridson) ? P.ZbR : (P.Field == ESandSurfaceField::Isotropic ? 2.f * P.H : 2.f * P.H * P.MaxStretch);
 	const float Pad = Support + P.Cell;
 	FPointGrid NGrid;
-	NGrid.Build(Pos, Min - FVector3f(Pad), Max + FVector3f(Pad), FMath::Max(P.NeighborR, Support));
+	NGrid.Build(Pos, Min - FVector3f(Pad), Max + FVector3f(Pad), P.NeighborR);   // 이웃 반경 = 셀 (20cm 셀은 셀당 입자가 8 배 — #3)
 
 	TArray<int32> NCount; NCount.SetNumZeroed(N);
 	TArray<FVector3f> Smoothed = Pos;          // x̄_i
@@ -302,7 +302,7 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 	TArray<uint8> Band; Band.SetNumZeroed(NumPts);
 	{
 		// 표면 입자(또는 전부) 주변 Support 안의 격자점
-		const float Reach = Support;
+		const float Reach = P.BandR > 0.f ? P.BandR : Support;
 		const int32 RC = FMath::CeilToInt(Reach / P.Cell);
 		ParallelFor(N, [&](int32 i)
 		{
@@ -389,8 +389,25 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 	{
 		// 선형 합 → 입자마다 자기 지지 AABB 안의 띠 점에 뿌린다 (모으기보다 이웃 검사가 훨씬 적다)
 		TArray<float> Phi; Phi.SetNumZeroed(NumPts);
+		// 뿌릴 입자 = 띠 점에 닿을 수 있는 것만 — 표면 입자에서 (띠 반경 + 자기 지지) 안 (splashsurf 의 "표면 입자 + 두 고리" 와 같은 생각, 여기선 기하로 판정)
+		TArray<uint8> Contributes; Contributes.SetNumZeroed(N);
+		{
+			TArray<FVector3f> SurfPos;
+			for (int32 i = 0; i < N; ++i) { if (!P.bBandOnly || NCount[i] < P.BandNEps) { SurfPos.Add(Pos[i]); } }
+			const float BandReach = P.BandR > 0.f ? P.BandR : Support;
+			FPointGrid SGrid;
+			SGrid.Build(SurfPos, GOrigin, GOrigin + GExt, BandReach + Support);
+			ParallelFor(N, [&](int32 j)
+			{
+				const float Lim = BandReach + K[j].Ext.GetMax() + P.Cell;
+				bool bHit = false;
+				SGrid.ForNeighbors(K[j].C, Lim, [&](int32 s) { bHit = bHit || (SurfPos[s] - K[j].C).SizeSquared() <= Lim * Lim; });
+				Contributes[j] = bHit ? 1 : 0;
+			});
+		}
 		ParallelFor(N, [&](int32 j)
 		{
+			if (!Contributes[j]) { return; }
 			const FKernel& Kj = K[j];
 			const FVector3f Lo = (Kj.C - Kj.Ext - GOrigin) / P.Cell, Hi = (Kj.C + Kj.Ext - GOrigin) / P.Cell;
 			const int32 x0 = FMath::Max(0, FMath::CeilToInt(Lo.X)), x1 = FMath::Min(GD.X - 1, FMath::FloorToInt(Hi.X));

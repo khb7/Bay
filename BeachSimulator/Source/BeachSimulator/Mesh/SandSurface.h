@@ -33,6 +33,7 @@ struct FSandSurfaceParams
 	float IsoFrac   = 0.5f;    // 등위값 = 내부 φ 평균 × 이 비율 (등방 · 이방성). Zhu & Bridson 은 0
 	float ZbR       = 10.f;    // Zhu & Bridson 이웃 반경 R (간격의 2 배)
 	int32 BandNEps  = 25;      // 띠를 정하는 표면 입자 기준 (Akinci 2012). 커널의 N_ε 와 따로 — N_ε 를 낮추면 띠가 사라진다
+	float BandR     = 0.f;     // 띠 반경 (표면 입자에서). 0 이면 장 지지 반경 전체. 등위면은 표면 입자 근처라 좁혀도 된다 (#3)
 	bool  bBandOnly = true;    // 표면 입자 주변 격자점만 (Akinci). false 면 입자 영향권 전부
 };
 

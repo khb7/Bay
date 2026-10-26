@@ -757,6 +757,7 @@ namespace
 		FParse::Value(*Params, TEXT("neps="), Base.NEps);
 		FParse::Value(*Params, TEXT("minsigma="), Base.MinSigma);
 		FParse::Value(*Params, TEXT("knramp="), Base.KnRamp);
+		FParse::Value(*Params, TEXT("bandr="), Base.BandR);
 		Base.bBandOnly = !FParse::Param(*Params, TEXT("fullband"));
 		const FString Dir = FPaths::ProjectSavedDir() / TEXT("MeshRuns");
 
