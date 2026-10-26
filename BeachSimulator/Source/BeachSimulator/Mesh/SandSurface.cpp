@@ -423,6 +423,7 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 	const int32 NumBand = BandList.Num();
 	Out.NumBandPoints = NumBand;
 	Out.NumGridPoints = NumPts;
+	Out.GridOrigin = GOrigin; Out.GridDims = GD;
 
 	// 커널 중심으로 격자 (장 모으기용)
 	TArray<FVector3f> Centers; Centers.SetNumUninitialized(N);
@@ -686,6 +687,7 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 	Out.MsFieldBand = (Tf0 - T2) * 1000.0;
 	Out.MsFieldIso = (Tf1 - Tf0) * 1000.0;
 
+	for (int32 s = 0; s < NumBand; ++s) { const float V = F[BandList[s]]; Out.FieldSum += V; Out.FieldPositive += V > 0.f ? 1 : 0; }
 	// ── ⑥ Surface Nets ── 띠 점 목록만 돈다. 셀 = 꼭짓점 0 이 띠 점인 격자 셀, 셀 정점은 그 점 색인으로 찾는다
 	static const int32 Corner[8][3] = { {0,0,0},{1,0,0},{0,1,0},{1,1,0},{0,0,1},{1,0,1},{0,1,1},{1,1,1} };
 	static const int32 Edge[12][2] = { {0,1},{2,3},{4,5},{6,7},{0,2},{1,3},{4,6},{5,7},{0,4},{1,5},{2,6},{3,7} };

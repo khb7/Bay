@@ -819,15 +819,17 @@ namespace
 				FSandSurfaceMesh M;
 				FSandSurfaceBuilder::Build(Pos, Pp, M);
 
-				// 지표
+				// 지표 — CPU 메시와 GPU 메시에 같은 식
+				auto MetricOf = [&](const FSandSurfaceMesh& Mx) -> FString
+				{
 				FString Metric;
 				if (Scene == TEXT("slab"))
 				{
 					double S = 0, S2 = 0; int32 C = 0;
-					for (int32 v = 0; v < M.Vertices.Num(); ++v)
+					for (int32 v = 0; v < Mx.Vertices.Num(); ++v)
 					{
-						const FVector3f& X = M.Vertices[v];
-						if (M.Normals[v].Z > 0.9f && X.Z > 3.f * D && X.X > 4 * D && X.X < 35 * D && X.Y > 4 * D && X.Y < 35 * D) { S += X.Z; S2 += X.Z * X.Z; ++C; }
+						const FVector3f& X = Mx.Vertices[v];
+						if (Mx.Normals[v].Z > 0.9f && X.Z > 3.f * D && X.X > 4 * D && X.X < 35 * D && X.Y > 4 * D && X.Y < 35 * D) { S += X.Z; S2 += X.Z * X.Z; ++C; }
 					}
 					const double Mean = C ? S / C : 0, Rms = C ? FMath::Sqrt(FMath::Max(0.0, S2 / C - Mean * Mean)) : 0;
 					// 입력 기준: 맨 위층 입자 높이의 흔들림 (같은 영역)
@@ -839,11 +841,11 @@ namespace
 				else if (Scene == TEXT("wall"))
 				{
 					double Xp = 0, Xm = 0; int32 Cp = 0, Cm = 0;
-					for (int32 v = 0; v < M.Vertices.Num(); ++v)
+					for (int32 v = 0; v < Mx.Vertices.Num(); ++v)
 					{
-						const FVector3f& X = M.Vertices[v];
+						const FVector3f& X = Mx.Vertices[v];
 						if (X.Z < 2.5f * D || X.Z > 5.5f * D || X.Y < 4 * D || X.Y > 15 * D) { continue; }
-						if (M.Normals[v].X > 0.8f) { Xp += X.X; ++Cp; } else if (M.Normals[v].X < -0.8f) { Xm += X.X; ++Cm; }
+						if (Mx.Normals[v].X > 0.8f) { Xp += X.X; ++Cp; } else if (Mx.Normals[v].X < -0.8f) { Xm += X.X; ++Cm; }
 					}
 					float PMin = FLT_MAX, PMax = -FLT_MAX; for (const FVector3f& X : Pos) { PMin = FMath::Min(PMin, X.X); PMax = FMath::Max(PMax, X.X); }
 					const double Th = (Cp && Cm) ? Xp / Cp - Xm / Cm : 0, PTh = (PMax + R) - (PMin - R);
@@ -851,11 +853,14 @@ namespace
 				}
 				else if (Scene.StartsWith(TEXT("debris")))
 				{
-					const double V = M.Volume(), A = M.Area();
+					const double V = Mx.Volume(), A = Mx.Area();
 					const double Psi = A > 0 ? FMath::Pow(PI, 1.0 / 3.0) * FMath::Pow(6.0 * V, 2.0 / 3.0) / A : 0;
 					Metric = FString::Printf(TEXT("구형도 %.3f (V %.1f A %.1f)"), Psi, V, A);
 				}
 				else { Metric = TEXT("-"); }
+				return Metric;
+				};
+				const FString Metric = MetricOf(M);
 				const double PV = Pos.Num() * (4.0 / 3.0) * PI * R * R * R / 0.6;
 				UE_LOG(LogSpikeSweep, Display, TEXT("%8s | %5s | %6d %6d | %7d %7d %7d | %s | %.2f | %.1f %.1f %.1f %.1f = %.1f | %.4f %.3f"),
 					*Scene, *Fl, M.NumParticles, M.NumSurfaceParticles, M.NumBandPoints, M.Vertices.Num(), M.Triangles.Num() / 3, *Metric, M.Volume() / PV,
@@ -865,6 +870,8 @@ namespace
 				{
 					// G1 대조 (m1-plan-gpu.md §1-5): 기본은 핵심값, -meshdiff 면 입자별 최대 오차
 					FSandGpuMeshParams GP; GP.NeighborR = Pp.NeighborR; GP.Lambda = Pp.Lambda;
+					GP.BandNEps = Pp.BandNEps; GP.SurfDev = Pp.SurfDev; GP.BandR = Pp.BandR; GP.Cell = Pp.Cell;
+					GP.GridOrigin = M.GridOrigin; GP.GridDims = M.GridDims;
 					GP.Radius = Pp.Radius; GP.H = Pp.H; GP.Kr = Pp.Kr; GP.Kn = Pp.Kn; GP.Ks = Pp.Ks; GP.MinSigma = Pp.MinSigma;
 					GP.MaxStretch = Pp.MaxStretch; GP.IsoFrac = Pp.IsoFrac; GP.NEps = Pp.NEps; GP.KnRamp = Pp.KnRamp;
 					FSandGpuMeshResult G;
@@ -887,6 +894,26 @@ namespace
 						*Scene, CSum, GSum, CSurf, GSurf, CDev, GDev, CDiag, GDiag, G.WallMs);
 					UE_LOG(LogSpikeSweep, Display, TEXT("   GPU G1-2 %s: k_s CPU %.6f / GPU %.6f · 내부 φ %.5f / %.5f · Iso %.5f / %.5f · (GPU 내부 %d · 표본 %d · 최대 이웃 %d)"),
 						*Scene, M.Ks, G.Ks, M.InteriorPhi, G.InteriorPhi, M.Iso, G.Iso, G.NumInteriorKs, G.NumIsoSamples, G.MaxNeighborCount);
+					UE_LOG(LogSpikeSweep, Display, TEXT("   GPU G1-3 %s: 띠 점 CPU %d / GPU %d · φ 합 %.2f / %.2f · 양수 점 %d / %d · (영역 %d 중 활성 %d · 영역·커널 쌍 %d · 목록 넘침 영역 %d · 쌍 넘침 %d)"),
+						*Scene, M.NumBandPoints, G.NumBandPoints, M.FieldSum, G.FieldSum, M.FieldPositive, G.FieldPositive, G.NumBlocks, G.NumActiveBlocks, G.NumKPairs, G.KListOverflowBlocks, G.KPairOverflow);
+					{
+						FSandSurfaceMesh GM;
+						GM.Vertices = G.Vertices; GM.Normals = G.Normals; GM.Triangles = G.Indices;
+						const double PVg = Pos.Num() * (4.0 / 3.0) * PI * R * R * R / 0.6;
+						UE_LOG(LogSpikeSweep, Display, TEXT("   GPU G1-4 %s: 정점 CPU %d / GPU %d · 삼각형 %d / %d · 부피비 %.3f / %.3f · 지표 CPU [%s] / GPU [%s]"),
+							*Scene, M.Vertices.Num(), G.NumVertsTotal, M.Triangles.Num() / 3, G.NumIndicesTotal / 3, M.Volume() / PVg, GM.Volume() / PVg, *Metric, *MetricOf(GM));
+						UE_LOG(LogSpikeSweep, Display, TEXT("   GPU G1-5 %s: GPU ms 이웃 %.3f · 커널 %.3f · 띠·장 %.3f · 메시 %.3f = %.3f (벽시계 %.1f) · CPU %.1f ms"),
+							*Scene, G.StageMs[0], G.StageMs[1], G.StageMs[2], G.StageMs[3], G.StageMs[0] + G.StageMs[1] + G.StageMs[2] + G.StageMs[3], G.WallMs, M.MsTotal);
+						if (bMeshDiff) { GM.SaveObj(Dir / FString::Printf(TEXT("%s_%s_gpu.obj"), *Scene, *Fl)); }
+						// 결정성 · 예열된 시간: 같은 입력으로 한 번 더
+						FSandGpuMeshResult G2;
+						SandGpuMesh::Build(Pos, GP, G2);
+						const bool bSame = G2.Vertices.Num() == G.Vertices.Num() && G2.Indices == G.Indices
+							&& FMemory::Memcmp(G2.Vertices.GetData(), G.Vertices.GetData(), G.Vertices.Num() * sizeof(FVector3f)) == 0
+							&& FMemory::Memcmp(G2.Normals.GetData(), G.Normals.GetData(), G.Normals.Num() * sizeof(FVector3f)) == 0;
+						UE_LOG(LogSpikeSweep, Display, TEXT("   GPU G1-5 %s 2회째: %s · GPU ms 이웃 %.3f · 커널 %.3f · 띠·장 %.3f · 메시 %.3f = %.3f"),
+							*Scene, bSame ? TEXT("비트 단위 같음") : TEXT("⚠ 다름"), G2.StageMs[0], G2.StageMs[1], G2.StageMs[2], G2.StageMs[3], G2.StageMs[0] + G2.StageMs[1] + G2.StageMs[2] + G2.StageMs[3]);
+					}
 					if (bMeshDiff)
 					{
 						float MaxG = 0.f, MaxDetRel = 0.f, MaxExt = 0.f; int32 WorstG = -1;

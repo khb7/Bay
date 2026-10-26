@@ -54,6 +54,9 @@ struct FSandSurfaceMesh
 	TArray<float> KernelG;       // 입자당 9 (행 우선) (GPU 대조용)
 	TArray<float> KernelDet;
 	TArray<FVector3f> KernelExt;
+	FVector3f GridOrigin = FVector3f::ZeroVector;   // 장 격자 (GPU 가 같은 격자를 쓰게)
+	FIntVector GridDims = FIntVector(0);
+	double FieldSum = 0.0; int32 FieldPositive = 0;  // 띠 점 φ − Iso 합 · 양수 점 수 (GPU 대조용)
 
 	// 부분 영역 뿌리기 원인 측정 (m1-log #8)
 	struct FSplatProfile

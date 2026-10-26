@@ -1,5 +1,8 @@
 // M1 GPU 메시화 (m1-plan-gpu.md) — 입자 → 메시를 컴퓨트로. CPU 판(FSandSurfaceBuilder, SandSurface.cpp)과 단계마다 1:1.
 //
+// G1-3 띠 · 장: MarkBandCS → Scan(영역 커널 수) ← KCountCS → KFillCS → FieldCS (영역 = 그룹, 목록 정렬 후 모으기)
+// G1-4 Surface Nets: VertCountCS → Scan → VertWriteCS → FaceCountCS → Scan → FaceWriteCS → MeshArgsCS
+//
 // G1-2 커널 · k_s · 등위값: MaxCountCS → EigenCS(+ 내부 σ1 부분합) → FinalizeKsCS → KernelCS → 커널 격자(x̄, 셀 = 지지) → IsoSampleCS → FinalizeIsoCS
 //
 // G1-1 이웃:
@@ -173,6 +176,23 @@ void ScatterCS(uint3 Tid : SV_DispatchThreadID)
 	const uint i = Tid.x;
 	if (i >= NumParticles) { return; }
 	SortedIdxRW[CellStart[CellKeyRO[i]] + CellSlotRO[i]] = i;
+}
+
+// 셀 안 순서를 입자 번호 순으로 — 순번이 원자 연산 순서라 실행마다 바뀌고, 그러면 이웃 합 순서가 바뀌어 비트가 달라진다 (G1-5 결정성).
+// 셀당 입자가 적어(10cm 셀 ~8, 20cm 셀 ~60) 삽입 정렬로 충분
+[numthreads(64, 1, 1)]
+void SortCellsCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint k = Tid.x;
+	if (k >= TableSize) { return; }
+	const uint S0 = CellStart[k], S1 = CellStart[k + 1];
+	for (uint a = S0 + 1; a < S1; ++a)
+	{
+		const uint V = SortedIdxRW[a];
+		uint b = a;
+		while (b > S0 && SortedIdxRW[b - 1] > V) { SortedIdxRW[b] = SortedIdxRW[b - 1]; --b; }
+		SortedIdxRW[b] = V;
+	}
 }
 
 // 27 칸 순회 (자기 포함). 지금 묶인 격자(GridCell · TableSize · CellStart · SortedIdxRO)를 돈다 — 해시 충돌로 같은 버킷을 두 번 도는 것만 막는다
@@ -430,4 +450,365 @@ void FinalizeIsoCS()
 	ScalarsRW[1] = InteriorPhi;
 	ScalarsRW[2] = InteriorPhi * IsoFrac;
 	ScalarsRW[4] = (float)Cnt;
+}
+
+// ------------------------------------------------------------------------------------------------
+// G1-3 띠 · 활성 영역 · 장 φ   /   G1-4 Surface Nets
+//
+// 격자 = CPU 와 같은 원점 GOrigin · 크기 GD (점). 영역 = 8³ 점 (스레드 그룹 하나). 영역은 조밀 배열로 다 띄우고
+// 띠 없는 영역은 그룹이 바로 끝난다 (영역 수가 수천이라 간접 디스패치 없이도 싸다).
+// Band · F · CellVert 는 격자 전체 조밀 배열 — 시험 장면 크기에선 충분하다 (G3 에서 타일 단위로 줄인다).
+
+#define MB 8                     // 영역 한 변 (점)
+#define MB3 (MB * MB * MB)
+#define KLIST_MAX 2048           // 영역당 커널 목록 — 넘치면 정렬 없이 순서대로 (결정성만 잃는다, 계수 기록)
+#define INVALID_V 0xFFFFFFFFu
+
+float3 GOrigin;
+uint3  GD;                       // 격자 점 수
+uint3  BD;                       // 영역 수
+float  Cell;
+float  BandReach;                // 띠 반경 (표면 입자에서)
+uint   BandNEps;
+float  SurfDev;
+uint   MaxPairsK;                // 영역·커널 쌍 용량
+uint   MaxVerts;
+uint   MaxIndices;
+
+StructuredBuffer<float>    DevRO;
+RWStructuredBuffer<uint>   BandRW;           // 점별 0/1
+StructuredBuffer<uint>     BandRO;
+RWStructuredBuffer<uint>   BlockActiveRW;    // 영역별 0/1
+StructuredBuffer<uint>     BlockActiveRO;
+RWStructuredBuffer<uint>   BlockKCountRW;    // 영역별 커널 수
+StructuredBuffer<uint>     BlockKStart;      // + 1
+RWStructuredBuffer<uint>   BlockKCursorRW;
+RWStructuredBuffer<uint>   BlockKItemsRW;
+StructuredBuffer<uint>     BlockKItemsRO;
+RWStructuredBuffer<float>  FieldRW;          // φ − Iso, 띠 밖 −1
+StructuredBuffer<float>    FieldRO;
+RWStructuredBuffer<uint>   BlockVCountRW;    // 영역별 정점 수
+StructuredBuffer<uint>     BlockVStart;
+RWStructuredBuffer<uint>   BlockTCountRW;    // 영역별 색인 수
+StructuredBuffer<uint>     BlockTStart;
+RWStructuredBuffer<uint>   CellVertRW;       // 띠 점 = 그 점을 꼭짓점 0 으로 하는 셀의 정점 번호 (없으면 INVALID_V)
+StructuredBuffer<uint>     CellVertRO;
+RWStructuredBuffer<float4> VertexRW;         // xyz 위치
+RWStructuredBuffer<float4> NormalRW;
+RWStructuredBuffer<uint>   IndexRW;
+RWBuffer<uint>             DrawArgsRW;       // {색인 수, 1, 0, 0, 0} — G2 간접 그리기
+// CountersRW: [0] 최대 이웃 수 [1] 커널 목록 넘침 영역 [2] 쌍 용량 넘침 [3] 정점 총수 [4] 색인 총수
+
+uint PtIndex(uint3 P) { return (P.z * GD.y + P.y) * GD.x + P.x; }
+uint BlockIndex(uint3 B) { return (B.z * BD.y + B.y) * BD.x + B.x; }
+float3 PtPos(uint3 P) { return GOrigin + float3(P) * Cell; }
+
+bool IsSurfP(uint i) { return NCountRO[i] < BandNEps || (SurfDev > 0.f && DevRO[i] > SurfDev); }
+
+// 표면 입자 → 띠 점 (CPU ④ 와 같은 줄 구간 식) · 영역 활성
+[numthreads(64, 1, 1)]
+void MarkBandCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x;
+	if (i >= NumParticles || !IsSurfP(i)) { return; }
+	const float3 X = PosRO[i].xyz;
+	const float3 L = (X - GOrigin) / Cell;
+	const int3 Cc = int3(floor(L + 0.5f));   // CPU RoundToInt 과 같다
+	const int RC = (int)ceil(BandReach / Cell);
+	for (int z = max(0, Cc.z - RC); z <= min((int)GD.z - 1, Cc.z + RC); ++z)
+	for (int y = max(0, Cc.y - RC); y <= min((int)GD.y - 1, Cc.y + RC); ++y)
+	{
+		const float Dy = GOrigin.y + y * Cell - X.y, Dz = GOrigin.z + z * Cell - X.z;
+		const float R2 = BandReach * BandReach - Dy * Dy - Dz * Dz;
+		if (R2 < 0.f) { continue; }
+		const float Hx = sqrt(R2) / Cell;
+		const int x0 = max(0, (int)ceil(L.x - Hx)), x1 = min((int)GD.x - 1, (int)floor(L.x + Hx));
+		for (int x = x0; x <= x1; ++x)
+		{
+			const uint3 P = uint3(x, y, z);
+			BandRW[PtIndex(P)] = 1u;                   // 같은 값 쓰기라 경쟁 무해
+			BlockActiveRW[BlockIndex(P / MB)] = 1u;
+		}
+	}
+}
+
+// 커널 지지 AABB 의 점 범위 (CPU PtRange 와 같다)
+bool KernelPtRange(uint j, out int3 Lo, out int3 Hi)
+{
+	const float3 C = SmoothedRO[j].xyz;
+	const float3 Ext = KernelRO[j * 4 + 3].xyz;
+	const float3 A = (C - Ext - GOrigin) / Cell, B = (C + Ext - GOrigin) / Cell;
+	Lo = max(int3(0, 0, 0), int3(ceil(A)));
+	Hi = min(int3(GD) - 1, int3(floor(B)));
+	return all(Lo <= Hi);
+}
+
+[numthreads(64, 1, 1)]
+void KCountCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint j = Tid.x;
+	if (j >= NumParticles) { return; }
+	int3 Lo, Hi;
+	if (!KernelPtRange(j, Lo, Hi)) { return; }
+	const int3 B0 = Lo / MB, B1 = Hi / MB;
+	for (int bz = B0.z; bz <= B1.z; ++bz) for (int by = B0.y; by <= B1.y; ++by) for (int bx = B0.x; bx <= B1.x; ++bx)
+	{
+		const uint b = BlockIndex(uint3(bx, by, bz));
+		if (BlockActiveRO[b]) { InterlockedAdd(BlockKCountRW[b], 1u); }
+	}
+}
+
+[numthreads(64, 1, 1)]
+void KFillCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint j = Tid.x;
+	if (j >= NumParticles) { return; }
+	int3 Lo, Hi;
+	if (!KernelPtRange(j, Lo, Hi)) { return; }
+	const int3 B0 = Lo / MB, B1 = Hi / MB;
+	for (int bz = B0.z; bz <= B1.z; ++bz) for (int by = B0.y; by <= B1.y; ++by) for (int bx = B0.x; bx <= B1.x; ++bx)
+	{
+		const uint b = BlockIndex(uint3(bx, by, bz));
+		if (!BlockActiveRO[b]) { continue; }
+		uint Slot;
+		InterlockedAdd(BlockKCursorRW[b], 1u, Slot);
+		const uint At = BlockKStart[b] + Slot;
+		if (At < MaxPairsK) { BlockKItemsRW[At] = j; } else { InterlockedAdd(CountersRW[2], 1u); }
+	}
+}
+
+groupshared uint KList[KLIST_MAX];
+
+// 영역 하나 = 그룹 하나 (8³ 스레드, 점 하나씩). 영역 커널 목록을 공유 메모리에 올려 입자 번호 순으로 정렬(결정성) 후 점마다 모은다
+[numthreads(MB, MB, MB)]
+void FieldCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex)
+{
+	const uint b = BlockIndex(Gid);
+	if (!BlockActiveRO[b]) { return; }
+	const uint S0 = BlockKStart[b];
+	const uint Cnt = min(BlockKStart[b + 1] - S0, MaxPairsK > S0 ? MaxPairsK - S0 : 0u);
+	const bool bSorted = Cnt <= KLIST_MAX;
+	if (bSorted)
+	{
+		// 2 의 거듭제곱으로 채워 바이토닉 정렬
+		uint Pow2 = 1; while (Pow2 < Cnt) { Pow2 <<= 1; }
+		for (uint k = GI; k < Pow2; k += MB3) { KList[k] = k < Cnt ? BlockKItemsRO[S0 + k] : 0xFFFFFFFFu; }
+		GroupMemoryBarrierWithGroupSync();
+		for (uint Size = 2; Size <= Pow2; Size <<= 1)
+		for (uint Stride = Size >> 1; Stride > 0; Stride >>= 1)
+		{
+			for (uint t = GI; t < Pow2; t += MB3)
+			{
+				const uint Partner = t ^ Stride;
+				if (Partner > t)
+				{
+					const bool bAsc = (t & Size) == 0;
+					const uint A = KList[t], Bv = KList[Partner];
+					if ((A > Bv) == bAsc) { KList[t] = Bv; KList[Partner] = A; }
+				}
+			}
+			GroupMemoryBarrierWithGroupSync();
+		}
+	}
+	else if (GI == 0) { InterlockedAdd(CountersRW[1], 1u); }
+
+	const uint3 P = Gid * MB + GTid;
+	if (any(P >= GD)) { return; }
+	const uint I = PtIndex(P);
+	if (!BandRO[I]) { return; }
+	const float3 X = PtPos(P);
+	float Phi = 0.f;
+	for (uint k = 0; k < Cnt; ++k)
+	{
+		const uint j = bSorted ? KList[k] : BlockKItemsRO[S0 + k];
+		const float4 K0 = KernelRO[j * 4 + 0];
+		const float4 K1 = KernelRO[j * 4 + 1];
+		const float4 K2 = KernelRO[j * 4 + 2];
+		const float3 R = X - SmoothedRO[j].xyz;
+		const float3 GR = float3(dot(K0.xyz, R), dot(K1.xyz, R), dot(K2.xyz, R));
+		const float Q2 = dot(GR, GR);
+		if (Q2 < 4.f) { Phi += PVol * K0.w * BCubic(sqrt(Q2)); }
+	}
+	FieldRW[I] = Phi - ScalarsRO[2];
+}
+
+// ---- G1-4 Surface Nets (CPU ⑥ 과 같은 셀 · 정점 · 법선 · 면 규칙) ----
+
+static const uint3 CornerOf[8] = { uint3(0,0,0), uint3(1,0,0), uint3(0,1,0), uint3(1,1,0), uint3(0,0,1), uint3(1,0,1), uint3(0,1,1), uint3(1,1,1) };
+static const uint2 EdgeOf[12] = { uint2(0,1), uint2(2,3), uint2(4,5), uint2(6,7), uint2(0,2), uint2(1,3), uint2(4,6), uint2(5,7), uint2(0,4), uint2(1,5), uint2(2,6), uint2(3,7) };
+
+// 점 P 를 꼭짓점 0 으로 하는 셀에 정점이 있나 (8 꼭짓점 모두 띠 · 부호가 섞임). 있으면 위치
+bool CellVertex(uint3 P, out float3 OutPos)
+{
+	OutPos = 0.f;
+	if (any(P + 1 >= GD)) { return false; }
+	float V[8]; uint Mask = 0;
+	for (uint c = 0; c < 8; ++c)
+	{
+		const uint I = PtIndex(P + CornerOf[c]);
+		if (!BandRO[I]) { return false; }
+		V[c] = FieldRO[I];
+		Mask |= (V[c] > 0.f) ? (1u << c) : 0u;
+	}
+	if (Mask == 0u || Mask == 0xFFu) { return false; }
+	float3 Acc = 0.f; float N = 0.f;
+	for (uint e = 0; e < 12; ++e)
+	{
+		const uint A = EdgeOf[e].x, B = EdgeOf[e].y;
+		if ((V[A] > 0.f) == (V[B] > 0.f)) { continue; }
+		const float T = V[A] / (V[A] - V[B]);
+		Acc += float3(CornerOf[A]) + (float3(CornerOf[B]) - float3(CornerOf[A])) * T; N += 1.f;
+	}
+	OutPos = GOrigin + (float3(P) + Acc / N) * Cell;
+	return true;
+}
+
+float Fat(int3 P)
+{
+	P = clamp(P, int3(0, 0, 0), int3(GD) - 1);
+	return FieldRO[PtIndex(uint3(P))];
+}
+
+groupshared uint GsScan[MB3];
+
+// 그룹 안 배타 접두합 (512) — 돌려주는 값은 그룹 총합
+uint GroupPrefix(uint GI, inout uint V)
+{
+	GsScan[GI] = V;
+	GroupMemoryBarrierWithGroupSync();
+	for (uint Off = 1; Off < MB3; Off <<= 1)
+	{
+		const uint Add = GI >= Off ? GsScan[GI - Off] : 0u;
+		GroupMemoryBarrierWithGroupSync();
+		GsScan[GI] += Add;
+		GroupMemoryBarrierWithGroupSync();
+	}
+	const uint Total = GsScan[MB3 - 1];
+	V = GsScan[GI] - V;
+	return Total;
+}
+
+// 영역 안 점 순서 = 스레드 순서(GI) → 정점 · 면 번호가 실행마다 같다
+[numthreads(MB, MB, MB)]
+void VertCountCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex)
+{
+	const uint b = BlockIndex(Gid);
+	if (!BlockActiveRO[b]) { if (GI == 0) { BlockVCountRW[b] = 0u; } return; }
+	const uint3 P = Gid * MB + GTid;
+	float3 Vp;
+	uint Has = (all(P < GD) && BandRO[PtIndex(P)] && CellVertex(P, Vp)) ? 1u : 0u;
+	const uint Total = GroupPrefix(GI, Has);
+	if (GI == 0) { BlockVCountRW[b] = Total; }
+}
+
+[numthreads(MB, MB, MB)]
+void VertWriteCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex)
+{
+	const uint b = BlockIndex(Gid);
+	if (!BlockActiveRO[b]) { return; }
+	const uint3 P = Gid * MB + GTid;
+	const bool bIn = all(P < GD) && BandRO[PtIndex(P)];
+	float3 Vp;
+	const bool bHas = bIn && CellVertex(P, Vp);
+	uint Local = bHas ? 1u : 0u;
+	GroupPrefix(GI, Local);
+	if (!bIn) { return; }
+	const uint I = PtIndex(P);
+	if (!bHas) { CellVertRW[I] = INVALID_V; return; }
+	const uint Vi = BlockVStart[b] + Local;
+	CellVertRW[I] = Vi;
+	if (Vi >= MaxVerts) { return; }
+	VertexRW[Vi] = float4(Vp, 0.f);
+	float3 G = 0.f;
+	for (uint c = 0; c < 8; ++c)
+	{
+		const int3 Q = int3(P + CornerOf[c]);
+		G += float3(Fat(Q + int3(1, 0, 0)) - Fat(Q - int3(1, 0, 0)), Fat(Q + int3(0, 1, 0)) - Fat(Q - int3(0, 1, 0)), Fat(Q + int3(0, 0, 1)) - Fat(Q - int3(0, 0, 1)));
+	}
+	const float L2 = dot(G, G);
+	NormalRW[Vi] = float4(L2 > 1e-16f ? -G * rsqrt(L2) : float3(0.f, 0.f, 0.f), 0.f);
+}
+
+uint VertAt(int3 C)
+{
+	if (any(C < 0) || any(C + 1 >= int3(GD))) { return INVALID_V; }
+	const uint I = PtIndex(uint3(C));
+	return BandRO[I] ? CellVertRO[I] : INVALID_V;
+}
+
+// 점 P 에서 +축 모서리마다 사각형 (CPU 의 면 규칙). Out 이 있으면 색인을 쓴다
+uint FaceQuads(uint3 P, bool bWrite, uint Base)
+{
+	if (any(P < 1) || any(P + 1 >= GD)) { return 0u; }
+	const uint I0 = PtIndex(P);
+	if (!BandRO[I0]) { return 0u; }
+	const bool In0 = FieldRO[I0] > 0.f;
+	uint NumIdx = 0;
+	for (uint Axis = 0; Axis < 3; ++Axis)
+	{
+		const uint3 P1 = P + uint3(Axis == 0, Axis == 1, Axis == 2);
+		const uint I1 = PtIndex(P1);
+		if (!BandRO[I1] || (FieldRO[I1] > 0.f) == In0) { continue; }
+		uint Q[4]; bool bOk = true;
+		for (uint k = 0; k < 4; ++k)
+		{
+			const int da = (k == 1 || k == 2) ? 1 : 0, db = (k >= 2) ? 1 : 0;
+			int3 C = int3(P);
+			if (Axis == 0) { C.y -= 1 - da; C.z -= 1 - db; }
+			else if (Axis == 1) { C.z -= 1 - da; C.x -= 1 - db; }
+			else { C.x -= 1 - da; C.y -= 1 - db; }
+			Q[k] = VertAt(C);
+			if (Q[k] == INVALID_V) { bOk = false; }
+		}
+		if (!bOk) { continue; }
+		if (bWrite)
+		{
+			const uint At = Base + NumIdx;
+			if (At + 6 <= MaxIndices)
+			{
+				if (In0) { IndexRW[At] = Q[0]; IndexRW[At + 1] = Q[1]; IndexRW[At + 2] = Q[2]; IndexRW[At + 3] = Q[0]; IndexRW[At + 4] = Q[2]; IndexRW[At + 5] = Q[3]; }
+				else     { IndexRW[At] = Q[0]; IndexRW[At + 1] = Q[2]; IndexRW[At + 2] = Q[1]; IndexRW[At + 3] = Q[0]; IndexRW[At + 4] = Q[3]; IndexRW[At + 5] = Q[2]; }
+			}
+		}
+		NumIdx += 6;
+	}
+	return NumIdx;
+}
+
+[numthreads(MB, MB, MB)]
+void FaceCountCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex)
+{
+	const uint b = BlockIndex(Gid);
+	if (!BlockActiveRO[b]) { if (GI == 0) { BlockTCountRW[b] = 0u; } return; }
+	const uint3 P = Gid * MB + GTid;
+	uint N = all(P < GD) ? FaceQuads(P, false, 0u) : 0u;
+	const uint Total = GroupPrefix(GI, N);
+	if (GI == 0) { BlockTCountRW[b] = Total; }
+}
+
+[numthreads(MB, MB, MB)]
+void FaceWriteCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex)
+{
+	const uint b = BlockIndex(Gid);
+	if (!BlockActiveRO[b]) { return; }
+	const uint3 P = Gid * MB + GTid;
+	const bool bIn = all(P < GD);
+	uint N = bIn ? FaceQuads(P, false, 0u) : 0u;
+	GroupPrefix(GI, N);
+	if (bIn) { FaceQuads(P, true, BlockTStart[b] + N); }
+}
+
+[numthreads(1, 1, 1)]
+void MeshArgsCS()
+{
+	const uint NumBlocks = BD.x * BD.y * BD.z;
+	const uint NumV = BlockVStart[NumBlocks];
+	const uint NumI = BlockTStart[NumBlocks];
+	CountersRW[3] = NumV;
+	CountersRW[4] = NumI;
+	DrawArgsRW[0] = min(NumI, MaxIndices - MaxIndices % 3u);   // 넘치면 잘린 만큼만 그린다
+	DrawArgsRW[1] = 1u;
+	DrawArgsRW[2] = 0u;
+	DrawArgsRW[3] = 0u;
+	DrawArgsRW[4] = 0u;
 }

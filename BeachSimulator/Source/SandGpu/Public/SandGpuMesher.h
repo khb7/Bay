@@ -12,6 +12,11 @@ struct FSandGpuMeshParams
 	// 커널 (CPU FSandSurfaceParams 와 같은 뜻 · 같은 기본값). 장은 이방성만
 	float Radius = 2.5f, H = 5.f, Kr = 4.f, Kn = 0.5f, Ks = 0.f, MinSigma = 0.f, MaxStretch = 2.f, IsoFrac = 0.5f;
 	int32 NEps = 25, KnRamp = 0;
+	// 띠 · 장 · 메시 (G1-3 · G1-4). 격자 원점 · 크기는 CPU 가 정해 넘긴다 (CPU 와 같은 격자 — 대조용. G3 에선 시뮬 영역에서)
+	int32 BandNEps = 25;
+	float SurfDev = 0.15f, BandR = 7.5f, Cell = 1.25f;
+	FVector3f GridOrigin = FVector3f::ZeroVector;
+	FIntVector GridDims = FIntVector(0);
 };
 
 /** 대조용 내려받기 — 입자 순서는 입력과 같다 */
@@ -25,6 +30,17 @@ struct FSandGpuMeshResult
 	TArray<FVector4f> Kernel;          // 입자당 4 개: (G0 G1 G2 DetG) (G3 G4 G5 0) (G6 G7 G8 0) (Ext 0)
 	float Ks = 0.f, InteriorPhi = 0.f, Iso = 0.f;
 	int32 NumInteriorKs = 0, NumIsoSamples = 0, MaxNeighborCount = 0;
+	// G1-3
+	int32 NumBandPoints = 0, NumActiveBlocks = 0, NumBlocks = 0, NumKPairs = 0, KListOverflowBlocks = 0, KPairOverflow = 0;
+	double FieldSum = 0.0; int32 FieldPositive = 0;
+	TArray<uint32> Band;               // 점별 (-meshdiff 대조용)
+	TArray<float>  Field;              // φ − Iso
+	// G1-4
+	TArray<FVector3f> Vertices, Normals;
+	TArray<int32>     Indices;
+	int32 NumVertsTotal = 0, NumIndicesTotal = 0;   // 용량과 무관한 실제 수
+	// G1-5 GPU 타임스탬프 (ms): [0] 이웃 [1] 커널 · 등위값 [2] 띠 · 장 [3] 메시
+	float StageMs[4] = {};
 	double WallMs = 0.0;               // 올리기 + 패스 + 내려받기 (벽시계)
 };
 
