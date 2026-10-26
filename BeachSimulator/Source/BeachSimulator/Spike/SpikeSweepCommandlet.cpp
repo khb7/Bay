@@ -753,6 +753,10 @@ namespace
 		FParse::Value(*Params, TEXT("lambda="), Base.Lambda);
 		FParse::Value(*Params, TEXT("kr="), Base.Kr);
 		FParse::Value(*Params, TEXT("h="), Base.H);
+		FParse::Value(*Params, TEXT("kn="), Base.Kn);
+		FParse::Value(*Params, TEXT("neps="), Base.NEps);
+		FParse::Value(*Params, TEXT("minsigma="), Base.MinSigma);
+		FParse::Value(*Params, TEXT("knramp="), Base.KnRamp);
 		Base.bBandOnly = !FParse::Param(*Params, TEXT("fullband"));
 		const FString Dir = FPaths::ProjectSavedDir() / TEXT("MeshRuns");
 
@@ -815,7 +819,11 @@ namespace
 						if (M.Normals[v].Z > 0.9f && X.Z > 3.f * D && X.X > 4 * D && X.X < 35 * D && X.Y > 4 * D && X.Y < 35 * D) { S += X.Z; S2 += X.Z * X.Z; ++C; }
 					}
 					const double Mean = C ? S / C : 0, Rms = C ? FMath::Sqrt(FMath::Max(0.0, S2 / C - Mean * Mean)) : 0;
-					Metric = FString::Printf(TEXT("윗면 RMS %.3fR (n %d, 높이 %.2f)"), Rms / R, C, Mean);
+					// 입력 기준: 맨 위층 입자 높이의 흔들림 (같은 영역)
+					double Ps = 0, Ps2 = 0; int32 Pc = 0;
+					for (const FVector3f& X : Pos) { if (X.Z > 4.5f * D + R && X.X > 4 * D && X.X < 35 * D && X.Y > 4 * D && X.Y < 35 * D) { Ps += X.Z; Ps2 += X.Z * X.Z; ++Pc; } }
+					const double PRms = Pc ? FMath::Sqrt(FMath::Max(0.0, Ps2 / Pc - (Ps / Pc) * (Ps / Pc))) : 1;
+					Metric = FString::Printf(TEXT("윗면 RMS %.3fR · 입력 위층 %.3fR → 비 %.2f (높이 %.2f)"), Rms / R, PRms / R, Rms / FMath::Max(1e-6, PRms), Mean);
 				}
 				else if (Scene == TEXT("wall"))
 				{

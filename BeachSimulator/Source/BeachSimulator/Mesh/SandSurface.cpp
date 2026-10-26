@@ -109,7 +109,22 @@ namespace
 		FVector3f C;      // 중심 (이방성은 다듬은 x̄)
 		float G[9];       // 행 우선
 		float DetG;
+		FVector3f Ext;    // 지지(‖G r‖ < 2) 의 축정렬 반폭 — 뿌리기 범위
 	};
+
+	// float 원자 덧셈 (CAS). 뿌리기에서 입자들이 같은 격자점에 동시에 더한다
+	FORCEINLINE void AtomicAddFloat(float* Dst, float V)
+	{
+		int32* I = reinterpret_cast<int32*>(Dst);
+		int32 Old = *I;
+		for (;;)
+		{
+			const float New = *reinterpret_cast<const float*>(&Old) + V;
+			const int32 Got = FPlatformAtomics::InterlockedCompareExchange(I, *reinterpret_cast<const int32*>(&New), Old);
+			if (Got == Old) { return; }
+			Old = Got;
+		}
+	}
 }
 
 double FSandSurfaceMesh::Volume() const
@@ -159,7 +174,8 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 	// ── ① 이웃 격자 · 이웃 수 ──
 	FVector3f Min(FLT_MAX), Max(-FLT_MAX);
 	for (const FVector3f& X : Pos) { Min = FVector3f::Min(Min, X); Max = FVector3f::Max(Max, X); }
-	const float Support = (P.Field == ESandSurfaceField::ZhuBridson) ? P.ZbR : 2.f * P.H * P.MaxStretch;   // 장을 모을 때의 최대 반경
+	// 장의 최대 영향 반경 — Z&B 는 R, 등방은 2h (B-cubic 지지), 이방성은 축 상한 2h·MaxStretch
+	const float Support = (P.Field == ESandSurfaceField::ZhuBridson) ? P.ZbR : (P.Field == ESandSurfaceField::Isotropic ? 2.f * P.H : 2.f * P.H * P.MaxStretch);
 	const float Pad = Support + P.Cell;
 	FPointGrid NGrid;
 	NGrid.Build(Pos, Min - FVector3f(Pad), Max + FVector3f(Pad), FMath::Max(P.NeighborR, Support));
@@ -195,7 +211,7 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 		for (int32 k = 0; k < 6; ++k) { Cov[i * 6 + k] = (float)(C[k] / Ws); }
 	});
 	int32 NumSurf = 0, MaxCount = 0;
-	for (int32 i = 0; i < N; ++i) { NumSurf += NCount[i] < P.NEps ? 1 : 0; MaxCount = FMath::Max(MaxCount, NCount[i]); }
+	for (int32 i = 0; i < N; ++i) { NumSurf += NCount[i] < P.BandNEps ? 1 : 0; MaxCount = FMath::Max(MaxCount, NCount[i]); }
 	// 내부 입자 = 이웃 수가 최대의 85% 이상 (그리고 N_ε 초과). 판 · 기둥처럼 내부가 있을 때만 — 얇은 벽 · 부스러기엔 없다
 	const int32 InteriorMin = FMath::Max(P.NEps + 1, (int32)(0.85f * MaxCount));
 	auto IsInterior = [&](int32 i) { return MaxCount > P.NEps && NCount[i] >= InteriorMin; };
@@ -241,8 +257,8 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 				S[1] = Ks * FMath::Max(EigVal[i * 3 + 1], S1 / P.Kr);
 				S[2] = Ks * FMath::Max(EigVal[i * 3 + 2], S1 / P.Kr);
 			}
-			else { S[0] = S[1] = S[2] = P.Kn; }
-			for (float& Sk : S) { Sk = FMath::Clamp(Sk, 1e-3f, P.MaxStretch); }   // 축 길이 = 2h·σ̃ (지지 상한)
+			else { const float KnN = P.KnRamp > 0 ? P.Kn + (1.f - P.Kn) * FMath::Min(1.f, (float)NCount[i] / P.KnRamp) : P.Kn; S[0] = S[1] = S[2] = KnN; }
+			for (float& Sk : S) { Sk = FMath::Clamp(Sk, FMath::Max(1e-3f, P.MinSigma), P.MaxStretch); }   // 축 길이 = 2h·σ̃ (지지 상한)
 			// G = (1/h) R Σ̃⁻¹ Rᵀ
 			for (int32 r = 0; r < 3; ++r)
 			for (int32 c = 0; c < 3; ++c)
@@ -252,12 +268,25 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 				Kr.G[r * 3 + c] = V / P.H;
 			}
 			Kr.DetG = 1.f / (P.H * P.H * P.H * S[0] * S[1] * S[2]);
+			// G⁻¹ = h R Σ̃ Rᵀ → 축 a 의 반폭 = 2 · ‖G⁻¹ 의 a 행‖
+			for (int32 a = 0; a < 3; ++a)
+			{
+				double S2 = 0.0;
+				for (int32 c = 0; c < 3; ++c)
+				{
+					float V = 0.f;
+					for (int32 k = 0; k < 3; ++k) { V += EigVec[i * 9 + a * 3 + k] * S[k] * EigVec[i * 9 + c * 3 + k]; }
+					S2 += (double)(V * P.H) * (V * P.H);
+				}
+				Kr.Ext[a] = 2.f * (float)FMath::Sqrt(S2);
+			}
 		}
 		else
 		{
 			Kr.C = Pos[i];
 			for (int32 k = 0; k < 9; ++k) { Kr.G[k] = (k % 4 == 0) ? 1.f / P.H : 0.f; }
 			Kr.DetG = 1.f / (P.H * P.H * P.H);
+			Kr.Ext = FVector3f(2.f * P.H);
 		}
 	});
 	const double T2 = FPlatformTime::Seconds();
@@ -275,18 +304,18 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 		// 표면 입자(또는 전부) 주변 Support 안의 격자점
 		const float Reach = Support;
 		const int32 RC = FMath::CeilToInt(Reach / P.Cell);
-		for (int32 i = 0; i < N; ++i)
+		ParallelFor(N, [&](int32 i)
 		{
-			if (P.bBandOnly && NCount[i] >= P.NEps) { continue; }
+			if (P.bBandOnly && NCount[i] >= P.BandNEps) { return; }
 			const FVector3f L = (Pos[i] - GOrigin) / P.Cell;
 			const int32 cx = FMath::RoundToInt(L.X), cy = FMath::RoundToInt(L.Y), cz = FMath::RoundToInt(L.Z);
 			for (int32 z = FMath::Max(0, cz - RC); z <= FMath::Min(GD.Z - 1, cz + RC); ++z)
 			for (int32 y = FMath::Max(0, cy - RC); y <= FMath::Min(GD.Y - 1, cy + RC); ++y)
 			for (int32 x = FMath::Max(0, cx - RC); x <= FMath::Min(GD.X - 1, cx + RC); ++x)
 			{
-				if ((PtPos(x, y, z) - Pos[i]).SizeSquared() <= Reach * Reach) { Band[PtIndex(x, y, z)] = 1; }
+				if ((PtPos(x, y, z) - Pos[i]).SizeSquared() <= Reach * Reach) { Band[PtIndex(x, y, z)] = 1; }   // 같은 값 쓰기라 경쟁 무해
 			}
-		}
+		});
 	}
 	int32 NumBand = 0;
 	for (uint8 B : Band) { NumBand += B; }
@@ -343,16 +372,45 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 	Out.Iso = Iso;
 
 	TArray<float> F; F.Init(-1.f, NumPts);   // f − iso, 띠 밖은 표시만 (−1)
-	ParallelFor(GD.Z, [&](int32 z)
+	if (P.Field == ESandSurfaceField::ZhuBridson)
 	{
-		for (int32 y = 0; y < GD.Y; ++y)
-		for (int32 x = 0; x < GD.X; ++x)
+		// 비선형(가중 평균) 이라 뿌릴 수 없다 — 띠 점마다 모은다
+		ParallelFor(GD.Z, [&](int32 z)
 		{
-			const int32 I = PtIndex(x, y, z);
-			if (!Band[I]) { continue; }
-			F[I] = EvalField(PtPos(x, y, z)) - Iso;
-		}
-	});
+			for (int32 y = 0; y < GD.Y; ++y)
+			for (int32 x = 0; x < GD.X; ++x)
+			{
+				const int32 I = PtIndex(x, y, z);
+				if (Band[I]) { F[I] = EvalField(PtPos(x, y, z)) - Iso; }
+			}
+		});
+	}
+	else
+	{
+		// 선형 합 → 입자마다 자기 지지 AABB 안의 띠 점에 뿌린다 (모으기보다 이웃 검사가 훨씬 적다)
+		TArray<float> Phi; Phi.SetNumZeroed(NumPts);
+		ParallelFor(N, [&](int32 j)
+		{
+			const FKernel& Kj = K[j];
+			const FVector3f Lo = (Kj.C - Kj.Ext - GOrigin) / P.Cell, Hi = (Kj.C + Kj.Ext - GOrigin) / P.Cell;
+			const int32 x0 = FMath::Max(0, FMath::CeilToInt(Lo.X)), x1 = FMath::Min(GD.X - 1, FMath::FloorToInt(Hi.X));
+			const int32 y0 = FMath::Max(0, FMath::CeilToInt(Lo.Y)), y1 = FMath::Min(GD.Y - 1, FMath::FloorToInt(Hi.Y));
+			const int32 z0 = FMath::Max(0, FMath::CeilToInt(Lo.Z)), z1 = FMath::Min(GD.Z - 1, FMath::FloorToInt(Hi.Z));
+			const float Scale = PVol * Kj.DetG;
+			for (int32 z = z0; z <= z1; ++z)
+			for (int32 y = y0; y <= y1; ++y)
+			for (int32 x = x0; x <= x1; ++x)
+			{
+				const int32 I = PtIndex(x, y, z);
+				if (!Band[I]) { continue; }
+				const FVector3f R = PtPos(x, y, z) - Kj.C;
+				const FVector3f GR(Kj.G[0] * R.X + Kj.G[1] * R.Y + Kj.G[2] * R.Z, Kj.G[3] * R.X + Kj.G[4] * R.Y + Kj.G[5] * R.Z, Kj.G[6] * R.X + Kj.G[7] * R.Y + Kj.G[8] * R.Z);
+				const float Q = GR.Size();
+				if (Q < 2.f) { AtomicAddFloat(&Phi[I], Scale * BCubic(Q)); }
+			}
+		});
+		ParallelFor(NumPts, [&](int32 I) { if (Band[I]) { F[I] = Phi[I] - Iso; } });
+	}
 	const double T3 = FPlatformTime::Seconds();
 
 	// ── ⑥ Surface Nets ──
@@ -390,12 +448,23 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 			CellVert[CellIdx(x, y, z)] = 1;
 		}
 	});
-	// 정점 번호 매기기 (순차)
-	for (int32 c = 0; c < NumCellsAll; ++c)
+	// 정점 번호 매기기 — 층별 개수 → 접두합 → 병렬 기록
 	{
-		if (CellVert[c] == INDEX_NONE) { continue; }
-		CellVert[c] = Out.Vertices.Num();
-		Out.Vertices.Add(CellPos[c]);
+		const int32 SliceCells = CD.X * CD.Y;
+		TArray<int32> SliceBase; SliceBase.SetNumZeroed(CD.Z + 1);
+		ParallelFor(CD.Z, [&](int32 z) { int32 C = 0; for (int32 k = 0; k < SliceCells; ++k) { C += CellVert[z * SliceCells + k] != INDEX_NONE; } SliceBase[z + 1] = C; });
+		for (int32 z = 0; z < CD.Z; ++z) { SliceBase[z + 1] += SliceBase[z]; }
+		Out.Vertices.SetNumUninitialized(SliceBase[CD.Z]);
+		ParallelFor(CD.Z, [&](int32 z)
+		{
+			int32 V = SliceBase[z];
+			for (int32 k = 0; k < SliceCells; ++k)
+			{
+				const int32 c = z * SliceCells + k;
+				if (CellVert[c] == INDEX_NONE) { continue; }
+				CellVert[c] = V; Out.Vertices[V] = CellPos[c]; ++V;
+			}
+		});
 	}
 	Out.NumCells = Out.Vertices.Num();
 	// 법선 = −∇f (중앙 차분, 정점 위치에서 삼선형 대신 셀 모서리 기울기 평균)
@@ -421,8 +490,12 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 			Out.Normals[Vi] = (-Gsum).GetSafeNormal();
 		}
 	});
-	// 면 — 부호가 바뀌는 격자 모서리마다, 그 모서리를 둘러싼 4 셀의 정점으로 사각형
-	for (int32 z = 1; z < GD.Z - 1; ++z)
+	// 면 — 부호가 바뀌는 격자 모서리마다, 그 모서리를 둘러싼 4 셀의 정점으로 사각형 (층별 병렬 → 이어 붙이기)
+	TArray<TArray<int32>> SliceTris; SliceTris.SetNum(GD.Z);
+	ParallelFor(GD.Z - 2, [&](int32 zz)
+	{
+	const int32 z = zz + 1;
+	TArray<int32>& Tris = SliceTris[z];
 	for (int32 y = 1; y < GD.Y - 1; ++y)
 	for (int32 x = 1; x < GD.X - 1; ++x)
 	{
@@ -451,10 +524,12 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 			}
 			if (!bOk) { continue; }
 			// 방향: 안(f > 0) → 밖으로 법선이 나가게
-			if (In0) { Out.Triangles.Append({ Q[0], Q[1], Q[2], Q[0], Q[2], Q[3] }); }
-			else     { Out.Triangles.Append({ Q[0], Q[2], Q[1], Q[0], Q[3], Q[2] }); }
+			if (In0) { Tris.Append({ Q[0], Q[1], Q[2], Q[0], Q[2], Q[3] }); }
+			else     { Tris.Append({ Q[0], Q[2], Q[1], Q[0], Q[3], Q[2] }); }
 		}
 	}
+	});
+	for (const TArray<int32>& Tr : SliceTris) { Out.Triangles.Append(Tr); }
 	const double T4 = FPlatformTime::Seconds();
 	Out.MsNeighbors = (T1 - T0) * 1000.0;
 	Out.MsKernels   = (T2 - T1) * 1000.0;
