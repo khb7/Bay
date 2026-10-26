@@ -37,6 +37,7 @@ float IsoFrac;
 uint  SampleStep;                // 등위값 표본 간격 max(1, N/2000) — CPU 와 같은 규칙
 uint  NumSamples;                // ceil(N / SampleStep)
 uint  NumPartials;
+float InteriorPhiFixed;          // > 0 이면 내부 φ 고정 (#19)
 
 StructuredBuffer<float4>   PosRO;
 StructuredBuffer<float4>   GridPosRO;        // 격자에 넣을 점 (이웃 격자 = 입자, 커널 격자 = x̄)
@@ -456,6 +457,7 @@ void IsoSampleCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI 
 [numthreads(1, 1, 1)]
 void FinalizeIsoCS()
 {
+	if (InteriorPhiFixed > 0.f) { ScalarsRW[1] = InteriorPhiFixed; ScalarsRW[2] = InteriorPhiFixed * IsoFrac; ScalarsRW[4] = 0.f; return; }
 	float Sum = 0.f; uint Cnt = 0;
 	for (uint k = 0; k < NumSamples && Cnt < 512u; ++k)
 	{

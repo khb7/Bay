@@ -463,7 +463,13 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 
 	// 등위값 — 내부 입자 위치의 φ 평균 × IsoFrac (Zhu & Bridson 은 0)
 	float Iso = 0.f;
-	if (P.Field != ESandSurfaceField::ZhuBridson)
+	if (P.Field != ESandSurfaceField::ZhuBridson && P.InteriorPhiFixed > 0.f)
+	{
+		// 고정 (#19) — 작은 더미는 "최대 이웃 수의 85%" 내부 판정이 소수의 가장 빽빽한 입자만 골라 φ 가 튄다 (#11)
+		Out.InteriorPhi = P.InteriorPhiFixed;
+		Iso = Out.InteriorPhi * P.IsoFrac;
+	}
+	else if (P.Field != ESandSurfaceField::ZhuBridson)
 	{
 		TArray<int32> Samples;
 		for (int32 i = 0; i < N && Samples.Num() < 512; i += FMath::Max(1, N / 512)) { if (IsInterior(i)) { Samples.Add(i); } }   // 내부 φ 평균 — 512 표본이면 충분 (#18, GPU 와 같은 규칙)

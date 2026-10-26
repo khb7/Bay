@@ -31,6 +31,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandMeshParams, )
 	SHADER_PARAMETER(uint32, SampleStep)
 	SHADER_PARAMETER(uint32, NumSamples)
 	SHADER_PARAMETER(uint32, NumPartials)
+	SHADER_PARAMETER(float, InteriorPhiFixed)
 	SHADER_PARAMETER(FVector3f, GOrigin)
 	SHADER_PARAMETER(FUintVector3, GD)
 	SHADER_PARAMETER(FUintVector3, BD)
@@ -296,6 +297,7 @@ namespace
 			const int32 NumSamples = FMath::DivideAndRoundUp(N, SampleStep);
 			const int32 NumPartials = FMath::DivideAndRoundUp(N, 64);
 			T.SampleStep = SampleStep; T.NumSamples = NumSamples; T.NumPartials = NumPartials;
+			T.InteriorPhiFixed = P.InteriorPhiFixed;
 			T.PosRO = GraphBuilder.CreateSRV(Pos);
 			T.GridPosRO = T.PosRO;
 			T.CellKeyRW = GraphBuilder.CreateUAV(CellKey);
@@ -356,7 +358,7 @@ namespace
 
 			// 등위값 표본은 이웃 격자를 ±3 칸 돈다 (#18 — 커널 격자 · 셀 정렬 제거)
 			Stamp(6);
-			AddMeshGroupPass<FSandMeshIsoSampleCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshIsoSample"), ShaderMap, T, FIntVector(NumSamples, 1, 1));   // 그룹 = 표본
+			if (P.InteriorPhiFixed <= 0.f) { AddMeshGroupPass<FSandMeshIsoSampleCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshIsoSample"), ShaderMap, T, FIntVector(NumSamples, 1, 1)); }   // 그룹 = 표본
 			Stamp(7);
 			AddMeshPass<FSandMeshFinalizeIsoCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshFinalizeIso"), ShaderMap, T, 1, 1);
 			Stamp(2);

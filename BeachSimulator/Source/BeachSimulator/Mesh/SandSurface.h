@@ -30,7 +30,8 @@ struct FSandSurfaceParams
 	float MinSigma  = 0.f;     // 커널 축 길이 하한 (σ̃ 하한, 축 지지 = 2h·σ̃). 얇은 벽이 입자 반경보다 얇아지지 않게 — Yu & Turk 에 없는 우리 추가
 	float MaxStretch = 2.f;    // 커널 축 길이 상한 (h 배) — 지지 반경을 묶어 이웃 격자를 유한하게
 	float Cell      = 2.5f;    // 장 격자 셀 (cm)
-	float IsoFrac   = 0.5f;    // 등위값 = 내부 φ 평균 × 이 비율 (등방 · 이방성). Zhu & Bridson 은 0
+	float IsoFrac   = 0.5f;
+	float InteriorPhiFixed = 0.6f;  // > 0 이면 내부 φ 를 측정하지 않고 이 값 (무작위 조밀 충전 고체 분율 0.6). 0 = 내부 입자 표본으로 측정 (#19 이전 동작, -phifix=0)    // 등위값 = 내부 φ 평균 × 이 비율 (등방 · 이방성). Zhu & Bridson 은 0
 	float ZbR       = 10.f;    // Zhu & Bridson 이웃 반경 R (간격의 2 배)
 	int32 BandNEps  = 25;      // 띠를 정하는 표면 입자 기준 (Akinci 2012). 커널의 N_ε 와 따로 — N_ε 를 낮추면 띠가 사라진다
 	float SurfDev   = 0.15f;   // >0 이면 이웃 수가 BandNEps 이상이어도 치우침 |Σ(x_j − x_i)| / (N·r_i) 이 이보다 크면 표면 입자 (Barecasco 2013 · Liu 2022, C14). 판 실측 윗층 p1 0.187 · 내부 p99 0.107 의 가운데 (m1-log #4). 0 = 끔

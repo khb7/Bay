@@ -21,6 +21,7 @@ struct FSandGpuMeshParams
 	// 가중 라플라시안 평활화 (CPU FSandSurfaceParams 와 같다)
 	int32 SmoothIters = 0;
 	float SmoothNorm = 13.f;
+	float InteriorPhiFixed = 0.6f;  // > 0 이면 내부 φ 고정 (CPU 와 같다, #19)
 };
 
 /** 대조용 내려받기 — 입자 순서는 입력과 같다 */
