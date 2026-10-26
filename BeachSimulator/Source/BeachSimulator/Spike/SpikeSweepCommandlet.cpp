@@ -760,6 +760,7 @@ namespace
 		FParse::Value(*Params, TEXT("bandr="), Base.BandR);
 		FParse::Value(*Params, TEXT("surfdev="), Base.SurfDev);
 		FParse::Value(*Params, TEXT("block="), Base.Block);
+		FParse::Value(*Params, TEXT("simd="), Base.Simd);
 		const bool bDevDump = FParse::Param(*Params, TEXT("devdump"));
 		Base.bBandOnly = !FParse::Param(*Params, TEXT("fullband"));
 		const FString Dir = FPaths::ProjectSavedDir() / TEXT("MeshRuns");
@@ -855,7 +856,7 @@ namespace
 					*Scene, *Fl, M.NumParticles, M.NumSurfaceParticles, M.NumBandPoints, M.Vertices.Num(), M.Triangles.Num() / 3, *Metric, M.Volume() / PV,
 					M.MsNeighbors, M.MsKernels, M.MsField, M.MsMesh, M.MsTotal, M.Ks, M.Iso);
 				M.SaveObj(Dir / FString::Printf(TEXT("%s_%s.obj"), *Scene, *Fl));
-				UE_LOG(LogSpikeSweep, Display, TEXT("   장 세부 %s: 띠 %.1f · 등위값 %.1f · 거르기 %.1f · 뿌리기 %.1f (목록 %.1f) ms · 격자점 %d · 영역 %d · 계산 %.1fM"), *Scene, M.MsFieldBand, M.MsFieldIso, M.MsFieldFilter, M.MsField - M.MsFieldBand - M.MsFieldIso - M.MsFieldFilter, M.MsSplatLists, M.NumGridPoints, M.NumBlocks, M.SplatEvals / 1e6);
+				UE_LOG(LogSpikeSweep, Display, TEXT("   장 세부 %s: 띠 %.1f · 등위값 %.1f · 거르기 %.1f · 뿌리기 %.1f (목록 %.1f) ms · 격자점 %d · 영역 %d · 계산 %.1fM · SIMD %d"), *Scene, M.MsFieldBand, M.MsFieldIso, M.MsFieldFilter, M.MsField - M.MsFieldBand - M.MsFieldIso - M.MsFieldFilter, M.MsSplatLists, M.NumGridPoints, M.NumBlocks, M.SplatEvals / 1e6, M.SimdWidth);
 				if (bDevDump && Fl == Fields[0])
 				{
 					// 표면 판정 문턱 측정 (C14): 무리별 이웃 수 · 치우침 분위수

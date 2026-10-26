@@ -5,6 +5,10 @@
 #include "Misc/FileHelper.h"
 
 #include <atomic>
+#include <immintrin.h>
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 
 namespace
 {
@@ -113,6 +117,75 @@ namespace
 		float DetG;
 		FVector3f Ext;    // 지지(‖G r‖ < 2) 의 축정렬 반폭 — 뿌리기 범위
 	};
+
+	// 한 줄 뿌리기: Row[x] += Scale·W(|GR0 + (x − xa)·DG|), x ∈ [xa, xb]. W = BCubic (1/π 은 Scale 에 포함 안 됨 — 아래에서 곱한다)
+	// 스칼라 · SSE 4 폭 · AVX 8 폭 (단계 C, splashsurf 는 AVX2+FMA 8 레인 — C14). 레인 값은 증분 대신 GR0 + k·DG 로 직접 계산
+	FORCEINLINE void SplatRowScalar(float* Row, int32 xa, int32 xb, FVector3f GR, const FVector3f& DG, float Scale)
+	{
+		for (int32 x = xa; x <= xb; ++x, GR += DG)
+		{
+			const float Q2 = GR.SizeSquared();
+			if (Q2 < 4.f) { Row[x] += Scale * BCubic(FMath::Sqrt(Q2)); }
+		}
+	}
+
+	void SplatRowSse(float* Row, int32 xa, int32 xb, const FVector3f& GR, const FVector3f& DG, float Scale)
+	{
+		const __m128 Lane = _mm_setr_ps(0.f, 1.f, 2.f, 3.f);
+		const __m128 Gx = _mm_set1_ps(GR.X), Gy = _mm_set1_ps(GR.Y), Gz = _mm_set1_ps(GR.Z);
+		const __m128 Dx = _mm_set1_ps(DG.X), Dy = _mm_set1_ps(DG.Y), Dz = _mm_set1_ps(DG.Z);
+		const __m128 One = _mm_set1_ps(1.f), Two = _mm_set1_ps(2.f), C15 = _mm_set1_ps(1.5f), C075 = _mm_set1_ps(0.75f), C025 = _mm_set1_ps(0.25f);
+		const __m128 Sc = _mm_set1_ps(Scale * (1.f / PI));
+		int32 x = xa;
+		for (; x + 3 <= xb; x += 4)
+		{
+			const __m128 K = _mm_add_ps(_mm_set1_ps((float)(x - xa)), Lane);
+			const __m128 X = _mm_add_ps(Gx, _mm_mul_ps(K, Dx)), Y = _mm_add_ps(Gy, _mm_mul_ps(K, Dy)), Z = _mm_add_ps(Gz, _mm_mul_ps(K, Dz));
+			const __m128 Q2 = _mm_add_ps(_mm_add_ps(_mm_mul_ps(X, X), _mm_mul_ps(Y, Y)), _mm_mul_ps(Z, Z));
+			const __m128 Q = _mm_sqrt_ps(Q2);
+			const __m128 Inner = _mm_add_ps(_mm_sub_ps(One, _mm_mul_ps(C15, Q2)), _mm_mul_ps(C075, _mm_mul_ps(Q2, Q)));
+			const __m128 T = _mm_sub_ps(Two, Q);
+			const __m128 Outer = _mm_mul_ps(C025, _mm_mul_ps(T, _mm_mul_ps(T, T)));
+			__m128 W = _mm_blendv_ps(Outer, Inner, _mm_cmplt_ps(Q, One));
+			W = _mm_and_ps(W, _mm_cmplt_ps(Q, Two));
+			_mm_storeu_ps(Row + x, _mm_add_ps(_mm_loadu_ps(Row + x), _mm_mul_ps(Sc, W)));
+		}
+		if (x <= xb) { SplatRowScalar(Row, x, xb, GR + DG * (float)(x - xa), DG, Scale); }
+	}
+
+#if defined(_MSC_VER)
+	void SplatRowAvx(float* Row, int32 xa, int32 xb, const FVector3f& GR, const FVector3f& DG, float Scale)
+	{
+		const __m256 Lane = _mm256_setr_ps(0.f, 1.f, 2.f, 3.f, 4.f, 5.f, 6.f, 7.f);
+		const __m256 Gx = _mm256_set1_ps(GR.X), Gy = _mm256_set1_ps(GR.Y), Gz = _mm256_set1_ps(GR.Z);
+		const __m256 Dx = _mm256_set1_ps(DG.X), Dy = _mm256_set1_ps(DG.Y), Dz = _mm256_set1_ps(DG.Z);
+		const __m256 One = _mm256_set1_ps(1.f), Two = _mm256_set1_ps(2.f), C15 = _mm256_set1_ps(1.5f), C075 = _mm256_set1_ps(0.75f), C025 = _mm256_set1_ps(0.25f);
+		const __m256 Sc = _mm256_set1_ps(Scale * (1.f / PI));
+		int32 x = xa;
+		for (; x + 7 <= xb; x += 8)
+		{
+			const __m256 K = _mm256_add_ps(_mm256_set1_ps((float)(x - xa)), Lane);
+			const __m256 X = _mm256_add_ps(Gx, _mm256_mul_ps(K, Dx)), Y = _mm256_add_ps(Gy, _mm256_mul_ps(K, Dy)), Z = _mm256_add_ps(Gz, _mm256_mul_ps(K, Dz));
+			const __m256 Q2 = _mm256_add_ps(_mm256_add_ps(_mm256_mul_ps(X, X), _mm256_mul_ps(Y, Y)), _mm256_mul_ps(Z, Z));
+			const __m256 Q = _mm256_sqrt_ps(Q2);
+			const __m256 Inner = _mm256_add_ps(_mm256_sub_ps(One, _mm256_mul_ps(C15, Q2)), _mm256_mul_ps(C075, _mm256_mul_ps(Q2, Q)));
+			const __m256 T = _mm256_sub_ps(Two, Q);
+			const __m256 Outer = _mm256_mul_ps(C025, _mm256_mul_ps(T, _mm256_mul_ps(T, T)));
+			__m256 W = _mm256_blendv_ps(Outer, Inner, _mm256_cmp_ps(Q, One, _CMP_LT_OQ));
+			W = _mm256_and_ps(W, _mm256_cmp_ps(Q, Two, _CMP_LT_OQ));
+			_mm256_storeu_ps(Row + x, _mm256_add_ps(_mm256_loadu_ps(Row + x), _mm256_mul_ps(Sc, W)));
+		}
+		if (x <= xb) { SplatRowSse(Row, x, xb, GR + DG * (float)(x - xa), DG, Scale); }
+	}
+
+	bool CpuHasAvx()
+	{
+		int Info[4];
+		__cpuid(Info, 1);
+		const bool bOsXsave = (Info[2] & (1 << 27)) != 0, bAvx = (Info[2] & (1 << 28)) != 0;
+		return bOsXsave && bAvx && ((_xgetbv(0) & 6) == 6);
+	}
+#endif
 
 	// float 원자 덧셈 (CAS). 뿌리기에서 입자들이 같은 격자점에 동시에 더한다
 	FORCEINLINE void AtomicAddFloat(float* Dst, float V)
@@ -439,6 +512,13 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 			// 부분 영역: 격자점을 B³ 영역으로 나누고, 입자를 지지 AABB 가 겹치는 영역마다 목록에 넣는다 (counting sort).
 			// 영역마다 스레드 하나가 지역 배열에 뿌린 뒤 자기 띠 점에만 써 넣는다 — 영역끼리 점이 겹치지 않아 원자 연산이 없다
 			const int32 B = P.Block;
+#if defined(_MSC_VER)
+			static const bool bAvx = CpuHasAvx();
+			const int32 SimdW = (P.Simd >= 8 && bAvx) ? 8 : (P.Simd >= 4 ? 4 : 0);
+#else
+			const int32 SimdW = P.Simd >= 4 ? 4 : 0;
+#endif
+			Out.SimdWidth = SimdW;
 			const FIntVector BD((GD.X + B - 1) / B, (GD.Y + B - 1) / B, (GD.Z + B - 1) / B);
 			const int32 NumBlocks = BD.X * BD.Y * BD.Z;
 			auto PtRange = [&](const FKernel& Kj, FIntVector& L, FIntVector& H)
@@ -526,11 +606,9 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 						FVector3f GR(Kj.G[0] * R0.X + Kj.G[1] * R0.Y + Kj.G[2] * R0.Z, Kj.G[3] * R0.X + Kj.G[4] * R0.Y + Kj.G[5] * R0.Z, Kj.G[6] * R0.X + Kj.G[7] * R0.Y + Kj.G[8] * R0.Z);
 						const FVector3f DG(Kj.G[0] * P.Cell, Kj.G[3] * P.Cell, Kj.G[6] * P.Cell);
 						float* Row = Local.GetData() + ((z - B0.Z) * B + (y - B0.Y)) * B - B0.X;
-						for (int32 x = xa; x <= xb; ++x, GR += DG)
-						{
-							const float Q2 = GR.SizeSquared();
-							if (Q2 < 4.f) { Row[x] += Scale * BCubic(FMath::Sqrt(Q2)); }
-						}
+						if (SimdW == 8) { SplatRowAvx(Row, xa, xb, GR, DG, Scale); }
+						else if (SimdW == 4) { SplatRowSse(Row, xa, xb, GR, DG, Scale); }
+						else { SplatRowScalar(Row, xa, xb, GR, DG, Scale); }
 					}
 				}
 				for (int32 z = B0.Z; z <= B1.Z; ++z)
