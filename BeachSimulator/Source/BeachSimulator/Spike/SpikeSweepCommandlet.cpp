@@ -811,6 +811,12 @@ namespace
 				Pos = Sim.GetPositions();
 			}
 			if (Pos.Num() == 0) { continue; }
+			if (FParse::Param(*Params, TEXT("dumppos")))
+			{
+				// G2 시험(-sandsurfacetest)이 읽는 입자 파일 — FVector3f 원시 배열
+				const FString PosFile = Dir / FString::Printf(TEXT("%s.pos"), *Scene);
+				FFileHelper::SaveArrayToFile(TArrayView<const uint8>(reinterpret_cast<const uint8*>(Pos.GetData()), Pos.Num() * sizeof(FVector3f)), *PosFile);
+			}
 
 			for (const FString& Fl : Fields)
 			{

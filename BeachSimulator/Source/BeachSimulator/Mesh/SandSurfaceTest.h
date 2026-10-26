@@ -1,0 +1,29 @@
+// M1 G2 시험 — `-game -sandsurfacetest=<입자 파일>` 로 띄우면 입자를 읽어 USandSurfaceComponent 로 그리고,
+// 카메라를 더미에 맞춰 스크린샷을 찍은 뒤 종료한다 (사람 없이 화면 확인). 입자 파일은 커맨드릿 `-mesh -dumppos` 가 쓴다.
+//   -sandshot=<파일>   스크린샷 경로 (기본 Saved/MeshRuns/sandsurface.png)
+//   -sandwire          와이어프레임으로
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Containers/Ticker.h"
+#include "Subsystems/WorldSubsystem.h"
+#include "SandSurfaceTest.generated.h"
+
+UCLASS()
+class USandSurfaceTestSubsystem : public UWorldSubsystem
+{
+	GENERATED_BODY()
+
+public:
+	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
+	virtual void OnWorldBeginPlay(UWorld& World) override;
+	virtual void Deinitialize() override;
+
+private:
+	bool Tick(float DeltaTime);
+
+	FString ShotPath;
+	int32 Frames = 0;
+	FTSTicker::FDelegateHandle TickHandle;
+};

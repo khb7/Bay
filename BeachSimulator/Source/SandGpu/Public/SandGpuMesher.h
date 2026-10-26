@@ -4,6 +4,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "RenderGraphResources.h"
 
 struct FSandGpuMeshParams
 {
@@ -44,8 +45,25 @@ struct FSandGpuMeshResult
 	double WallMs = 0.0;               // 올리기 + 패스 + 내려받기 (벽시계)
 };
 
+/**
+ * G2 — 화면용 출력 버퍼 (렌더 스레드 소유). FLocalVertexFactory 가 그대로 읽는 형식:
+ * 위치 float3 · 접선 2 × FPackedNormal · 32 비트 색인 · 간접 그리기 인자 {색인 수, 1, 0, 0, 0}.
+ */
+struct FSandGpuMeshRenderBuffers
+{
+	TRefCountPtr<FRDGPooledBuffer> Position, Tangent, TexCoord, Index, DrawArgs;
+	int32 MaxVerts = 0, MaxIndices = 0;
+	bool IsValid() const { return Position.IsValid(); }
+};
+
 namespace SandGpuMesh
 {
+	/** 렌더 스레드. 용량을 잡는다 (이미 충분하면 그대로) */
+	SANDGPU_API void AllocateRenderBuffers(int32 MaxVerts, FSandGpuMeshRenderBuffers& Out);
+
+	/** 렌더 스레드. 입자 → 메시를 화면용 버퍼에 직접 쓴다 (내려받기 없음). OutStats 는 nullptr 가능 */
+	SANDGPU_API void BuildToRenderBuffers(FRHICommandListImmediate& RHICmdList, const TArray<FVector4f>& Positions, const FSandGpuMeshParams& Params, FSandGpuMeshRenderBuffers& Buffers);
+
 	/** 게임 스레드에서 부르고 끝날 때까지 기다린다 */
 	SANDGPU_API void Build(const TArray<FVector3f>& Positions, const FSandGpuMeshParams& Params, FSandGpuMeshResult& Out);
 }

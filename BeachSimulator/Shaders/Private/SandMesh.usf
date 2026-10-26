@@ -497,6 +497,11 @@ RWStructuredBuffer<float4> VertexRW;         // xyz 위치
 RWStructuredBuffer<float4> NormalRW;
 RWStructuredBuffer<uint>   IndexRW;
 RWBuffer<uint>             DrawArgsRW;       // {색인 수, 1, 0, 0, 0} — G2 간접 그리기
+// G2 화면 출력 — FLocalVertexFactory 가 그대로 읽는 형식 (bRenderOut 일 때만)
+uint  bRenderOut;
+RWBuffer<float>            RPosRW;           // 정점당 3 (float3 스트림)
+RWBuffer<uint>             RTanRW;           // 정점당 2: TangentX · TangentZ (FPackedNormal, 부호 있는 8 비트 × 4)
+RWBuffer<uint>             RIdxRW;           // 32 비트 색인 버퍼
 // CountersRW: [0] 최대 이웃 수 [1] 커널 목록 넘침 영역 [2] 쌍 용량 넘침 [3] 정점 총수 [4] 색인 총수
 
 uint PtIndex(uint3 P) { return (P.z * GD.y + P.y) * GD.x + P.x; }
@@ -663,6 +668,13 @@ bool CellVertex(uint3 P, out float3 OutPos)
 	return true;
 }
 
+// FPackedNormal (int8 × 4, x 가 낮은 바이트)
+uint PackSNorm8(float4 V)
+{
+	const int4 Q = int4(round(clamp(V, -1.f, 1.f) * 127.f));
+	return (uint(Q.x) & 0xFFu) | ((uint(Q.y) & 0xFFu) << 8) | ((uint(Q.z) & 0xFFu) << 16) | ((uint(Q.w) & 0xFFu) << 24);
+}
+
 float Fat(int3 P)
 {
 	P = clamp(P, int3(0, 0, 0), int3(GD) - 1);
@@ -719,6 +731,7 @@ void VertWriteCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI 
 	CellVertRW[I] = Vi;
 	if (Vi >= MaxVerts) { return; }
 	VertexRW[Vi] = float4(Vp, 0.f);
+	if (bRenderOut) { RPosRW[Vi * 3 + 0] = Vp.x; RPosRW[Vi * 3 + 1] = Vp.y; RPosRW[Vi * 3 + 2] = Vp.z; }
 	float3 G = 0.f;
 	for (uint c = 0; c < 8; ++c)
 	{
@@ -726,7 +739,16 @@ void VertWriteCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI 
 		G += float3(Fat(Q + int3(1, 0, 0)) - Fat(Q - int3(1, 0, 0)), Fat(Q + int3(0, 1, 0)) - Fat(Q - int3(0, 1, 0)), Fat(Q + int3(0, 0, 1)) - Fat(Q - int3(0, 0, 1)));
 	}
 	const float L2 = dot(G, G);
-	NormalRW[Vi] = float4(L2 > 1e-16f ? -G * rsqrt(L2) : float3(0.f, 0.f, 0.f), 0.f);
+	const float3 Nrm = L2 > 1e-16f ? -G * rsqrt(L2) : float3(0.f, 0.f, 1.f);
+	NormalRW[Vi] = float4(L2 > 1e-16f ? Nrm : float3(0.f, 0.f, 0.f), 0.f);
+	if (bRenderOut)
+	{
+		// 접선 = 법선에 수직인 아무 방향 (모래는 이방 질감이 없다). TangentZ.w = +1 (종법선 부호)
+		const float3 Up = abs(Nrm.z) < 0.999f ? float3(0.f, 0.f, 1.f) : float3(1.f, 0.f, 0.f);
+		const float3 Tx = normalize(cross(Up, Nrm));
+		RTanRW[Vi * 2 + 0] = PackSNorm8(float4(Tx, 0.f));
+		RTanRW[Vi * 2 + 1] = PackSNorm8(float4(Nrm, 1.f));
+	}
 }
 
 uint VertAt(int3 C)
@@ -766,8 +788,14 @@ uint FaceQuads(uint3 P, bool bWrite, uint Base)
 			const uint At = Base + NumIdx;
 			if (At + 6 <= MaxIndices)
 			{
-				if (In0) { IndexRW[At] = Q[0]; IndexRW[At + 1] = Q[1]; IndexRW[At + 2] = Q[2]; IndexRW[At + 3] = Q[0]; IndexRW[At + 4] = Q[2]; IndexRW[At + 5] = Q[3]; }
-				else     { IndexRW[At] = Q[0]; IndexRW[At + 1] = Q[2]; IndexRW[At + 2] = Q[1]; IndexRW[At + 3] = Q[0]; IndexRW[At + 4] = Q[3]; IndexRW[At + 5] = Q[2]; }
+				uint Ix[6];
+				if (In0) { Ix[0] = Q[0]; Ix[1] = Q[1]; Ix[2] = Q[2]; Ix[3] = Q[0]; Ix[4] = Q[2]; Ix[5] = Q[3]; }
+				else     { Ix[0] = Q[0]; Ix[1] = Q[2]; Ix[2] = Q[1]; Ix[3] = Q[0]; Ix[4] = Q[3]; Ix[5] = Q[2]; }
+				for (uint t = 0; t < 6; ++t)
+				{
+					IndexRW[At + t] = Ix[t];
+					if (bRenderOut) { RIdxRW[At + t] = Ix[t]; }
+				}
 			}
 		}
 		NumIdx += 6;
@@ -811,4 +839,15 @@ void MeshArgsCS()
 	DrawArgsRW[2] = 0u;
 	DrawArgsRW[3] = 0u;
 	DrawArgsRW[4] = 0u;
+}
+
+// G2 — 색인 꼬리를 퇴화 삼각형(0,0,0)으로. 화면 쪽은 간접 인자 대신 MaxIndices 를 고정 개수로 그린다:
+// GPU 장면 인스턴스 컬링을 쓰는 패스(VSM 그림자 등)는 메시의 간접 인자를 자기 인자로 덮어써서(MeshPassProcessor.cpp) 0 개가 그려진다
+[numthreads(64, 1, 1)]
+void IndexTailCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x;
+	if (i >= MaxIndices) { return; }
+	const uint NumBlocks = BD.x * BD.y * BD.z;
+	if (i >= BlockTStart[NumBlocks]) { RIdxRW[i] = 0u; }
 }

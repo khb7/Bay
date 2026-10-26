@@ -289,3 +289,24 @@ system-design §6-2 의 예산 2.5 ms 는 "활성 타일 1 채 = 입자 3 천 ·
 - 띠 · 장 · 메시 버퍼는 지금 격자 전체 조밀 배열 (기둥 2만 = 310만 점) — G3 에서 타일 단위로 줄인다.
 
 **다음**: G2 (화면 표시 — SceneProxy · VertexFactory · 간접 그리기).
+
+## 실행 #13 — GPU G2: 화면에 그리기 (2026-10-27)
+
+- `Mesh/SandSurfaceComponent.{h,cpp}` — `USandSurfaceComponent` + 프록시. 메셔가 RDG 풀 버퍼(정점 버퍼 겸 typed UAV)에 **위치 float3 · 접선 2 × FPackedNormal · 32 비트 색인**을 직접 쓰고, 프록시는 그 RHI 버퍼를 `FVertexBuffer` · `FIndexBuffer` 로 감싸 **엔진 `FLocalVertexFactory` 그대로** 그린다 (커스텀 VF 불필요). UV 는 보폭 0 스트림. CPU 로 메시가 오가지 않는다.
+- `Mesh/SandSurfaceTest.{h,cpp}` — `-game -RenderOffscreen -sandsurfacetest[=입자 파일]` 로 띄우면 입자를 읽어 그리고 카메라를 맞춰 스크린샷 후 종료 (창 없이). 입자 파일은 커맨드릿 `-mesh -dumppos`. 템플릿 맵 `/Engine/Maps/Templates/Template_Default`. 옵션 `-sandview= -sandlift= -sandref`(비교용 엔진 큐브).
+
+**겪은 문제 넷 — 다 고침**
+1. **안쪽 면이 보임**: 메시 감김이 오른손 기준(CPU OBJ 와 같음)인데 UE 앞면은 시계 방향 → `ReverseCulling` 뒤집음.
+2. **그림자가 없음 (원인 둘)**: ① 템플릿 맵 라이트가 정적(구운 그림자)이라 움직이는 물체는 그림자 없음 — 엔진 큐브도 같았다. 시험에 Movable 방향광을 띄움. 컴포넌트는 `Movable` 명시. ② **VSM(가상 그림자 맵)에서 우리 메시만 빠짐** — VSM 을 끄면 나왔다. GPU 장면 인스턴스 컬링을 쓰는 패스는 메시의 간접 인자를 자기 인자로 덮어써(`MeshPassProcessor.cpp` `bDoOverrideArgs`) 0 개가 그려진다. → **간접 그리기 대신 용량 전체(MaxIndices)를 고정 개수로 그리고, 실제 삼각형 뒤 꼬리는 퇴화 삼각형 (0,0,0)** 으로 채움 (`IndexTailCS`). 모든 패스에서 같게 동작.
+3. **설정 바뀌면 메시가 사라짐**: 그림자 방식 등이 바뀌면 프록시가 다시 만들어지는데 메시를 옛 프록시에만 지었다 → `CreateSceneProxy` 에서 매번 새 프록시에 메시를 짓는다.
+4. `OnWorldBeginPlay` 의 `Super` 호출 누락 경고.
+
+**결과** — 기둥 3천 (`Docs/design/img/m1-g2-column3000.png`): 매끈한 모래 덩어리 · VSM 그림자 · 엔진 기본 재질. 비교용 큐브(`-sandref`)와 그림자 · 조명이 같은 방식으로 나온다.
+
+**남은 것 · 메모**
+- 퇴화 삼각형 비용: 용량 = 입자 × 16 정점 × 6 색인 — 기둥 3천은 실제 4.7만 삼각형에 9.6만을 그린다 (반은 넓이 0 이라 래스터에서 바로 버려지지만 정점 셰이더는 돈다). G3 에서 용량을 실제 수에 맞춰 줄이거나(지난 프레임 수 + 여유) 측정.
+- Lumen · 하드웨어 레이트레이싱 · 속도(모션 벡터)는 확인 안 함 (계획 §2 범위 밖).
+- 젖음 W 정점 색 · 모래 재질은 나중.
+- 모양 판정은 사용자.
+
+**다음**: G3 (시뮬과 같은 프레임 — 매 프레임 갱신 · 지연 0 · 시뮬 + 메시 GPU 시간).
