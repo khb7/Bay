@@ -3,6 +3,7 @@
 #include "Camera/CameraActor.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/CommandLine.h"
@@ -17,6 +18,28 @@
 #include "Components/LightComponent.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSandSurfaceTest, Log, All);
+
+namespace
+{
+	// 템플릿 맵의 방향광은 정적(구운 그림자)이라 움직이는 물체가 그림자를 못 드리운다 — 그 라이트를 Movable 로 바꿔 쓴다.
+	// (예전엔 방향광을 하나 더 띄웠는데 빛이 둘이라 과노출, #20) 없으면 하나 띄운다
+	void EnsureMovableSun(UWorld& World)
+	{
+		for (TActorIterator<ADirectionalLight> It(&World); It; ++It)
+		{
+			ULightComponent* L = It->GetLightComponent();
+			L->SetMobility(EComponentMobility::Movable);
+			L->SetCastShadows(true);
+			It->SetActorRotation(FRotator(-35.0, 120.0, 0.0));   // 비스듬히 — 그림자가 보이게
+			return;
+		}
+		if (ADirectionalLight* Sun = World.SpawnActor<ADirectionalLight>(FVector::ZeroVector, FRotator(-35.0, 120.0, 0.0)))
+		{
+			Sun->GetLightComponent()->SetMobility(EComponentMobility::Movable);
+			Sun->GetLightComponent()->SetCastShadows(true);
+		}
+	}
+}
 
 bool USandSurfaceTestSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 {
@@ -58,13 +81,7 @@ void USandSurfaceTestSubsystem::OnWorldBeginPlay(UWorld& World)
 	Comp->RegisterComponent();
 	Comp->SetParticles(Pos);
 
-	// 템플릿 맵의 라이트는 정적(구운 그림자)이라 움직이는 물체가 그림자를 못 드리운다 — Movable 방향광을 비스듬히 하나 띄운다
-	if (ADirectionalLight* Sun = World.SpawnActor<ADirectionalLight>(FVector::ZeroVector, FRotator(-25.0, 120.0, 0.0)))
-	{
-		Sun->GetLightComponent()->SetMobility(EComponentMobility::Movable);
-		Sun->GetLightComponent()->SetCastShadows(true);
-		Sun->GetLightComponent()->SetIntensity(15.f);
-	}
+	EnsureMovableSun(World);
 
 	// -sandref: 비교용 엔진 큐브(50cm, Movable)를 같은 높이 옆에 — 그림자 · 조명 대조
 	if (FParse::Param(FCommandLine::Get(), TEXT("sandref")))
@@ -145,12 +162,7 @@ void USandSurfaceTestSubsystem::StartSim(UWorld& World)
 	FParse::Value(FCommandLine::Get(), TEXT("sandsmooth="), SimComp->SmoothIters);   // 평활화 반복 비교용
 	SimComp->SetSimSource(Sim->GetGpuSim(), DMin, DMax);
 
-	if (ADirectionalLight* Sun = World.SpawnActor<ADirectionalLight>(FVector::ZeroVector, FRotator(-25.0, 120.0, 0.0)))
-	{
-		Sun->GetLightComponent()->SetMobility(EComponentMobility::Movable);
-		Sun->GetLightComponent()->SetCastShadows(true);
-		Sun->GetLightComponent()->SetIntensity(15.f);
-	}
+	EnsureMovableSun(World);
 	const FVector Target = Box.GetCenter() + Offset;
 	const double Dist = Box.GetExtent().Size() * 3.2;
 	const FVector Eye = Target + FVector(-0.75, -0.55, 0.55).GetSafeNormal() * Dist;

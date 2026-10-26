@@ -758,7 +758,8 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 		const int32 I = PtIndex(x, y, z);
 		return Band[I] ? CellVert[I] : INDEX_NONE;
 	};
-	// 가중 라플라시안 평활화 (papers C13) — 법선은 평활화 전 장의 기울기 그대로 쓴다
+	// 가중 라플라시안 평활화 (papers C13) — 위치 먼저, 법선은 아래에서 같은 가중 · 이웃으로 (#20)
+	TArray<float> SmoothW; TArray<int32> SmoothNb;
 	if (P.SmoothIters > 0 && Out.Vertices.Num() > 0)
 	{
 		const double Ts0 = FPlatformTime::Seconds();
@@ -797,6 +798,7 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 			Swap(A, B);
 		}
 		Out.Vertices = MoveTemp(A);
+		SmoothW = MoveTemp(Wv); SmoothNb = MoveTemp(Nb);
 		Out.MsSmooth = (FPlatformTime::Seconds() - Ts0) * 1000.0;
 	}
 	// 법선 = −∇f (중앙 차분, 셀 모서리 기울기 평균)
@@ -817,6 +819,23 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 		}
 		Out.Normals[Vi] = (-Gsum).GetSafeNormal();
 	}, Out.Vertices.Num() < 4096);
+	if (SmoothW.Num() > 0)
+	{
+		// 법선도 같은 가중 · 이웃으로 평활화 후 정규화 (GPU VertFinalCS 와 같다)
+		const int32 NV = Out.Normals.Num();
+		TArray<FVector3f> A = Out.Normals, B; B.SetNumUninitialized(NV);
+		for (int32 It = 0; It < P.SmoothIters; ++It)
+		{
+			ParallelFor(NV, [&](int32 v)
+			{
+				FVector3f Sum(0.f); int32 Cnt = 0;
+				for (int32 k = 0; k < 6; ++k) { const int32 u = SmoothNb[v * 6 + k]; if (u != INDEX_NONE) { Sum += A[u]; ++Cnt; } }
+				B[v] = Cnt > 0 ? A[v] + SmoothW[v] * (Sum / (float)Cnt - A[v]) : A[v];
+			});
+			Swap(A, B);
+		}
+		for (int32 v = 0; v < NV; ++v) { Out.Normals[v] = A[v].GetSafeNormal(); }
+	}
 	// 면 — 부호가 바뀌는 격자 모서리마다, 그 모서리를 둘러싼 4 셀의 정점으로 사각형 (덩어리별 → 이어 붙이기)
 	TArray<TArray<int32>> ChunkTris; ChunkTris.SetNum(NumChunks);
 	ParallelFor(NumChunks, [&](int32 c)

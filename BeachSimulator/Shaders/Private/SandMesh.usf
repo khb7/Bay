@@ -773,14 +773,6 @@ void VertWriteCS(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID, uint GI 
 	const float L2 = dot(G, G);
 	const float3 Nrm = L2 > 1e-16f ? -G * rsqrt(L2) : float3(0.f, 0.f, 1.f);
 	NormalRW[Vi] = float4(L2 > 1e-16f ? Nrm : float3(0.f, 0.f, 0.f), 0.f);
-	if (bRenderOut)
-	{
-		// 접선 = 법선에 수직인 아무 방향 (모래는 이방 질감이 없다). TangentZ.w = +1 (종법선 부호)
-		const float3 Up = abs(Nrm.z) < 0.999f ? float3(0.f, 0.f, 1.f) : float3(1.f, 0.f, 0.f);
-		const float3 Tx = normalize(cross(Up, Nrm));
-		RTanRW[Vi * 2 + 0] = PackSNorm8(float4(Tx, 0.f));
-		RTanRW[Vi * 2 + 1] = PackSNorm8(float4(Nrm, 1.f));
-	}
 }
 
 uint VertAt(int3 C)
@@ -941,13 +933,30 @@ void SmoothCS(uint3 Tid : SV_DispatchThreadID)
 	SmoothDst[v] = float4(Cnt > 0.f ? A + VertWRO[v] * (Sum / Cnt - A) : A, 0.f);
 }
 
-// 최종 위치 → 화면 정점 버퍼 (평활화 여부와 무관하게 마지막에)
+// 최종 위치 · 법선 → 내려받기 버퍼 · 화면 버퍼. 법선은 평활화한 것을 정규화 (splashsurf 의 법선 평활화 — 위치만 평활화하면
+// 조명이 옛 혹 모양대로 비친다, #20)
+StructuredBuffer<float4>   NormalSrc;
+RWStructuredBuffer<float4> NormalDst;
+
 [numthreads(64, 1, 1)]
 void VertFinalCS(uint3 Tid : SV_DispatchThreadID)
 {
 	const uint v = Tid.x;
 	if (v >= min(CountersRO[3], MaxVerts)) { return; }
 	const float3 X = SmoothSrc[v].xyz;
-	if (bRenderOut) { RPosRW[v * 3 + 0] = X.x; RPosRW[v * 3 + 1] = X.y; RPosRW[v * 3 + 2] = X.z; }
+	const float3 N0 = NormalSrc[v].xyz;
+	const float L2 = dot(N0, N0);
+	const float3 Nrm = L2 > 1e-16f ? N0 * rsqrt(L2) : float3(0.f, 0.f, 0.f);
 	SmoothDst[v] = float4(X, 0.f);
+	NormalDst[v] = float4(Nrm, 0.f);
+	if (bRenderOut)
+	{
+		RPosRW[v * 3 + 0] = X.x; RPosRW[v * 3 + 1] = X.y; RPosRW[v * 3 + 2] = X.z;
+		// 접선 = 법선에 수직인 아무 방향 (모래는 이방 질감이 없다). TangentZ.w = +1 (종법선 부호)
+		const float3 Nz = L2 > 1e-16f ? Nrm : float3(0.f, 0.f, 1.f);
+		const float3 Up = abs(Nz.z) < 0.999f ? float3(0.f, 0.f, 1.f) : float3(1.f, 0.f, 0.f);
+		const float3 Tx = normalize(cross(Up, Nz));
+		RTanRW[v * 2 + 0] = PackSNorm8(float4(Tx, 0.f));
+		RTanRW[v * 2 + 1] = PackSNorm8(float4(Nz, 1.f));
+	}
 }

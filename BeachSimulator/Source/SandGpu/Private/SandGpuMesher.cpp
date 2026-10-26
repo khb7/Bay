@@ -115,6 +115,8 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandMeshParams, )
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<int>, VertNbRO)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, SmoothSrc)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, SmoothDst)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, NormalSrc)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, NormalDst)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, RPosRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, RTanRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, RIdxRW)
@@ -358,6 +360,7 @@ namespace
 
 			// 등위값 표본은 이웃 격자를 ±3 칸 돈다 (#18 — 커널 격자 · 셀 정렬 제거)
 			Stamp(6);
+			if (P.InteriorPhiFixed > 0.f) { AddClearUAVPass(GraphBuilder, T.SamplePhiRW, 0u); }   // 고정이면 표본 없음 — 마무리 패스가 묶인 버퍼를 읽으므로 비워 둔다 (RDG 검증)
 			if (P.InteriorPhiFixed <= 0.f) { AddMeshGroupPass<FSandMeshIsoSampleCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshIsoSample"), ShaderMap, T, FIntVector(NumSamples, 1, 1)); }   // 그룹 = 표본
 			Stamp(7);
 			AddMeshPass<FSandMeshFinalizeIsoCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshFinalizeIso"), ShaderMap, T, 1, 1);
@@ -465,12 +468,17 @@ namespace
 			if (RenderOut) { AddMeshPass<FSandMeshIndexTailCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshIndexTail"), ShaderMap, TB, MaxIndices, 64); }
 
 			// ── 가중 라플라시안 평활화 (papers C13) · 최종 정점 → 화면 버퍼 ──
+			FRDGBufferRef PosFinal = nullptr, NrmFinal = nullptr;
 			{
 				FSandMeshParams TS = TB;
 				TS.SmoothIters = P.SmoothIters;
 				TS.SmoothNorm = P.SmoothNorm;
 				// 이웃 격자 (G1-1) 로 다시 묶는다 — TB 는 커널 격자를 안 쓰므로 T 의 격자가 그대로다
-				FRDGBufferRef Tmp = MeshBuffer(GraphBuilder, TEXT("SandMesh.SmoothTmp"), sizeof(FVector4f), MaxVerts);
+				FRDGBufferRef Tmp  = MeshBuffer(GraphBuilder, TEXT("SandMesh.SmoothTmp"), sizeof(FVector4f), MaxVerts);
+				FRDGBufferRef NTmp = MeshBuffer(GraphBuilder, TEXT("SandMesh.SmoothNTmp"), sizeof(FVector4f), MaxVerts);
+				PosFinal = MeshBuffer(GraphBuilder, TEXT("SandMesh.PosFinal"), sizeof(FVector4f), MaxVerts);
+				NrmFinal = MeshBuffer(GraphBuilder, TEXT("SandMesh.NrmFinal"), sizeof(FVector4f), MaxVerts);
+				FRDGBufferRef Src = VertexB, NSrc = NormalB;
 				if (P.SmoothIters > 0)
 				{
 					FRDGBufferRef Wnn   = MeshBuffer(GraphBuilder, TEXT("SandMesh.Wnn"), sizeof(float), N);
@@ -482,25 +490,26 @@ namespace
 					TS.SmoothSrc = GraphBuilder.CreateSRV(VertexB);
 					AddMeshPass<FSandMeshWnnCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshWnn"), ShaderMap, TS, N, 64);
 					AddMeshPass<FSandMeshVertWeightCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshVertWeight"), ShaderMap, TS, MaxVerts, 64);
-					FRDGBufferRef Src = VertexB, Dst = Tmp;
-					for (int32 It = 0; It < P.SmoothIters; ++It)
+					// 위치 · 법선을 같은 가중 · 이웃으로 (SmoothCS 는 버퍼만 바꿔 두 번 쓴다)
+					auto Iterate = [&](FRDGBufferRef& Cur, FRDGBufferRef Other)
 					{
-						TS.SmoothSrc = GraphBuilder.CreateSRV(Src);
-						TS.SmoothDst = GraphBuilder.CreateUAV(Dst);
-						AddMeshPass<FSandMeshSmoothCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshSmooth"), ShaderMap, TS, MaxVerts, 64);
-						Swap(Src, Dst);
-					}
-					// 결과(Src) → VertexB · 화면 버퍼
-					TS.SmoothSrc = GraphBuilder.CreateSRV(Src);
-					TS.SmoothDst = GraphBuilder.CreateUAV(Src == VertexB ? Tmp : VertexB);
-					AddMeshPass<FSandMeshVertFinalCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshVertFinal"), ShaderMap, TS, MaxVerts, 64);
+						FRDGBufferRef Dst = Other;
+						for (int32 It = 0; It < P.SmoothIters; ++It)
+						{
+							TS.SmoothSrc = GraphBuilder.CreateSRV(Cur);
+							TS.SmoothDst = GraphBuilder.CreateUAV(Dst);
+							AddMeshPass<FSandMeshSmoothCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshSmooth"), ShaderMap, TS, MaxVerts, 64);
+							Swap(Cur, Dst);
+						}
+					};
+					Iterate(Src, Tmp);
+					Iterate(NSrc, NTmp);
 				}
-				else
-				{
-					TS.SmoothSrc = GraphBuilder.CreateSRV(VertexB);
-					TS.SmoothDst = GraphBuilder.CreateUAV(Tmp);
-					AddMeshPass<FSandMeshVertFinalCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshVertFinal"), ShaderMap, TS, MaxVerts, 64);
-				}
+				TS.SmoothSrc = GraphBuilder.CreateSRV(Src);
+				TS.NormalSrc = GraphBuilder.CreateSRV(NSrc);
+				TS.SmoothDst = GraphBuilder.CreateUAV(PosFinal);
+				TS.NormalDst = GraphBuilder.CreateUAV(NrmFinal);
+				AddMeshPass<FSandMeshVertFinalCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshVertFinal"), ShaderMap, TS, MaxVerts, 64);
 			}
 			Stamp(4);
 			if (RenderOut)
@@ -514,8 +523,8 @@ namespace
 			AddEnqueueCopyPass(GraphBuilder, &RB->Field, FieldB, NumPts * sizeof(float));
 			AddEnqueueCopyPass(GraphBuilder, &RB->BlockActive, BlockAct, NumBlocks * sizeof(uint32));
 			AddEnqueueCopyPass(GraphBuilder, &RB->BlockKStart, BlockKSt, (NumBlocks + 1) * sizeof(uint32));
-			AddEnqueueCopyPass(GraphBuilder, &RB->Vertex, VertexB, MaxVerts * sizeof(FVector4f));
-			AddEnqueueCopyPass(GraphBuilder, &RB->Normal, NormalB, MaxVerts * sizeof(FVector4f));
+			AddEnqueueCopyPass(GraphBuilder, &RB->Vertex, PosFinal, MaxVerts * sizeof(FVector4f));
+			AddEnqueueCopyPass(GraphBuilder, &RB->Normal, NrmFinal, MaxVerts * sizeof(FVector4f));
 			AddEnqueueCopyPass(GraphBuilder, &RB->Index, IndexB, MaxIndices * sizeof(uint32));
 			Out.NumBlocks = NumBlocks;
 
