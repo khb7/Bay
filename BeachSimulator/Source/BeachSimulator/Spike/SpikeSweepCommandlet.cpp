@@ -865,6 +865,8 @@ namespace
 				{
 					// G1 대조 (m1-plan-gpu.md §1-5): 기본은 핵심값, -meshdiff 면 입자별 최대 오차
 					FSandGpuMeshParams GP; GP.NeighborR = Pp.NeighborR; GP.Lambda = Pp.Lambda;
+					GP.Radius = Pp.Radius; GP.H = Pp.H; GP.Kr = Pp.Kr; GP.Kn = Pp.Kn; GP.Ks = Pp.Ks; GP.MinSigma = Pp.MinSigma;
+					GP.MaxStretch = Pp.MaxStretch; GP.IsoFrac = Pp.IsoFrac; GP.NEps = Pp.NEps; GP.KnRamp = Pp.KnRamp;
 					FSandGpuMeshResult G;
 					SandGpuMesh::Build(Pos, GP, G);
 					const int32 Np = Pos.Num();
@@ -883,6 +885,22 @@ namespace
 					Key([&](int32 i) { return (double)G.NeighborCount[i]; }, [&](int32 i) { return (double)G.Deviation[i]; }, [&](int32 i) { return (double)(G.CovA[i].X + G.CovA[i].W + G.CovB[i].Y); }, GSum, GSurf, GDev, GDiag);
 					UE_LOG(LogSpikeSweep, Display, TEXT("   GPU G1-1 %s: 이웃 합 CPU %.0f / GPU %.0f · 표면 입자 %d / %d · 치우침 평균 %.5f / %.5f · 공분산 대각 평균 %.4f / %.4f · GPU 벽시계 %.1f ms"),
 						*Scene, CSum, GSum, CSurf, GSurf, CDev, GDev, CDiag, GDiag, G.WallMs);
+					UE_LOG(LogSpikeSweep, Display, TEXT("   GPU G1-2 %s: k_s CPU %.6f / GPU %.6f · 내부 φ %.5f / %.5f · Iso %.5f / %.5f · (GPU 내부 %d · 표본 %d · 최대 이웃 %d)"),
+						*Scene, M.Ks, G.Ks, M.InteriorPhi, G.InteriorPhi, M.Iso, G.Iso, G.NumInteriorKs, G.NumIsoSamples, G.MaxNeighborCount);
+					if (bMeshDiff)
+					{
+						float MaxG = 0.f, MaxDetRel = 0.f, MaxExt = 0.f; int32 WorstG = -1;
+						for (int32 i = 0; i < Np; ++i)
+						{
+							const FVector4f* Kg = &G.Kernel[i * 4];
+							const float Gg[9] = { Kg[0].X, Kg[0].Y, Kg[0].Z, Kg[1].X, Kg[1].Y, Kg[1].Z, Kg[2].X, Kg[2].Y, Kg[2].Z };
+							for (int32 k = 0; k < 9; ++k) { const float Dg = FMath::Abs(M.KernelG[i * 9 + k] - Gg[k]); if (Dg > MaxG) { MaxG = Dg; WorstG = i; } }
+							MaxDetRel = FMath::Max(MaxDetRel, FMath::Abs(M.KernelDet[i] - Kg[0].W) / FMath::Max(1e-12f, M.KernelDet[i]));
+							MaxExt = FMath::Max(MaxExt, (M.KernelExt[i] - FVector3f(Kg[3])).GetAbsMax());
+						}
+						UE_LOG(LogSpikeSweep, Display, TEXT("   GPU G1-2 차이 %s: G 최대 %.2e (입자 %d, 이웃 %d) · DetG 상대 최대 %.2e · Ext 최대 %.2e cm"),
+							*Scene, MaxG, WorstG, WorstG >= 0 ? M.NeighborCount[WorstG] : -1, MaxDetRel, MaxExt);
+					}
 					if (bMeshDiff)
 					{
 						int32 NDiff = 0; float MaxDev = 0.f, MaxSm = 0.f, MaxCov = 0.f;

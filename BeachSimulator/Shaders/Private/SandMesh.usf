@@ -1,5 +1,7 @@
 // M1 GPU 메시화 (m1-plan-gpu.md) — 입자 → 메시를 컴퓨트로. CPU 판(FSandSurfaceBuilder, SandSurface.cpp)과 단계마다 1:1.
 //
+// G1-2 커널 · k_s · 등위값: MaxCountCS → EigenCS(+ 내부 σ1 부분합) → FinalizeKsCS → KernelCS → 커널 격자(x̄, 셀 = 지지) → IsoSampleCS → FinalizeIsoCS
+//
 // G1-1 이웃:
 //   CellKeyCS        입자 → 셀 키(셀 = 이웃 반경 r_i) · 셀 안 순번(atomic)
 //   Scan(CellCount)  → CellStart
@@ -8,15 +10,33 @@
 
 #include "/Engine/Public/Platform.ush"
 
-#define SCAN_GROUP 1024          // 그룹당 2048 원소 (SandFrame.usf 와 같은 스캔)
+#define SCAN_GROUP 1024
+#define SAND_PI 3.1415926535897932f   // CPU 의 PI 와 같은 값          // 그룹당 2048 원소 (SandFrame.usf 와 같은 스캔)
 
 uint  NumParticles;
 uint  TableSize;                 // 셀 해시 표 크기 (2의 거듭제곱)
 uint  ScanCount;
 float NeighborR;                 // r_i — 셀 크기이기도 하다
 float Lambda;                    // 중심 다듬기
+float GridCell;                  // 지금 패스가 쓰는 격자의 셀 (이웃 격자 = r_i, 커널 격자 = 지지 반경)
+
+// G1-2 커널 (CPU ③ · 등위값)
+float H;
+float Kr;
+uint  NEps;
+float Kn;
+uint  KnRamp;
+float KsFixed;                   // > 0 이면 그대로, 0 이면 내부 σ1 평균으로 자동
+float MinSigma;
+float MaxStretch;
+float PVol;                      // 입자 부피 (4/3)πR³
+float IsoFrac;
+uint  SampleStep;                // 등위값 표본 간격 max(1, N/2000) — CPU 와 같은 규칙
+uint  NumSamples;                // ceil(N / SampleStep)
+uint  NumPartials;
 
 StructuredBuffer<float4>   PosRO;
+StructuredBuffer<float4>   GridPosRO;        // 격자에 넣을 점 (이웃 격자 = 입자, 커널 격자 = x̄)
 
 RWStructuredBuffer<uint>   CellKeyRW;
 StructuredBuffer<uint>     CellKeyRO;
@@ -32,6 +52,25 @@ RWStructuredBuffer<float>  DevRW;            // |Σ(x_j − x_i)| / (N · r_i)
 RWStructuredBuffer<float4> SmoothedRW;       // x̄_i
 RWStructuredBuffer<float4> CovARW;           // xx xy xz yy
 RWStructuredBuffer<float4> CovBRW;           // yz zz
+
+StructuredBuffer<uint>     NCountRO;
+StructuredBuffer<float4>   SmoothedRO;
+StructuredBuffer<float4>   CovARO;
+StructuredBuffer<float4>   CovBRO;
+RWStructuredBuffer<uint>   CountersRW;       // [0] 최대 이웃 수
+StructuredBuffer<uint>     CountersRO;
+RWStructuredBuffer<float4> EigValRW;         // σ1 ≥ σ2 ≥ σ3 (≥ 0)
+StructuredBuffer<float4>   EigValRO;
+RWStructuredBuffer<float4> EigVecRW;         // 입자당 3 개: 행 r = (R[r][0], R[r][1], R[r][2]) — 열 = 고유벡터
+StructuredBuffer<float4>   EigVecRO;
+RWStructuredBuffer<float2> PartialRW;        // 그룹별 (Σσ1, 수)
+StructuredBuffer<float2>   PartialRO;
+RWStructuredBuffer<float>  ScalarsRW;        // [0] k_s [1] 내부 φ [2] Iso [3] 내부 수 [4] 표본 수
+StructuredBuffer<float>    ScalarsRO;
+RWStructuredBuffer<float4> KernelRW;         // 입자당 4 개: (G0 G1 G2 DetG) (G3 G4 G5 0) (G6 G7 G8 0) (Ext 0)
+StructuredBuffer<float4>   KernelRO;
+RWStructuredBuffer<float2> SamplePhiRW;      // 표본별 (φ, 내부면 1)
+StructuredBuffer<float2>   SamplePhiRO;
 
 StructuredBuffer<uint>     ScanIn;
 RWStructuredBuffer<uint>   ScanOut;          // ScanCount + 1 (마지막 = 총합)
@@ -121,7 +160,7 @@ void CellKeyCS(uint3 Tid : SV_DispatchThreadID)
 {
 	const uint i = Tid.x;
 	if (i >= NumParticles) { return; }
-	const uint Key = HashCell(CellOf(PosRO[i].xyz, NeighborR), TableSize);
+	const uint Key = HashCell(CellOf(GridPosRO[i].xyz, GridCell), TableSize);
 	CellKeyRW[i] = Key;
 	uint Slot;
 	InterlockedAdd(CellCountRW[Key], 1u, Slot);
@@ -136,10 +175,10 @@ void ScatterCS(uint3 Tid : SV_DispatchThreadID)
 	SortedIdxRW[CellStart[CellKeyRO[i]] + CellSlotRO[i]] = i;
 }
 
-// 27 칸 순회 (자기 포함) — 해시 충돌로 같은 버킷을 두 번 도는 것만 막는다
+// 27 칸 순회 (자기 포함). 지금 묶인 격자(GridCell · TableSize · CellStart · SortedIdxRO)를 돈다 — 해시 충돌로 같은 버킷을 두 번 도는 것만 막는다
 #define FOR_NEIGHBORS_ALL(P, BODY) \
 { \
-	const int3 C0 = CellOf(P, NeighborR); \
+	const int3 C0 = CellOf(P, GridCell); \
 	uint Keys[27]; uint NumKeys = 0; \
 	for (int dz = -1; dz <= 1; ++dz) for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) \
 	{ \
@@ -203,4 +242,192 @@ void NeighborStatsCS(uint3 Tid : SV_DispatchThreadID)
 	})
 	CovARW[i] = float4(A0, A1, A2, A3) / Ws;
 	CovBRW[i] = float4(A4, A5, 0.f, 0.f) / Ws;
+}
+
+// ------------------------------------------------------------------------------------------------
+// G1-2 커널 (CPU ③) · k_s · 등위값
+
+bool IsInteriorP(uint Cnt, uint MaxCount)
+{
+	const uint InteriorMin = max(NEps + 1u, (uint)(0.85f * (float)MaxCount));
+	return MaxCount > NEps && Cnt >= InteriorMin;
+}
+
+[numthreads(64, 1, 1)]
+void MaxCountCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x;
+	if (i >= NumParticles) { return; }
+	InterlockedMax(CountersRW[0], NCountRO[i]);
+}
+
+// 대칭 3×3 야코비 — CPU Eigen3 과 같은 순서 · 같은 문턱
+void Eigen3(inout float A[3][3], out float OutVal[3], out float OutVec[3][3])
+{
+	float V[3][3] = { {1,0,0},{0,1,0},{0,0,1} };
+	for (int Sweep = 0; Sweep < 12; ++Sweep)
+	{
+		const float OffD = abs(A[0][1]) + abs(A[0][2]) + abs(A[1][2]);
+		if (OffD < 1e-12f) { break; }
+		for (int p = 0; p < 2; ++p)
+		for (int q = p + 1; q < 3; ++q)
+		{
+			if (abs(A[p][q]) < 1e-14f) { continue; }
+			const float Theta = (A[q][q] - A[p][p]) / (2.f * A[p][q]);
+			const float T = (Theta >= 0.f ? 1.f : -1.f) / (abs(Theta) + sqrt(Theta * Theta + 1.f));
+			const float C = 1.f / sqrt(T * T + 1.f), S = T * C;
+			for (int k = 0; k < 3; ++k) { const float Akp = A[k][p], Akq = A[k][q]; A[k][p] = C * Akp - S * Akq; A[k][q] = S * Akp + C * Akq; }
+			for (int k2 = 0; k2 < 3; ++k2) { const float Apk = A[p][k2], Aqk = A[q][k2]; A[p][k2] = C * Apk - S * Aqk; A[q][k2] = S * Apk + C * Aqk; }
+			for (int k3 = 0; k3 < 3; ++k3) { const float Vkp = V[k3][p], Vkq = V[k3][q]; V[k3][p] = C * Vkp - S * Vkq; V[k3][q] = S * Vkp + C * Vkq; }
+		}
+	}
+	int Ord[3] = { 0, 1, 2 };
+	if (A[Ord[0]][Ord[0]] < A[Ord[1]][Ord[1]]) { const int t = Ord[0]; Ord[0] = Ord[1]; Ord[1] = t; }
+	if (A[Ord[1]][Ord[1]] < A[Ord[2]][Ord[2]]) { const int t = Ord[1]; Ord[1] = Ord[2]; Ord[2] = t; }
+	if (A[Ord[0]][Ord[0]] < A[Ord[1]][Ord[1]]) { const int t = Ord[0]; Ord[0] = Ord[1]; Ord[1] = t; }
+	for (int k4 = 0; k4 < 3; ++k4)
+	{
+		OutVal[k4] = A[Ord[k4]][Ord[k4]];
+		for (int r = 0; r < 3; ++r) { OutVec[r][k4] = V[r][Ord[k4]]; }
+	}
+}
+
+groupshared float2 KsShared[64];
+
+// 고유분해 + 그룹별 내부 σ1 부분합 (k_s 자동값)
+[numthreads(64, 1, 1)]
+void EigenCS(uint3 Tid : SV_DispatchThreadID, uint3 GTid : SV_GroupThreadID, uint3 Gid : SV_GroupID)
+{
+	const uint i = Tid.x;
+	float2 Part = 0.f;
+	if (i < NumParticles)
+	{
+		const float4 Ca = CovARO[i], Cb = CovBRO[i];
+		float A[3][3] = { { Ca.x, Ca.y, Ca.z }, { Ca.y, Ca.w, Cb.x }, { Ca.z, Cb.x, Cb.y } };
+		float L[3], R[3][3];
+		Eigen3(A, L, R);
+		const float3 Lv = max(float3(L[0], L[1], L[2]), 0.f);
+		EigValRW[i] = float4(Lv, 0.f);
+		for (int r = 0; r < 3; ++r) { EigVecRW[i * 3 + r] = float4(R[r][0], R[r][1], R[r][2], 0.f); }
+		if (IsInteriorP(NCountRO[i], CountersRO[0]) && Lv.x > 0.f) { Part = float2(Lv.x, 1.f); }
+	}
+	KsShared[GTid.x] = Part;
+	GroupMemoryBarrierWithGroupSync();
+	for (uint Sz = 32; Sz > 0; Sz >>= 1)
+	{
+		if (GTid.x < Sz) { KsShared[GTid.x] += KsShared[GTid.x + Sz]; }
+		GroupMemoryBarrierWithGroupSync();
+	}
+	if (GTid.x == 0) { PartialRW[Gid.x] = KsShared[0]; }
+}
+
+[numthreads(1, 1, 1)]
+void FinalizeKsCS()
+{
+	float Sum = 0.f, Cnt = 0.f;
+	for (uint g = 0; g < NumPartials; ++g) { Sum += PartialRO[g].x; Cnt += PartialRO[g].y; }
+	// 내부가 없으면 이론값 1/(0.15 r²) — CPU 와 같다
+	ScalarsRW[0] = KsFixed > 0.f ? KsFixed : (Cnt > 0.f ? Cnt / Sum : 1.f / (0.15f * NeighborR * NeighborR));
+	ScalarsRW[3] = Cnt;
+}
+
+// 커널 G = (1/h) R Σ̃⁻¹ Rᵀ · DetG · 지지 반폭 Ext (CPU ③ 이방성)
+[numthreads(64, 1, 1)]
+void KernelCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x;
+	if (i >= NumParticles) { return; }
+	const float Ks = ScalarsRO[0];
+	const float3 Lv = EigValRO[i].xyz;
+	const uint Cnt = NCountRO[i];
+	float S[3];
+	if (Cnt > NEps)
+	{
+		S[0] = Ks * Lv.x;
+		S[1] = Ks * max(Lv.y, Lv.x / Kr);
+		S[2] = Ks * max(Lv.z, Lv.x / Kr);
+	}
+	else
+	{
+		const float KnN = KnRamp > 0u ? Kn + (1.f - Kn) * min(1.f, (float)Cnt / (float)KnRamp) : Kn;
+		S[0] = KnN; S[1] = KnN; S[2] = KnN;
+	}
+	for (int k = 0; k < 3; ++k) { S[k] = clamp(S[k], max(1e-3f, MinSigma), MaxStretch); }
+	float R[3][3];
+	for (int r = 0; r < 3; ++r) { const float4 Row = EigVecRO[i * 3 + r]; R[r][0] = Row.x; R[r][1] = Row.y; R[r][2] = Row.z; }
+	float G[9];
+	for (int r2 = 0; r2 < 3; ++r2)
+	for (int c = 0; c < 3; ++c)
+	{
+		float V = 0.f;
+		for (int k2 = 0; k2 < 3; ++k2) { V += R[r2][k2] * (1.f / S[k2]) * R[c][k2]; }
+		G[r2 * 3 + c] = V / H;
+	}
+	const float DetG = 1.f / (H * H * H * S[0] * S[1] * S[2]);
+	float3 Ext;
+	for (int a = 0; a < 3; ++a)
+	{
+		float S2 = 0.f;
+		for (int c2 = 0; c2 < 3; ++c2)
+		{
+			float V2 = 0.f;
+			for (int k3 = 0; k3 < 3; ++k3) { V2 += R[a][k3] * S[k3] * R[c2][k3]; }
+			S2 += (V2 * H) * (V2 * H);
+		}
+		Ext[a] = 2.f * sqrt(S2);
+	}
+	KernelRW[i * 4 + 0] = float4(G[0], G[1], G[2], DetG);
+	KernelRW[i * 4 + 1] = float4(G[3], G[4], G[5], 0.f);
+	KernelRW[i * 4 + 2] = float4(G[6], G[7], G[8], 0.f);
+	KernelRW[i * 4 + 3] = float4(Ext, 0.f);
+}
+
+// B-cubic (Yu & Turk), 지지 q < 2, 3D 정규화 1/π
+float BCubic(float Q)
+{
+	if (Q >= 2.f) { return 0.f; }
+	if (Q < 1.f) { return (1.f / SAND_PI) * (1.f - 1.5f * Q * Q + 0.75f * Q * Q * Q); }
+	const float T = 2.f - Q;
+	return (1.f / SAND_PI) * 0.25f * T * T * T;
+}
+
+// 점 X 의 φ — 커널 격자(셀 = 지지 반경, 점 = x̄)를 돈다
+float EvalField(float3 X)
+{
+	float Phi = 0.f;
+	FOR_NEIGHBORS_ALL(X,
+	{
+		const float4 K0 = KernelRO[j * 4 + 0]; const float4 K1 = KernelRO[j * 4 + 1]; const float4 K2 = KernelRO[j * 4 + 2];   /* 매크로 인자라 쉼표 금지 */
+		const float3 R = X - SmoothedRO[j].xyz;
+		float3 GR; GR.x = dot(K0.xyz, R); GR.y = dot(K1.xyz, R); GR.z = dot(K2.xyz, R);
+		Phi += PVol * K0.w * BCubic(length(GR));
+	})
+	return Phi;
+}
+
+// 등위값 표본: 후보 k → 입자 k·SampleStep. 내부면 φ (CPU 는 앞에서부터 내부 2000 개)
+[numthreads(64, 1, 1)]
+void IsoSampleCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint k = Tid.x;
+	if (k >= NumSamples) { return; }
+	const uint i = k * SampleStep;
+	if (i >= NumParticles || !IsInteriorP(NCountRO[i], CountersRO[0])) { SamplePhiRW[k] = float2(0.f, 0.f); return; }
+	SamplePhiRW[k] = float2(EvalField(PosRO[i].xyz), 1.f);
+}
+
+[numthreads(1, 1, 1)]
+void FinalizeIsoCS()
+{
+	float Sum = 0.f; uint Cnt = 0;
+	for (uint k = 0; k < NumSamples && Cnt < 2000u; ++k)
+	{
+		const float2 V = SamplePhiRO[k];
+		if (V.y > 0.f) { Sum += V.x; ++Cnt; }
+	}
+	// 내부가 없으면(얇은 벽 · 부스러기) 고체 분율 기준값 0.6 — CPU 와 같다
+	const float InteriorPhi = Cnt > 0u ? Sum / (float)Cnt : 0.6f;
+	ScalarsRW[1] = InteriorPhi;
+	ScalarsRW[2] = InteriorPhi * IsoFrac;
+	ScalarsRW[4] = (float)Cnt;
 }

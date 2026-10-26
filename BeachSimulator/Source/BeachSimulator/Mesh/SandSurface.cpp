@@ -370,6 +370,12 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 			Kr.Ext = FVector3f(2.f * P.H);
 		}
 	});
+	Out.KernelG.SetNumUninitialized(N * 9); Out.KernelDet.SetNumUninitialized(N); Out.KernelExt.SetNumUninitialized(N);
+	for (int32 i = 0; i < N; ++i)
+	{
+		for (int32 k = 0; k < 9; ++k) { Out.KernelG[i * 9 + k] = K[i].G[k]; }
+		Out.KernelDet[i] = K[i].DetG; Out.KernelExt[i] = K[i].Ext;
+	}
 	const double T2 = FPlatformTime::Seconds();
 
 	// ── ④ 띠 격자 · ⑤ 장 ──

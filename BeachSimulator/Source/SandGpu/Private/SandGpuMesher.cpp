@@ -16,8 +16,23 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandMeshParams, )
 	SHADER_PARAMETER(uint32, ScanCount)
 	SHADER_PARAMETER(float, NeighborR)
 	SHADER_PARAMETER(float, Lambda)
+	SHADER_PARAMETER(float, GridCell)
+	SHADER_PARAMETER(float, H)
+	SHADER_PARAMETER(float, Kr)
+	SHADER_PARAMETER(uint32, NEps)
+	SHADER_PARAMETER(float, Kn)
+	SHADER_PARAMETER(uint32, KnRamp)
+	SHADER_PARAMETER(float, KsFixed)
+	SHADER_PARAMETER(float, MinSigma)
+	SHADER_PARAMETER(float, MaxStretch)
+	SHADER_PARAMETER(float, PVol)
+	SHADER_PARAMETER(float, IsoFrac)
+	SHADER_PARAMETER(uint32, SampleStep)
+	SHADER_PARAMETER(uint32, NumSamples)
+	SHADER_PARAMETER(uint32, NumPartials)
 
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, PosRO)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, GridPosRO)
 
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, CellKeyRW)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, CellKeyRO)
@@ -33,6 +48,25 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandMeshParams, )
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, SmoothedRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, CovARW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, CovBRW)
+
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, NCountRO)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, SmoothedRO)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, CovARO)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, CovBRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, CountersRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, CountersRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, EigValRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, EigValRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, EigVecRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, EigVecRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float2>, PartialRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float2>, PartialRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, ScalarsRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, ScalarsRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, KernelRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, KernelRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float2>, SamplePhiRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float2>, SamplePhiRO)
 
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ScanIn)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ScanOut)
@@ -60,6 +94,12 @@ SAND_MESH_SHADER(FSandMeshScanAddCS,      "ScanAddCS")
 SAND_MESH_SHADER(FSandMeshCellKeyCS,      "CellKeyCS")
 SAND_MESH_SHADER(FSandMeshScatterCS,      "ScatterCS")
 SAND_MESH_SHADER(FSandMeshNeighborStatsCS, "NeighborStatsCS")
+SAND_MESH_SHADER(FSandMeshMaxCountCS,     "MaxCountCS")
+SAND_MESH_SHADER(FSandMeshEigenCS,        "EigenCS")
+SAND_MESH_SHADER(FSandMeshFinalizeKsCS,   "FinalizeKsCS")
+SAND_MESH_SHADER(FSandMeshKernelCS,       "KernelCS")
+SAND_MESH_SHADER(FSandMeshIsoSampleCS,    "IsoSampleCS")
+SAND_MESH_SHADER(FSandMeshFinalizeIsoCS,  "FinalizeIsoCS")
 
 #undef SAND_MESH_SHADER
 
@@ -115,6 +155,9 @@ namespace
 		FRHIGPUBufferReadback Smoothed{ TEXT("SandMesh.Smoothed") };
 		FRHIGPUBufferReadback CovA{ TEXT("SandMesh.CovA") };
 		FRHIGPUBufferReadback CovB{ TEXT("SandMesh.CovB") };
+		FRHIGPUBufferReadback Kernel{ TEXT("SandMesh.Kernel") };
+		FRHIGPUBufferReadback Scalars{ TEXT("SandMesh.Scalars") };
+		FRHIGPUBufferReadback Counters{ TEXT("SandMesh.Counters") };
 	};
 
 	void BuildRenderThread(FRHICommandListImmediate& RHICmdList, const TArray<FVector4f>& Pos4, const FSandGpuMeshParams& P, FSandGpuMeshResult& Out)
@@ -144,7 +187,16 @@ namespace
 			T.TableSize = TableSize;
 			T.NeighborR = P.NeighborR;
 			T.Lambda = P.Lambda;
+			T.GridCell = P.NeighborR;
+			T.H = P.H; T.Kr = P.Kr; T.NEps = P.NEps; T.Kn = P.Kn; T.KnRamp = P.KnRamp; T.KsFixed = P.Ks;
+			T.MinSigma = P.MinSigma; T.MaxStretch = P.MaxStretch; T.IsoFrac = P.IsoFrac;
+			T.PVol = (4.f / 3.f) * PI * P.Radius * P.Radius * P.Radius;
+			const int32 SampleStep = FMath::Max(1, N / 2000);
+			const int32 NumSamples = FMath::DivideAndRoundUp(N, SampleStep);
+			const int32 NumPartials = FMath::DivideAndRoundUp(N, 64);
+			T.SampleStep = SampleStep; T.NumSamples = NumSamples; T.NumPartials = NumPartials;
 			T.PosRO = GraphBuilder.CreateSRV(Pos);
+			T.GridPosRO = T.PosRO;
 			T.CellKeyRW = GraphBuilder.CreateUAV(CellKey);
 			T.CellKeyRO = GraphBuilder.CreateSRV(CellKey);
 			T.CellSlotRW = GraphBuilder.CreateUAV(CellSlot);
@@ -165,11 +217,72 @@ namespace
 			AddMeshPass<FSandMeshScatterCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshScatter"), ShaderMap, T, N, 64);
 			AddMeshPass<FSandMeshNeighborStatsCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshNeighborStats"), ShaderMap, T, N, 64);
 
+			// ── G1-2 커널 · k_s · 등위값 ──
+			FRDGBufferRef Counters  = MeshBuffer(GraphBuilder, TEXT("SandMesh.Counters"), sizeof(uint32), 4);
+			FRDGBufferRef EigVal    = MeshBuffer(GraphBuilder, TEXT("SandMesh.EigVal"), sizeof(FVector4f), N);
+			FRDGBufferRef EigVec    = MeshBuffer(GraphBuilder, TEXT("SandMesh.EigVec"), sizeof(FVector4f), 3 * N);
+			FRDGBufferRef Partial   = MeshBuffer(GraphBuilder, TEXT("SandMesh.Partial"), sizeof(FVector2f), NumPartials);
+			FRDGBufferRef Scalars   = MeshBuffer(GraphBuilder, TEXT("SandMesh.Scalars"), sizeof(float), 8);
+			FRDGBufferRef Kernel    = MeshBuffer(GraphBuilder, TEXT("SandMesh.Kernel"), sizeof(FVector4f), 4 * N);
+			FRDGBufferRef SamplePhi = MeshBuffer(GraphBuilder, TEXT("SandMesh.SamplePhi"), sizeof(FVector2f), NumSamples);
+			T.NCountRO = GraphBuilder.CreateSRV(NCount);
+			T.SmoothedRO = GraphBuilder.CreateSRV(Smoothed);
+			T.CovARO = GraphBuilder.CreateSRV(CovA);
+			T.CovBRO = GraphBuilder.CreateSRV(CovB);
+			T.CountersRW = GraphBuilder.CreateUAV(Counters);
+			T.CountersRO = GraphBuilder.CreateSRV(Counters);
+			T.EigValRW = GraphBuilder.CreateUAV(EigVal);
+			T.EigValRO = GraphBuilder.CreateSRV(EigVal);
+			T.EigVecRW = GraphBuilder.CreateUAV(EigVec);
+			T.EigVecRO = GraphBuilder.CreateSRV(EigVec);
+			T.PartialRW = GraphBuilder.CreateUAV(Partial);
+			T.PartialRO = GraphBuilder.CreateSRV(Partial);
+			T.ScalarsRW = GraphBuilder.CreateUAV(Scalars);
+			T.ScalarsRO = GraphBuilder.CreateSRV(Scalars);
+			T.KernelRW = GraphBuilder.CreateUAV(Kernel);
+			T.KernelRO = GraphBuilder.CreateSRV(Kernel);
+			T.SamplePhiRW = GraphBuilder.CreateUAV(SamplePhi);
+			T.SamplePhiRO = GraphBuilder.CreateSRV(SamplePhi);
+			AddClearUAVPass(GraphBuilder, T.CountersRW, 0u);
+			AddClearUAVPass(GraphBuilder, T.ScalarsRW, 0u);
+			AddMeshPass<FSandMeshMaxCountCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshMaxCount"), ShaderMap, T, N, 64);
+			AddMeshPass<FSandMeshEigenCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshEigen"), ShaderMap, T, N, 64);
+			AddMeshPass<FSandMeshFinalizeKsCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshFinalizeKs"), ShaderMap, T, 1, 1);
+			AddMeshPass<FSandMeshKernelCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshKernel"), ShaderMap, T, N, 64);
+
+			// 커널 격자 — 점 = x̄, 셀 = 장 지지 반경 (CPU 의 KGrid)
+			const float Support = 2.f * P.H * P.MaxStretch;
+			FRDGBufferRef KCellKey   = MeshBuffer(GraphBuilder, TEXT("SandMesh.KCellKey"), sizeof(uint32), N);
+			FRDGBufferRef KCellSlot  = MeshBuffer(GraphBuilder, TEXT("SandMesh.KCellSlot"), sizeof(uint32), N);
+			FRDGBufferRef KCellCount = MeshBuffer(GraphBuilder, TEXT("SandMesh.KCellCount"), sizeof(uint32), TableSize);
+			FRDGBufferRef KCellStart = MeshBuffer(GraphBuilder, TEXT("SandMesh.KCellStart"), sizeof(uint32), TableSize + 1);
+			FRDGBufferRef KSortedIdx = MeshBuffer(GraphBuilder, TEXT("SandMesh.KSortedIdx"), sizeof(uint32), N);
+			FSandMeshParams TK = T;
+			TK.GridCell = Support;
+			TK.GridPosRO = T.SmoothedRO;
+			TK.CellKeyRW = GraphBuilder.CreateUAV(KCellKey);
+			TK.CellKeyRO = GraphBuilder.CreateSRV(KCellKey);
+			TK.CellSlotRW = GraphBuilder.CreateUAV(KCellSlot);
+			TK.CellSlotRO = GraphBuilder.CreateSRV(KCellSlot);
+			TK.CellCountRW = GraphBuilder.CreateUAV(KCellCount);
+			TK.CellStart = GraphBuilder.CreateSRV(KCellStart);
+			TK.SortedIdxRW = GraphBuilder.CreateUAV(KSortedIdx);
+			TK.SortedIdxRO = GraphBuilder.CreateSRV(KSortedIdx);
+			AddClearUAVPass(GraphBuilder, TK.CellCountRW, 0u);
+			AddMeshPass<FSandMeshCellKeyCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshKCellKey"), ShaderMap, TK, N, 64);
+			AddMeshScan(GraphBuilder, ShaderMap, TK, KCellCount, KCellStart, TableSize);
+			AddMeshPass<FSandMeshScatterCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshKScatter"), ShaderMap, TK, N, 64);
+			AddMeshPass<FSandMeshIsoSampleCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshIsoSample"), ShaderMap, TK, NumSamples, 64);
+			AddMeshPass<FSandMeshFinalizeIsoCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshFinalizeIso"), ShaderMap, TK, 1, 1);
+
 			AddEnqueueCopyPass(GraphBuilder, &RB->NCount, NCount, N * sizeof(uint32));
 			AddEnqueueCopyPass(GraphBuilder, &RB->Dev, Dev, N * sizeof(float));
 			AddEnqueueCopyPass(GraphBuilder, &RB->Smoothed, Smoothed, N * sizeof(FVector4f));
 			AddEnqueueCopyPass(GraphBuilder, &RB->CovA, CovA, N * sizeof(FVector4f));
 			AddEnqueueCopyPass(GraphBuilder, &RB->CovB, CovB, N * sizeof(FVector4f));
+			AddEnqueueCopyPass(GraphBuilder, &RB->Kernel, Kernel, 4 * N * sizeof(FVector4f));
+			AddEnqueueCopyPass(GraphBuilder, &RB->Scalars, Scalars, 8 * sizeof(float));
+			AddEnqueueCopyPass(GraphBuilder, &RB->Counters, Counters, 4 * sizeof(uint32));
 			GraphBuilder.Execute();
 		}
 		RHICmdList.SubmitAndBlockUntilGPUIdle();
@@ -178,6 +291,11 @@ namespace
 		Fetch(RB->Smoothed, Out.Smoothed, N);
 		Fetch(RB->CovA, Out.CovA, N);
 		Fetch(RB->CovB, Out.CovB, N);
+		Fetch(RB->Kernel, Out.Kernel, 4 * N);
+		TArray<float> Sc; Fetch(RB->Scalars, Sc, 8);
+		TArray<uint32> Ct; Fetch(RB->Counters, Ct, 4);
+		Out.Ks = Sc[0]; Out.InteriorPhi = Sc[1]; Out.Iso = Sc[2]; Out.NumInteriorKs = (int32)Sc[3]; Out.NumIsoSamples = (int32)Sc[4];
+		Out.MaxNeighborCount = (int32)Ct[0];
 		// 커맨드릿은 프레임 틱이 없다 — RDG 풀 · RHI 프레임을 직접 넘긴다 (SandGpuSolver.cpp EndGpuFrame 과 같은 이유)
 		FRDGBuilder::TickPoolElements();
 		RHICmdList.EndFrame();

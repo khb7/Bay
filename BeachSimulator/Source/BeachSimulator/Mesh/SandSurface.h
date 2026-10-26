@@ -51,6 +51,9 @@ struct FSandSurfaceMesh
 	TArray<float> Deviation;     // |Σ(x_j − x_i)| / (N·r_i)
 	TArray<FVector3f> Smoothed;  // x̄_i (GPU 대조용)
 	TArray<float> Cov;           // 입자당 6: xx xy xz yy yz zz (GPU 대조용)
+	TArray<float> KernelG;       // 입자당 9 (행 우선) (GPU 대조용)
+	TArray<float> KernelDet;
+	TArray<FVector3f> KernelExt;
 
 	// 부분 영역 뿌리기 원인 측정 (m1-log #8)
 	struct FSplatProfile
