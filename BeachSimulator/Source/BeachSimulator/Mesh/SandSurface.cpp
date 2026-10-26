@@ -181,20 +181,22 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 	NGrid.Build(Pos, Min - FVector3f(Pad), Max + FVector3f(Pad), P.NeighborR);   // 이웃 반경 = 셀 (20cm 셀은 셀당 입자가 8 배 — #3)
 
 	TArray<int32> NCount; NCount.SetNumZeroed(N);
+	TArray<float> Dev; Dev.SetNumZeroed(N);    // 이웃 치우침 (C14)
 	TArray<FVector3f> Smoothed = Pos;          // x̄_i
 	TArray<float> Cov; Cov.SetNumZeroed(N * 6); // xx xy xz yy yz zz
 	ParallelFor(N, [&](int32 i)
 	{
 		const FVector3f Xi = Pos[i];
-		double Ws = 0.0; FVector3d Mean(0.0); int32 Cnt = 0;
+		double Ws = 0.0; FVector3d Mean(0.0); FVector3f Off(0.f); int32 Cnt = 0;
 		NGrid.ForNeighbors(Xi, P.NeighborR, [&](int32 j)
 		{
 			const float D = (Pos[j] - Xi).Size();
 			if (D >= P.NeighborR) { return; }
 			const double W = 1.0 - FMath::Pow(D / P.NeighborR, 3.f);
-			Ws += W; Mean += W * FVector3d(Pos[j]); ++Cnt;
+			Ws += W; Mean += W * FVector3d(Pos[j]); Off += Pos[j] - Xi; ++Cnt;
 		});
 		NCount[i] = Cnt - 1;   // 자기 자신 제외
+		Dev[i] = Cnt > 1 ? Off.Size() / ((Cnt - 1) * P.NeighborR) : 1.f;
 		if (Ws <= 0.0) { return; }
 		Mean /= Ws;
 		Smoothed[i] = FVector3f((1.0 - P.Lambda) * FVector3d(Xi) + P.Lambda * Mean);
@@ -210,12 +212,16 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 		});
 		for (int32 k = 0; k < 6; ++k) { Cov[i * 6 + k] = (float)(C[k] / Ws); }
 	});
+	// 표면 입자: 이웃 적음(Akinci) 또는 이웃이 한쪽으로 치우침(C14 — 조밀하게 다져진 표면)
+	TArray<uint8> IsSurf; IsSurf.SetNumZeroed(N);
+	for (int32 i = 0; i < N; ++i) { IsSurf[i] = (NCount[i] < P.BandNEps || (P.SurfDev > 0.f && Dev[i] > P.SurfDev)) ? 1 : 0; }
 	int32 NumSurf = 0, MaxCount = 0;
-	for (int32 i = 0; i < N; ++i) { NumSurf += NCount[i] < P.BandNEps ? 1 : 0; MaxCount = FMath::Max(MaxCount, NCount[i]); }
+	for (int32 i = 0; i < N; ++i) { NumSurf += IsSurf[i]; MaxCount = FMath::Max(MaxCount, NCount[i]); }
 	// 내부 입자 = 이웃 수가 최대의 85% 이상 (그리고 N_ε 초과). 판 · 기둥처럼 내부가 있을 때만 — 얇은 벽 · 부스러기엔 없다
 	const int32 InteriorMin = FMath::Max(P.NEps + 1, (int32)(0.85f * MaxCount));
 	auto IsInterior = [&](int32 i) { return MaxCount > P.NEps && NCount[i] >= InteriorMin; };
 	Out.NumSurfaceParticles = NumSurf;
+	Out.NeighborCount = NCount; Out.Deviation = Dev;
 	const double T1 = FPlatformTime::Seconds();
 
 	// ── ③ 커널 ──
@@ -306,7 +312,7 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 		const int32 RC = FMath::CeilToInt(Reach / P.Cell);
 		ParallelFor(N, [&](int32 i)
 		{
-			if (P.bBandOnly && NCount[i] >= P.BandNEps) { return; }
+			if (P.bBandOnly && !IsSurf[i]) { return; }
 			const FVector3f L = (Pos[i] - GOrigin) / P.Cell;
 			const int32 cx = FMath::RoundToInt(L.X), cy = FMath::RoundToInt(L.Y), cz = FMath::RoundToInt(L.Z);
 			for (int32 z = FMath::Max(0, cz - RC); z <= FMath::Min(GD.Z - 1, cz + RC); ++z)
@@ -393,7 +399,7 @@ void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurface
 		TArray<uint8> Contributes; Contributes.SetNumZeroed(N);
 		{
 			TArray<FVector3f> SurfPos;
-			for (int32 i = 0; i < N; ++i) { if (!P.bBandOnly || NCount[i] < P.BandNEps) { SurfPos.Add(Pos[i]); } }
+			for (int32 i = 0; i < N; ++i) { if (!P.bBandOnly || IsSurf[i]) { SurfPos.Add(Pos[i]); } }
 			const float BandReach = P.BandR > 0.f ? P.BandR : Support;
 			FPointGrid SGrid;
 			SGrid.Build(SurfPos, GOrigin, GOrigin + GExt, BandReach + Support);

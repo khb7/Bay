@@ -758,6 +758,8 @@ namespace
 		FParse::Value(*Params, TEXT("minsigma="), Base.MinSigma);
 		FParse::Value(*Params, TEXT("knramp="), Base.KnRamp);
 		FParse::Value(*Params, TEXT("bandr="), Base.BandR);
+		FParse::Value(*Params, TEXT("surfdev="), Base.SurfDev);
+		const bool bDevDump = FParse::Param(*Params, TEXT("devdump"));
 		Base.bBandOnly = !FParse::Param(*Params, TEXT("fullband"));
 		const FString Dir = FPaths::ProjectSavedDir() / TEXT("MeshRuns");
 
@@ -851,6 +853,33 @@ namespace
 					*Scene, *Fl, M.NumParticles, M.NumSurfaceParticles, M.NumBandPoints, M.Vertices.Num(), M.Triangles.Num() / 3, *Metric, M.Volume() / PV,
 					M.MsNeighbors, M.MsKernels, M.MsField, M.MsMesh, M.MsTotal, M.Ks, M.Iso);
 				M.SaveObj(Dir / FString::Printf(TEXT("%s_%s.obj"), *Scene, *Fl));
+				if (bDevDump && Fl == Fields[0])
+				{
+					// 표면 판정 문턱 측정 (C14): 무리별 이웃 수 · 치우침 분위수
+					auto Report = [&](const TCHAR* Name, TFunctionRef<bool(int32)> Sel)
+					{
+						TArray<float> Dv; TArray<int32> Nc;
+						for (int32 i = 0; i < Pos.Num(); ++i) { if (Sel(i)) { Dv.Add(M.Deviation[i]); Nc.Add(M.NeighborCount[i]); } }
+						if (Dv.Num() == 0) { return; }
+						Dv.Sort(); Nc.Sort();
+						auto Q = [](const auto& A, float q) { return A[FMath::Clamp((int32)(q * (A.Num() - 1)), 0, A.Num() - 1)]; };
+						UE_LOG(LogSpikeSweep, Display, TEXT("   dev %-10s n %5d | 이웃 p5 %d p50 %d p95 %d | 치우침 p1 %.3f p5 %.3f p50 %.3f p95 %.3f p99 %.3f"),
+							Name, Dv.Num(), Q(Nc, .05f), Q(Nc, .5f), Q(Nc, .95f), Q(Dv, .01f), Q(Dv, .05f), Q(Dv, .5f), Q(Dv, .95f), Q(Dv, .99f));
+					};
+					if (Scene == TEXT("slab"))
+					{
+						// 생성 순서 = x + 40y + 1600z. 가장자리 2 칸 제외
+						auto Inner = [](int32 i) { const int32 x = i % 40, y = (i / 40) % 40; return x >= 2 && x <= 37 && y >= 2 && y <= 37; };
+						Report(TEXT("윗층(정답)"), [&](int32 i) { return Inner(i) && i / 1600 == 5; });
+						Report(TEXT("2층"), [&](int32 i) { return Inner(i) && i / 1600 == 4; });
+						Report(TEXT("내부"), [&](int32 i) { return Inner(i) && (i / 1600 == 2 || i / 1600 == 3); });
+					}
+					else
+					{
+						Report(TEXT("전체"), [](int32) { return true; });
+						Report(TEXT("이웃≥25"), [&](int32 i) { return M.NeighborCount[i] >= 25; });
+					}
+				}
 			}
 		}
 		return 0;
