@@ -16,6 +16,7 @@
 #include "Materials/MaterialExpressionMaterialFunctionCall.h"
 #include "Materials/MaterialExpressionMultiply.h"
 #include "Materials/MaterialExpressionNoise.h"
+#include "Materials/MaterialExpressionScalarParameter.h"
 #include "Materials/MaterialFunction.h"
 #include "Misc/PackageName.h"
 #include "UObject/Package.h"
@@ -69,8 +70,23 @@ bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage)
 	UMaterialExpressionLinearInterpolate* Mix = AddExpr<UMaterialExpressionLinearInterpolate>(M, -300, -250);
 	Mix->A.Connect(0, Dark); Mix->B.Connect(0, Light); Mix->Alpha.Connect(0, Patch);
 	UMaterialExpressionNoise* Speck = AddNoise(M, 3.f, 2, 0.8f, 1.12f, -100);         // ~3mm 알갱이 밝기
-	UMaterialExpressionMultiply* Col = AddExpr<UMaterialExpressionMultiply>(M, -150, -200);
-	Col->A.Connect(0, Mix); Col->B.Connect(0, Speck);
+	// 젖음 Wet (0 마름 ~ 1 젖음) — papers L-3 ① (Jensen 1999 · Lekner & Dorf 1988):
+	//   알베도 × 0.5 · 거칠기 0.9 → 0.2 · 알갱이 반짝임 사라짐 · 물이 틈을 메워 알갱이 요철 줄어듦 (#22)
+	UMaterialExpressionScalarParameter* Wet = AddExpr<UMaterialExpressionScalarParameter>(M, -900, 400);
+	Wet->ParameterName = TEXT("Wet");
+	Wet->DefaultValue = 0.f;
+	UMaterialExpressionConstant* One = AddExpr<UMaterialExpressionConstant>(M, -500, -50);
+	One->R = 1.f;
+	UMaterialExpressionLinearInterpolate* SpeckW = AddExpr<UMaterialExpressionLinearInterpolate>(M, -300, -100);
+	SpeckW->A.Connect(0, Speck); SpeckW->B.Connect(0, One); SpeckW->Alpha.Connect(0, Wet);
+	UMaterialExpressionMultiply* ColDry = AddExpr<UMaterialExpressionMultiply>(M, -150, -200);
+	ColDry->A.Connect(0, Mix); ColDry->B.Connect(0, SpeckW);
+	UMaterialExpressionConstant* Half = AddExpr<UMaterialExpressionConstant>(M, -300, -150);
+	Half->R = 0.5f;
+	UMaterialExpressionMultiply* ColWet = AddExpr<UMaterialExpressionMultiply>(M, -150, -120);
+	ColWet->A.Connect(0, ColDry); ColWet->B.Connect(0, Half);
+	UMaterialExpressionLinearInterpolate* Col = AddExpr<UMaterialExpressionLinearInterpolate>(M, -50, -200);
+	Col->A.Connect(0, ColDry); Col->B.Connect(0, ColWet); Col->Alpha.Connect(0, Wet);
 	Ed->BaseColor.Connect(0, Col);
 
 	// 알갱이 노멀: 높이 노이즈 (cm) → PerturbNormalLQ → 월드 노멀
@@ -80,12 +96,22 @@ bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage)
 	UMaterialExpressionMaterialFunctionCall* Call = AddExpr<UMaterialExpressionMaterialFunctionCall>(M, -300, 100);
 	Call->SetMaterialFunction(Perturb);
 	if (Call->FunctionInputs.Num() == 0) { OutMessage = TEXT("PerturbNormalLQ 입력 없음"); return false; }
-	Call->FunctionInputs[0].Input.Connect(0, GrainH);
+	UMaterialExpressionConstant* Seventy = AddExpr<UMaterialExpressionConstant>(M, -700, 200);
+	Seventy->R = 0.3f;
+	UMaterialExpressionLinearInterpolate* GrainScale = AddExpr<UMaterialExpressionLinearInterpolate>(M, -550, 200);   // 1 → 0.3
+	GrainScale->A.Connect(0, One); GrainScale->B.Connect(0, Seventy); GrainScale->Alpha.Connect(0, Wet);
+	UMaterialExpressionMultiply* GrainHW = AddExpr<UMaterialExpressionMultiply>(M, -450, 120);
+	GrainHW->A.Connect(0, GrainH); GrainHW->B.Connect(0, GrainScale);
+	Call->FunctionInputs[0].Input.Connect(0, GrainHW);
 	Ed->Normal.Connect(0, Call);
 	M->bTangentSpaceNormal = false;   // PerturbNormalLQ 는 월드 노멀을 낸다
 
-	UMaterialExpressionConstant* Rough = AddExpr<UMaterialExpressionConstant>(M, -150, 250);
-	Rough->R = 0.9f;
+	UMaterialExpressionConstant* RoughDry = AddExpr<UMaterialExpressionConstant>(M, -300, 250);
+	RoughDry->R = 0.9f;
+	UMaterialExpressionConstant* RoughWet = AddExpr<UMaterialExpressionConstant>(M, -300, 300);
+	RoughWet->R = 0.2f;
+	UMaterialExpressionLinearInterpolate* Rough = AddExpr<UMaterialExpressionLinearInterpolate>(M, -150, 250);
+	Rough->A.Connect(0, RoughDry); Rough->B.Connect(0, RoughWet); Rough->Alpha.Connect(0, Wet);
 	Ed->Roughness.Connect(0, Rough);
 	UMaterialExpressionConstant* Spec = AddExpr<UMaterialExpressionConstant>(M, -150, 330);
 	Spec->R = 0.35f;

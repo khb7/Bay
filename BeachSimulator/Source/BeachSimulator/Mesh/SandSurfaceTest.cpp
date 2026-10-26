@@ -159,7 +159,9 @@ void USandSurfaceTestSubsystem::StartSim(UWorld& World)
 	Actor->SetRootComponent(SimComp);
 	SimComp->RegisterComponent();
 	Actor->SetActorLocation(Offset);
-	FParse::Value(FCommandLine::Get(), TEXT("sandsmooth="), SimComp->SmoothIters);   // 평활화 반복 비교용
+	FParse::Value(FCommandLine::Get(), TEXT("sandsmooth="), SimComp->SmoothIters);
+	float Wet = 0.f;
+	if (FParse::Value(FCommandLine::Get(), TEXT("sandwet="), Wet)) { SimComp->SetWetness(Wet); }   // 젖은 모래 보기 (#22)   // 평활화 반복 비교용
 	SimComp->SetSimSource(Sim->GetGpuSim(), DMin, DMax);
 
 	EnsureMovableSun(World);

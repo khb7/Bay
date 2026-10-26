@@ -3,6 +3,7 @@
 #include "LocalVertexFactory.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialRenderProxy.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "MeshBatch.h"
 #include "PrimitiveSceneProxy.h"
 #include "RenderingThread.h"
@@ -182,6 +183,7 @@ USandSurfaceComponent::USandSurfaceComponent()
 
 UMaterialInterface* USandSurfaceComponent::GetMaterial(int32 ElementIndex) const
 {
+	if (WetMID) { return WetMID.Get(); }
 	if (Material) { return Material.Get(); }
 	// 비어 있으면 모래 재질 (-makesandmat 이 만든 /Game/Sand/M_Sand), 그것도 없으면 엔진 기본
 	static TWeakObjectPtr<UMaterialInterface> Sand;
@@ -271,4 +273,18 @@ void USandSurfaceComponent::UpdateFromSim()
 {
 	check(IsInGameThread());
 	if (SimSource && SceneProxy) { EnqueueBuild(SceneProxy); }   // 프록시는 그대로, 버퍼만 다시 쓴다
+}
+
+void USandSurfaceComponent::SetWetness(float InWet)
+{
+	check(IsInGameThread());
+	Wetness = FMath::Clamp(InWet, 0.f, 1.f);
+	if (!WetMID)
+	{
+		UMaterialInterface* Base = Material ? Material.Get() : nullptr;
+		if (!Base) { WetMID = nullptr; Base = GetMaterial(0); }
+		WetMID = UMaterialInstanceDynamic::Create(Base, this);
+		MarkRenderStateDirty();
+	}
+	WetMID->SetScalarParameterValue(TEXT("Wet"), Wetness);
 }
