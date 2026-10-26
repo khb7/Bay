@@ -1485,6 +1485,29 @@ k(s) = max(0, (1 − s²)³),  R = 평균 입자 간격의 2 배
 - SIMD: f32 일 때만 AVX2+FMA 8 레인 (런타임 감지), 성긴 경로는 스칼라.
 - ⚠ 정정: `extract_narrow_band`(표면 입자 + 이웃 고리 2) 는 `#[allow(unused)]` — **splashsurf 기본 경로는 띠를 쓰지 않고 영역 안 입자 전부를 조밀 격자에 뿌린다.** m1-log #3 의 "띠를 입자 단위로 고른다" 는 기본 동작이 아니다. 빠른 이유는 띠가 아니라 조밀 격자(원자 · 검사 없음) + SIMD.
 
+
+### C15. GPU 메시화 — 표면 재구성 GPU 방법 · UE5 에서 GPU 생성 메시 그리기 (2026-10-27)
+
+**왜 보나**: m1-log #9 — 실제 규모(입자 3 천 · 띠 22만 · 계산 650만)에서 CPU 26~28 ms, 예산 2.5 ms 의 10 배. milestones 실패 분기(3 단계 경로의 3 단계) 검토.
+
+**표면 재구성 GPU 방법**
+- **Akinci, Ihmsen, Akinci, Teschner (2012), "Parallel Surface Reconstruction for Particle-Based Fluids", CGF 31(6)** — (C12 에서 띠 개념으로 이미 씀) 띠 안에서만 장을 만들어 비용 · 메모리가 표면에 비례. 멀티코어 거의 선형, **GPU 에서 원래 장 구성 대비 최대 50 배**. 구체 ms 는 초록에 없음 (원문 미확인).
+- **Akinci 외 (2013), 다층 격자 적응형 재구성, WSCG** — 3 단계 격자로 거친 곳은 성기게. PDF 는 받았으나 본문 추출 실패 (미확인).
+- **Du & Kanai, "GPU-based Adaptive Surface Reconstruction for Real-time SPH Fluids"** — Akinci 2013 3 단계 격자를 GPU 로, 해상도 경계의 **균열을 패턴 기반으로 메움**. MC 와 거의 같은 품질에 시간 · 메모리 크게 감소 (초록 수준, 수치 미확인).
+- **Wu 외 (SC16 포스터)** — Akinci 띠 + 2 단계 격자 + **병렬 cuckoo 해시**로 메모리 절감, CUDA. 포스터라 상세 미확인.
+- **Dyken, Ziegler, Theobalt, Seidel (2008), "High-speed Marching Cubes using HistoPyramids", CGF 27(8)** — MC 를 **압축(활성 셀 고르기) + 확장(셀당 삼각형 수만큼 출력)** 문제로 보고 히스토그램 피라미드로 푼다. 성긴 · 큰 볼륨에서 당시 다른 GPU 등위면 추출보다 빠름. 오늘날엔 같은 일을 **접두합(prefix sum) 압축**으로 한다 — Surface Nets 도 "활성 셀 압축 → 정점 번호 → 면" 이라 같은 틀 (우리 CPU 의 띠 점 목록 · 덩어리 접두합과 동일 구조, m1-log #6).
+- 정리: 핵심 기법(띠 · 압축 · 해시 격자)은 우리가 CPU 에서 이미 쓴 것과 같다. **GPU 로 옮겨도 알고리즘은 그대로**, 뿌리기의 원자 덧셈은 GPU 에선 흔한 방식(공유 메모리 타일 누적 후 전역 기록)으로 처리.
+
+**UE5 에서 GPU 생성 메시 그리기 (엔진 소스 확인, UE 5.8)**
+- `FMeshBatchElement::IndirectArgsBuffer` — **NumPrimitives = 0 이면 이 버퍼(GPU 가 쓴 그리기 인자)로 그린다** (`MeshBatch.h`). 엔진 정식 경로.
+- 실제 사용처 11 곳: **Niagara 리본** (`NiagaraRendererRibbons.cpp` — GPU 컴퓨트로 색인 버퍼 생성 `FNiagaraRibbonGenerateIndices` + 간접 그리기), Niagara 스프라이트 · 메시, **VirtualHeightfieldMesh** (`VirtualHeightfieldMeshSceneProxy.cpp` — RDG 컴퓨트로 쿼드 목록 · `RWIndirectArgsBuffer` 작성 → 간접 그리기, 커스텀 SceneProxy + VertexFactory), Water 메시, HairStrands.
+- → system-design 의 "최대 리스크" 는 **엔진 안에 같은 패턴의 견본이 있다**. VirtualHeightfieldMesh 가 가장 가깝다 (컴퓨트가 기하 생성 → 간접 인자 → 커스텀 프록시 · VF, 플러그인 하나 분량).
+- 남는 위험: 커스텀 VertexFactory 셰이더 바인딩 · 머티리얼 호환, 그림자 · 루멘 · 레이트레이싱 패스 지원 (Niagara 리본은 RT 용 별도 경로 `UseIndexBufferForRayTracing` 이 있다), 우리 시뮬 버퍼(SandGpuSolver)와 같은 프레임 RDG 에서 이어 붙이기.
+
+**우리에게**
+- GPU 메시화 = (a) 우리 CPU 파이프라인을 컴퓨트 셰이더로 옮김 — 알고리즘 검증은 이미 CPU 에서 끝남 (CPU 결과를 정답으로 비교 가능) (b) VirtualHeightfieldMesh 식 프록시 · VF · 간접 그리기.
+- 원문 수치 확보 못 한 것: GPU 재구성의 입자 수 대비 ms (Akinci 2012 · Du & Kanai). 우리 GPU 로 직접 재는 게 가장 확실.
+
 ---
 
 ## D. 하이트필드 GPU 침식 ← 가장 먼저 구현할 것
