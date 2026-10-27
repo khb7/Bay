@@ -1520,6 +1520,18 @@ k(s) = max(0, (1 − s²)³),  R = 평균 입자 간격의 2 배
 
 **우리 적용**: 입자 반지름이 모두 같으므로 쌍의 W = 두 입자 W 의 평균 → cohesion(W_pair). W 가 시간에 따라 바뀌지 않는 동안은 재분배가 필요 없다 (M5 에서 다시). → [m1-plan-wet.md](../design/m1-plan-wet.md)
 
+### C17. 액체다리가 언제 생기나 — 결합 생성 규칙 (2026-10-27, M2 T2)
+
+**Mani, Kadau, Herrmann (2012/2013), "Liquid migration in sheared unsaturated granular media", Granular Matter** · **Roy, Luding, Weinhart (2018), "Liquid re-distribution in sheared wet granular media", PRE** (원문 직접 읽음)
+- **생성**: 두 입자가 **닿으면(겹치면)** 두 입자의 막 액체로 다리가 생긴다. 막 부피가 갇힌 양 V_min 이상이어야 한다. 다리 부피 `V_b = min(V_f,i + V_f,j, V_max)`, `V_max = β·r³` (β 0.058 — pendular 유지).
+- **파단**: 간격 > `S_c = (1 + θ/2)·V_b^(1/3)` (Lian 1993, B2). 다리 액체는 두 입자의 다른 접촉 다리로 나뉜다 (넘치면 막으로). **액체 총량 보존**.
+- **처음 적실 때**: 평형 시간이 길면 흡입압으로 **파단 거리 안의 쌍까지** 다리가 찬다 (Roy 초기 조건 B). 닿은 쌍만이 아니다.
+- 이력: 닿아야 생기고 멀리서 끊긴다 (Herminghaus 계열 "최소 모세관 모델" 과 같은 이력).
+- 출처: [Roy 2018 사전 인쇄본](https://www2.msm.ctw.utwente.nl/weinhartt/papers_pre/RoyLudingWeinhart2018.pdf) · [Mani 2012 arXiv](https://arxiv.org/abs/1206.5638)
+
+**우리와 다른 점** — 이 모델들은 움직이는 동안 닿을 때마다 다리가 **다시 생긴다** (생성률 = 끊김률 정상 상태). 우리는 m0-spike ① "자발적 재결합 없음" (위 B3 표 마지막 줄의 설계 차이 — 만질수록 약해지는 취성).
+**우리 적용 (M2)**: 생성 기준은 문헌 그대로 — **닿음(거리 < D·BondFormStretch) · 양쪽 W > W_dry · 슬롯 남음**. 언제 그 검사를 돌리느냐가 결정 사항 → [m2-plan.md](../design/m2-plan.md).
+
 ## D. 하이트필드 GPU 침식 ← 가장 먼저 구현할 것
 
 ### D1. Mei, Decaudin, Hu (2007)
