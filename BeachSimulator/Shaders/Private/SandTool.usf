@@ -1,6 +1,8 @@
 // M2 T2 — 도구 스탬프 (m2-plan.md). 시뮬 스텝 맨 앞(system-design 패스 0)에서 소비한다. CPU 는 스탬프 구조체만 올린다.
 //
 //   StampCS     입자별: 배수 이완 → 스탬프를 순서대로 (파기 = 손으로 옮김 · 물붓기 = W 올림 + 아래로 충격)
+//   PileCS      입자별 (무덤만): 손 재고를 뒤에서부터 하나씩 꺼내 놓을 자리로 — W 같이, 결합 검사 표시 (T3)
+//   PileFinishCS  재고 수에서 쌓은 수를 뺀다
 //   BondToolCS  결합별: 무덤에 간 입자의 결합은 끊고 (x < 0), 입자별 W 모드면 쌍 cohesion 을 W 에서 다시 (W3 · C16)
 //
 // 죽은 입자 = 무덤 자리에 고정 (SandSurface.h SandPool, T1). 손 재고 = HandW (넣은 순서 큐, T3 이 꺼낸다)
@@ -28,6 +30,9 @@ float WOptStart;
 float WOptEnd;
 float WSat;
 
+uint  NumPileTargets;
+float PileDropVel;
+StructuredBuffer<float4>   PileTargets;  // 쌓기 놓을 자리 (CPU 가 지터 격자로 만든다)
 StructuredBuffer<float4>   Stamps;       // 스탬프마다 2 개: (중심 xyz, 반지름) · (종류, 세기, W 증가, 충격 속도)
 RWStructuredBuffer<float4> PosRW;
 RWStructuredBuffer<float4> VelRW;
@@ -38,7 +43,7 @@ RWStructuredBuffer<uint>   SleepRW;
 RWStructuredBuffer<float>  GroundLambdaRW;
 RWStructuredBuffer<float4> WallLambdaRW;
 RWStructuredBuffer<float>  HandWRW;      // 손 재고의 W (넣은 순서)
-RWStructuredBuffer<uint>   HandCountRW;  // [0] 재고 수 · [1] 이 프레임 판 수 · [2] 손이 차서 못 판 수
+RWStructuredBuffer<uint>   HandCountRW;  // [0] 재고 수 · [1] 이 프레임 판 수 · [2] 손이 차서 못 판 수 · [3] 쌓기 차례 (끝나면 쌓은 수)
 StructuredBuffer<uint>     BondIJ;
 RWStructuredBuffer<float4> BondDataRW;   // x 휴지 길이(음수 = 죽음) · y λ · z 쌍 cohesion
 
@@ -146,6 +151,38 @@ void StampCS(uint3 Tid : SV_DispatchThreadID)
 		VelRW[p] = float4(V, 0.f);
 		if (bAsleep) { SleepRW[p] = 0u; PosRW[p] = float4(P4.xyz, 1.f); }
 	}
+}
+
+[numthreads(64, 1, 1)]
+void PileCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint p = Tid.x;
+	if (p >= NumParticles) { return; }
+	if (!IsGrave(PosRW[p].xyz)) { return; }
+	const uint H = HandCountRW[0];   // 이 패스에선 아무도 [0] 을 쓰지 않는다 (PileFinishCS 가 뒤에)
+	const uint K = min(H, NumPileTargets);
+	if (K == 0u) { return; }
+	uint c;
+	InterlockedAdd(HandCountRW[3], 1u, c);
+	if (c >= K) { return; }
+	const float W = HandWRW[H - 1u - c];   // 뒤에 넣은 것부터 (손 위에 있는 모래)
+	const float3 X = PileTargets[c].xyz;
+	PosRW[p] = float4(X, 1.f);
+	PrevPosRW[p] = float4(X, 1.f);
+	VelRW[p] = float4(0.f, 0.f, -PileDropVel, 0.f);
+	GroundLambdaRW[p] = 0.f;
+	WallLambdaRW[p] = 0;
+	SleepRW[p] = 0u;
+	WetRW[p] = W;
+	BondTrigRW[p] = 1u;   // 쌓기 = 누르는 사건 → 닿은 쌍 결합 검사 (결정 A). W ≤ W_dry 면 BondFormCS 가 거른다
+}
+
+[numthreads(1, 1, 1)]
+void PileFinishCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint Taken = min(HandCountRW[3], min(HandCountRW[0], NumPileTargets));
+	HandCountRW[0] -= Taken;
+	HandCountRW[3] = Taken;
 }
 
 [numthreads(64, 1, 1)]

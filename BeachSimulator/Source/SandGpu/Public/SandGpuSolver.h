@@ -120,6 +120,9 @@ struct FSandGpuFrameParams
 	bool   bFormBonds = false;
 	float  BondFormRange = 0.f;       // D · BondFormStretch
 	int32  BondSlots = 12;
+	// M2 T3 쌓기 — 놓을 자리 (xyz). GPU 가 손 재고 수만큼만 채운다 (뒤에 넣은 것부터)
+	TArray<FVector4f> PileTargets;
+	float  PileDropVel = 0.f;         // 놓을 때 아래로 주는 속도 (cm/s)
 };
 
 /** 프레임 통계 — UpdateSettleState 가 쓰는 것 전부 */
@@ -136,6 +139,7 @@ struct FSandGpuStats
 	int32  NumAwakeBlocks = 0, NumAsleep = 0;   // C안 — 풀이를 돈 블록 · 잠든 입자
 	float  StageMs[4] = {};          // 3-4 GPU 타임스탬프: [0] 이웃·쌍·깨우기 [1] 워밍·예측·배치 [2] 반복 [3] 파단·통계
 	double GpuMs = 0.0;               // 스텝 벽시계 (통계 리드백 포함)
+	int32  Piled = 0;                 // M2 T3 — 이 프레임 쌓은 수
 	int32  HandCount = 0, Dug = 0, HandFull = 0;   // M2 T2 — 손 재고 · 이 프레임 판 수 · 손이 차서 못 판 수
 	int32  BondsFormed = 0, BondFormRejected = 0;  // 사건 결합 — 생성 · 슬롯/용량 넘침
 };

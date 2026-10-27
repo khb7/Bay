@@ -247,6 +247,9 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandToolParams, )
 	SHADER_PARAMETER(float, WOptEnd)
 	SHADER_PARAMETER(float, WSat)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, Stamps)
+	SHADER_PARAMETER(uint32, NumPileTargets)
+	SHADER_PARAMETER(float, PileDropVel)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, PileTargets)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, PosRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, VelRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, PrevPosRW)
@@ -281,6 +284,8 @@ END_SHADER_PARAMETER_STRUCT()
 #define TOOL_USF "/Project/Private/SandTool.usf"
 SAND_SHADER(FSandStampCS,    FSandToolParams, TOOL_USF, "StampCS")
 SAND_SHADER(FSandBondToolCS, FSandToolParams, TOOL_USF, "BondToolCS")
+SAND_SHADER(FSandPileCS,       FSandToolParams, TOOL_USF, "PileCS")
+SAND_SHADER(FSandPileFinishCS, FSandToolParams, TOOL_USF, "PileFinishCS")
 SAND_SHADER(FSandBondSlotCountCS, FSandToolParams, TOOL_USF, "BondSlotCountCS")
 SAND_SHADER(FSandBondFormCS,      FSandToolParams, TOOL_USF, "BondFormCS")
 SAND_SHADER(FSandBondFillCS,      FSandToolParams, TOOL_USF, "BondFillCS")
@@ -975,14 +980,14 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 					S->CapHand = HandCap;
 				}
 				FRDGBufferRef HandCountBuf = GraphBuilder.RegisterExternalBuffer(S->HandCount);
-				// 이 프레임 계수 [1] [2] 만 0 으로 — [0] 재고는 유지
+				// 이 프레임 계수 [1] [2] [3] 만 0 으로 — [0] 재고는 유지
 				{
-					TArray<uint32> Zero = { 0u, 0u };
-					FRDGBufferRef Z = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 2), TEXT("SandSim.HandZero"));
-					GraphBuilder.QueueBufferUpload(Z, Zero.GetData(), 2 * sizeof(uint32), ERDGInitialDataFlags::None);   // 지역 배열 — 복사해 둔다 (NoCopy 면 실행 전에 사라진다)
-					AddCopyBufferPass(GraphBuilder, HandCountBuf, sizeof(uint32), Z, 0, 2 * sizeof(uint32));
+					TArray<uint32> Zero = { 0u, 0u, 0u };
+					FRDGBufferRef Z = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 3), TEXT("SandSim.HandZero"));
+					GraphBuilder.QueueBufferUpload(Z, Zero.GetData(), 3 * sizeof(uint32), ERDGInitialDataFlags::None);   // 지역 배열 — 복사해 둔다 (NoCopy 면 실행 전에 사라진다)
+					AddCopyBufferPass(GraphBuilder, HandCountBuf, sizeof(uint32), Z, 0, 3 * sizeof(uint32));
 				}
-				const bool bTool = P.Stamps.Num() > 0 || P.DrainTau > 0.f;
+				const bool bTool = P.Stamps.Num() > 0 || P.DrainTau > 0.f || P.PileTargets.Num() > 0;
 				BondTrigBuf = ScratchBuffer(GraphBuilder, TEXT("SandSim.BondTrig"), sizeof(uint32), LN);
 				AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(BondTrigBuf), 0u);
 				if (bTool)
@@ -1005,6 +1010,13 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 					FRDGBufferRef StBuf = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), St.Num()), TEXT("SandSim.Stamps"));
 					GraphBuilder.QueueBufferUpload(StBuf, St.GetData(), St.Num() * sizeof(FVector4f), ERDGInitialDataFlags::None);   // 지역 배열 — 복사
 					TP.Stamps = GraphBuilder.CreateSRV(StBuf);
+					TArray<FVector4f> PT = P.PileTargets;
+					if (PT.Num() == 0) { PT.Add(FVector4f(0, 0, 0, 0)); }
+					FRDGBufferRef PtBuf = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), PT.Num()), TEXT("SandSim.PileTargets"));
+					GraphBuilder.QueueBufferUpload(PtBuf, PT.GetData(), PT.Num() * sizeof(FVector4f), ERDGInitialDataFlags::None);
+					TP.PileTargets = GraphBuilder.CreateSRV(PtBuf);
+					TP.NumPileTargets = P.PileTargets.Num();
+					TP.PileDropVel = P.PileDropVel;
 					TP.PosRW = GraphBuilder.CreateUAV(Pos);
 					TP.VelRW = GraphBuilder.CreateUAV(Vel);
 					TP.PrevPosRW = GraphBuilder.CreateUAV(PrevPos);
@@ -1017,6 +1029,12 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 					TP.BondIJ = GraphBuilder.CreateSRV(BondIJ);
 					TP.BondTrigRW = GraphBuilder.CreateUAV(BondTrigBuf);
 					AddDirectPass<FSandStampCS>(GraphBuilder, RDG_EVENT_NAME("SandStamp"), ShaderMap, TP, LN, 64);
+					if (P.PileTargets.Num() > 0)
+					{
+						// M2 T3 — 무덤 칸이 손 재고를 하나씩 받아 놓을 자리로 (파기 뒤 — 같은 프레임에 판 것도 쌓을 수 있다)
+						AddDirectPass<FSandPileCS>(GraphBuilder, RDG_EVENT_NAME("SandPile"), ShaderMap, TP, LN, 64);
+						AddDirectPass<FSandPileFinishCS>(GraphBuilder, RDG_EVENT_NAME("SandPileFinish"), ShaderMap, TP, 1, 1);
+					}
 					if (LB > 0)
 					{
 						FSandToolParams TB = TP;
@@ -1226,7 +1244,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 	Out.BatchOverflow   = (int32)BatchStats[3];
 	Out.NumAwakeBlocks  = (int32)BatchStats[4];
 	Out.NumAsleep       = (int32)Counters[3];
-	Out.HandCount = (int32)Hand[0]; Out.Dug = (int32)Hand[1]; Out.HandFull = (int32)Hand[2];
+	Out.HandCount = (int32)Hand[0]; Out.Dug = (int32)Hand[1]; Out.HandFull = (int32)Hand[2]; Out.Piled = (int32)Hand[3];
 	Out.BondsFormed = (int32)BondTot[1]; Out.BondFormRejected = (int32)BondTot[2];
 	NumB = FMath::Max(NumB, (int32)BondTot[0]);   // 사건 결합이 덧붙인 칸 (죽은 칸 포함 — CPU 가 내려받아 다시 올릴 때 압축)
 	for (int32 k = 0; k < 4; ++k) { Out.StageMs[k] = StageMs[k]; }

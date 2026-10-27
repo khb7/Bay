@@ -315,13 +315,14 @@ struct FSandBond
  * GPU 이식(M0-b)에서 대조군이 되는 것도 이 코어라, 결정성이 요구사항이다.
  */
 /** M2 T2 도구 스탬프 (m2-plan.md) — GPU 상주 경로에서만. 다음 Step 맨 앞에서 소비된다 */
-enum class ESandTool : uint8 { Dig = 0, Pour = 1 };
+enum class ESandTool : uint8 { Dig = 0, Pour = 1, Pile = 2 };
 struct FSandToolStamp
 {
 	ESandTool Kind = ESandTool::Dig;
 	FVector3f Center = FVector3f::ZeroVector;
 	float Radius = 10.f;
-	float Strength = 1.f;     // 파기: 구 안 입자를 퍼 담을 확률
+	float Strength = 1.f;     // 파기: 구 안 입자를 퍼 담을 확률 · 쌓기: 내려놓을 입자 수
+	                          // 쌓기: Center = 바닥 가운데, Radius = 원기둥 반지름. 위로 육각 층을 쌓는다
 	float WetAdd = 0.f;       // 물붓기: 이 스탬프 하나의 W 증가 (가운데 기준, 가장자리로 갈수록 0)
 	float ImpulseVel = 0.f;   // 물붓기: 아래로 주는 속도 (cm/s, 가운데 기준)
 };
@@ -367,6 +368,8 @@ public:
 	int32 GetHandCount() const { return HandCount; }   // 손 재고 (GPU 가 센 값, Step 마다 갱신)
 	int32 GetLastDug() const { return LastDug; }
 	int32 GetLastBondsFormed() const { return LastBondsFormed; }
+	int32 GetLastPiled() const { return LastPiled; }
+	float PileDropVel = 0.f;                            // 쌓기: 놓을 때 아래로 속도 (cm/s)
 	int32 HandCap = 600;                                // 손 용량 — 반지름 10cm 구 한 삽 (m2-plan)
 	float DrainTau = 0.f;                               // M2 임시 배수 τ (초). 0 = 끔. W > WOptEnd 를 WOptEnd 쪽으로
 	bool  IsDead(int32 i) const { return Dead.IsValidIndex(i) && Dead[i] != 0; }
@@ -539,7 +542,7 @@ private:
 	int32             NumDead = 0;
 	TArray<FSandToolStamp> PendingStamps;
 	int32 HandCount = 0, LastDug = 0, LastHandFull = 0;
-	int32 LastBondsFormed = 0, LastBondFormRejected = 0;
+	int32 LastBondsFormed = 0, LastBondFormRejected = 0, LastPiled = 0;
 	bool bWetPerParticle = false;   // SetWet 뒤 — 결합 점착을 쌍의 W 로 (W3). 아니면 WGlobal 하나 (M0 시험의 W 서서히 낮추기)
 	/** 전역 cohesion 배수 — 입자별 모드면 1 (결합마다 Coh 가 대신한다) */
 	float GlobalCoh() const { return bWetPerParticle ? 1.f : CohesionOfW(Params.WGlobal); }

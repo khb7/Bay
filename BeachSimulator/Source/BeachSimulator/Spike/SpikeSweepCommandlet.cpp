@@ -833,20 +833,28 @@ namespace
 			FParse::Value(*Params, TEXT("pour="), PourFrame);
 			const int32 Alive0 = Sim.NumAlive();
 			float PourImpulse = 0.f; FParse::Value(*Params, TEXT("pourimpulse="), PourImpulse);
+			float DigR = 12.f, DigS = 0.3f; FParse::Value(*Params, TEXT("digr="), DigR); FParse::Value(*Params, TEXT("digs="), DigS);
+			// M2 T3: -pile=F 면 F 프레임에 손 재고 전부를 블록 오른쪽 25cm (-pilex=, 기본 90cm — 무너진 블록이 닿지 않게. -domainpad 도 넓힐 것) 바닥에 원기둥(반지름 -piler=, 기본 8cm)으로 내려놓는다
+			int32 PileFrame = -1; FParse::Value(*Params, TEXT("pile="), PileFrame);
+			float PileR = 8.f; FParse::Value(*Params, TEXT("piler="), PileR);
+			float PileX = 90.f; FParse::Value(*Params, TEXT("pilex="), PileX);
+			const FVector3f PileC((float)Box.Max.X + PileX, (float)Box.GetCenter().Y, (float)Box.Min.Z);
+			int32 Piled = 0;
 			for (int32 f = 1; f <= Frames; ++f)
 			{
 				if (DigFrame > 0 && f >= DigFrame && f < DigFrame + 20)
 				{
 					float Top = 0.f; FVector3f C(Box.GetCenter());
 					for (const FVector3f& X : Sim.GetPositions()) { if (!SandPool::IsGrave(X) && FMath::Abs(X.X - C.X) < 5.f && FMath::Abs(X.Y - C.Y) < 5.f) { Top = FMath::Max(Top, X.Z); } }
-					FSandToolStamp T; T.Kind = ESandTool::Dig; T.Center = FVector3f(C.X, C.Y, Top); T.Radius = 12.f; T.Strength = 0.3f;
+					FSandToolStamp T; T.Kind = ESandTool::Dig; T.Center = FVector3f(C.X, C.Y, Top); T.Radius = DigR; T.Strength = DigS;
 					Sim.QueueStamp(T);
 				}
 				if (f == PourFrame)
 				{
 					const FVector3f C(Box.GetCenter());
 					// x < 가운데 쪽 반을 작은 구(반지름 6cm)를 6cm 간격으로 채워 적신다 — 겹친 합이 가운데 기준 ≈ 0.6
-					for (float x = (float)Box.Min.X; x < C.X; x += 6.f)
+					const float XEnd = FParse::Param(*Params, TEXT("pourfull")) ? (float)Box.Max.X : C.X;   // T3: 블록 전체
+					for (float x = (float)Box.Min.X; x < XEnd; x += 6.f)
 					for (float y = (float)Box.Min.Y; y <= (float)Box.Max.Y; y += 6.f)
 					for (float z = (float)Box.Min.Z; z <= (float)Box.Max.Z; z += 6.f)
 					{
@@ -854,7 +862,26 @@ namespace
 						Sim.QueueStamp(T);
 					}
 				}
+				if (f == PileFrame)
+				{
+					FSandToolStamp T; T.Kind = ESandTool::Pile; T.Center = PileC; T.Radius = PileR; T.Strength = (float)Sim.GetHandCount();
+					int32 PileN = 0; if (FParse::Value(*Params, TEXT("pilecount="), PileN)) { T.Strength = FMath::Min(T.Strength, (float)PileN); }   // 마른 · 젖은 같은 양 비교
+					Sim.QueueStamp(T);
+				}
 				Sim.Step(1.f / 60.f);
+				Piled += Sim.GetLastPiled();
+				if (f == PileFrame) { UE_LOG(LogSpikeSweep, Display, TEXT("   T3 쌓기 프레임: 놓은 %d · 사건 결합 %d · 손 남음 %d"), Sim.GetLastPiled(), Sim.GetLastBondsFormed(), Sim.GetHandCount()); }
+				if (PileFrame > 0 && f >= PileFrame && (f - PileFrame) % 30 == 0)
+				{
+					float Hp = -1e9f; int32 Np = 0;
+					for (const FVector3f& X : Sim.GetPositions())
+					{
+						if (SandPool::IsGrave(X)) { continue; }
+						if (FVector2f(X.X - PileC.X, X.Y - PileC.Y).Size() < PileR + 30.f && X.X > (float)Box.Max.X + 5.f) { Hp = FMath::Max(Hp, X.Z - PileC.Z); ++Np; }
+					}
+					UE_LOG(LogSpikeSweep, Display, TEXT("   T3 f %3d: 더미 높이 %.1f cm · 더미 입자 %d · 산 %d + 손 %d = %d (처음 %d) · 결합 %d"),
+						f, Hp, Np, Sim.NumAlive(), Sim.GetHandCount(), Sim.NumAlive() + Sim.GetHandCount(), Alive0, Sim.GetBonds().Num());
+				}
 				// 적신 곳의 닿은 쌍에 물다리 — 붓기가 끝난 다음 프레임에 결합 생성 (지금은 CPU · 전체, m2-log #2)
 				// 결합은 GPU 사건 결합이 붓기 프레임에 만든다 (m2-log #3). -pourcpubond 는 예전 CPU 전체 FormBonds 대조
 				if (f == PourFrame) { UE_LOG(LogSpikeSweep, Display, TEXT("   T2 붓기 프레임 GPU 사건 결합 %d"), Sim.GetLastBondsFormed()); }

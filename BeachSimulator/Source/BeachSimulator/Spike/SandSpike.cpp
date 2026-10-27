@@ -1319,11 +1319,15 @@ void FSandSpike::SyncFromGpu() const
 	Self->WallLambda    = D.WallLambda;
 	// M2 T2 — GPU 도구가 W 를 바꾸고 입자를 무덤으로 보낸다. 다시 올릴 때 되살아나지 않게 역질량 0
 	if (bWetPerParticle && D.Wet.Num() == N) { Self->Wet = D.Wet; }
+	// M2 T3 — 쌓기가 무덤 칸을 되살린다 → 역질량 1 로 되돌린다 (고정 입자는 무덤에 간 적이 없어 그대로)
+	TArray<uint8> WasDead = Self->Dead;
+	WasDead.SetNumZeroed(N);
 	Self->Dead.SetNumZeroed(N);
 	Self->NumDead = 0;
 	for (int32 i = 0; i < N; ++i)
 	{
 		if (SandPool::IsGrave(Self->Pos[i])) { Self->Dead[i] = 1; Self->InvMass[i] = 0.f; ++Self->NumDead; }
+		else if (WasDead[i]) { Self->InvMass[i] = 1.f; }
 	}
 
 	const int32 NumC = D.PairLambda.Num();
@@ -1412,8 +1416,34 @@ void FSandSpike::StepGpuResident(float Dt)
 	BuildWallParams(P.WallMode, P.WallActiveMask, P.WallLX, P.WallLY, P.WallLimit, P.WallLiftZ);
 
 	// M2 T2 도구 스탬프
+	bool bPile = false;
 	for (const FSandToolStamp& T : PendingStamps)
 	{
+		if (T.Kind == ESandTool::Pile)
+		{
+			// M2 T3 — 놓을 자리: 원기둥 안 육각 격자, 층마다 반 칸 어긋남. 간격 1.02 D + 지터 ±0.03 D (겹침 없이 닿게)
+			const float Dg = 2.f * Params.Radius, Sp = 1.02f * Dg;
+			const float Dz = Sp * 0.8165f;   // 육각 밀집 층 간격 √(2/3)
+			const int32 Want = FMath::Max(0, FMath::RoundToInt(T.Strength));
+			const int32 NR = FMath::CeilToInt(T.Radius / Sp) + 1;
+			FRandomStream Rng((int32)Frame * 7919 + P.PileTargets.Num());
+			for (int32 L = 0; P.PileTargets.Num() < Want && L < 4096; ++L)
+			{
+				const float Ox = (L % 3) * 0.5f * Sp, Oy = (L % 3) * 0.2887f * Sp;
+				for (int32 r = -NR; r <= NR && P.PileTargets.Num() < Want; ++r)
+				{
+					for (int32 q = -NR; q <= NR && P.PileTargets.Num() < Want; ++q)
+					{
+						const float X = (q + 0.5f * (r & 1)) * Sp + Ox, Y = r * 0.8660f * Sp + Oy;
+						if (X * X + Y * Y > T.Radius * T.Radius) { continue; }
+						const FVector3f J(Rng.FRandRange(-0.03f, 0.03f) * Dg, Rng.FRandRange(-0.03f, 0.03f) * Dg, 0.f);
+						P.PileTargets.Add(FVector4f(T.Center + FVector3f(X, Y, Params.Radius + L * Dz) + J, 0.f));
+					}
+				}
+			}
+			bPile = true;
+			continue;
+		}
 		P.Stamps.Add(FVector4f(T.Center, T.Radius));
 		P.Stamps.Add(FVector4f((float)(uint8)T.Kind, T.Strength, T.WetAdd, T.ImpulseVel));
 	}
@@ -1428,6 +1458,8 @@ void FSandSpike::StepGpuResident(float Dt)
 	// 사건 결합 (결정 A, papers C17) — 젖음을 올린 스탬프가 있는 프레임만
 	P.bFormBonds = false;
 	for (int32 k = 1; k < P.Stamps.Num(); k += 2) { P.bFormBonds |= (P.Stamps[k].X == (float)(uint8)ESandTool::Pour && P.Stamps[k].Z > 0.f); }
+	P.bFormBonds |= bPile;
+	P.PileDropVel = PileDropVel;
 	P.BondFormRange = 2.f * Params.Radius * Params.BondFormStretch;
 	P.BondSlots = Params.BondSlots;
 
@@ -1443,7 +1475,8 @@ void FSandSpike::StepGpuResident(float Dt)
 	BondsBrokenTotal += S.BondsBroken;
 	HandCount = S.HandCount; LastDug = S.Dug; LastHandFull = S.HandFull;
 	LastBondsFormed = S.BondsFormed; LastBondFormRejected = S.BondFormRejected;
-	NumDead += S.Dug;   // CPU 의 Dead 표시는 SyncFromGpu 에서 위치로 다시 맞춘다
+	LastPiled = S.Piled;
+	NumDead += S.Dug - S.Piled;   // CPU 의 Dead 표시는 SyncFromGpu 에서 위치로 다시 맞춘다
 	LastBoundaryFrac = S.NumPairs > 0 ? (float)S.NumBoundary / S.NumPairs : 0.f;
 	LastAsleep = S.NumAsleep; LastAwakeBlocks = S.NumAwakeBlocks;
 	for (int32 k = 0; k < 4; ++k) { LastStage[k] = S.StageMs[k]; }
