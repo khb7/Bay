@@ -1810,6 +1810,44 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
 
 ---
 
+## D-M3. M3 결정의 근거 — 물 풀이 · 격자 구현 · swash 모래 운반 (2026-10-28 조사)
+
+> 결정은 논문으로 (사용자, 2026-10-28). ✓ = 원문 · 공식 기록 · 엔진 소스에서 직접 확인. △ = 2차 자료 · 초록만 확인.
+
+### D-M3-1. ★★ 가상 파이프는 swash 에 맞지 않는다 → 보존형 얕은 물 풀이 (KP07)
+- **Kurganov & Petrova (2007)**, "A Second-Order Well-Balanced Positivity Preserving Central-Upwind Scheme for the Saint-Venant System", *Commun. Math. Sci.* 5(1) 133–160. DOI 10.4310/CMS.2007.v5.n1.a6 ✓ (원문 [PDF](https://www.math.umd.edu/~tadmor/centpack/publications/files/KT%20positive%20SW%20CMS2007-centpack.pdf))
+  - 정지 수면 유지(well-balanced, 경사 지형에서 lake at rest)와 수심 ≥ 0 (positivity)을 **둘 다** 2 차로 — 2002 판은 둘 중 하나만.
+  - 2D 양수성 조건 CFL `a·Δt/Δx ≤ 1/4` (정리 3.1). SSP-RK 는 전진 오일러의 볼록 결합이라 그대로 성립 (실험은 SSP-RK3).
+  - 마른 칸 속도 `u = hu/h` 는 h⁴ 꼴 식 (2.17) 로 특이점 제거 — 단순 `h/(h²+ε)` 는 작은 h 에서 u 가 폭주해 계산이 멈춘다고 명시.
+  - 마른 곳으로 물이 흘러 들어가 정지하는 시험(4 장)을 직접 보여 준다 — swash 의 젖음/마름 경계가 바로 이 상황.
+- **Brodtkorb, Sætra, Altinakar (2012)**, "Efficient shallow water simulations on GPUs: Implementation, visualization, verification, and validation", *Computers & Fluids* 55, 1–12 ✓ (SINTEF 기록)
+  - KP07 계열을 GPU 로. 마른 상태 지원 · **단정밀도면 실제 계산에 충분** · Malpasset 댐 붕괴 48 만 칸 평균 530 Mcell/s.
+  - → 1024² (1M 칸) 한 스텝 ≈ 2ms (2012 GPU 기준, 4060 Ti 에선 더 빠를 것) — 실측으로 확인.
+- 가상 파이프 (Mei 2007 · O'Brien & Hodgins 1995): 유량을 수위차로 가속하고 남은 물로 자른다. **운동량 이류 항이 없다** → 파봉이 가팔라지지 않아 bore(부서진 파도가 밀려오는 물벽)가 안 생기고, 처오름 · 되돌림이 보존 법칙을 따르지 않는다. △ (모델 식에서 직접 읽히는 성질. 별도 문헌 확인은 못 함)
+- **Chentanez & Müller (2010)**, "Real-time Simulation of Large Bodies of Water with Small Scale Details", SCA 2010, DOI 10.2312/SCA/SCA10/197-206 ✓ (초록)
+  - 게임 쪽 선례: 높이장 얕은 물 + 젖음/마름 추적 + 부서지는 파도 · 폭포를 입자(물보라 · 거품)로 바꿔 질량 · 운동량을 주고받는다. M4 결합의 참고.
+
+### D-M3-2. ★ 처오름 검증 — 표준 시험이 있다
+- **Synolakis et al. (2008)**, "Validation and Verification of Tsunami Numerical Models", *Pure Appl. Geophys.* 165, 2197–2228 ✓ (원문 [PDF](https://nctr.pmel.noaa.gov/Pdf/PAGEOPH_Synolakis_etal_2008.pdf)) — NOAA 의 처오름 코드 검증 기준.
+  - **검증은 주기파가 아니라 단일파(solitary · N-wave)로** 해야 한다 — 주기파는 반사 위상이 맞아 보이게 숨긴다 (Carrier–Greenspan 사인파는 맞고 고립파는 틀린 예전 코드들).
+  - 비쇄파 최대 처오름 **R/d = 2.831·√(cot β)·(H/d)^(5/4)** (Synolakis 1987, JFM 185:523–545).
+  - 가장 많이 쓰는 실험: **1:19.85 경사, H/d = 0.0185 (안 부서짐) · 0.3 (부서짐)** — 시간별 수면 자료가 있다.
+  - 쇄파 판정 (처오름 중) H/d < 0.82·(tan β)^(10/9) 이면 안 부서짐 △ (arXiv 1411.5514 인용)
+
+### D-M3-3. swash 모래 운반 — u³ 와 Exner
+- **Kelly & Dodd (2010)**, "Beach-face evolution in the swash zone", *J. Fluid Mech.* 661, 316–340 ✓ (초록) — 1D 얕은 물 + Exner (`(1−p)∂z/∂t + ∂q/∂x = 0`) 완전 결합, 운반량 **q = A·u³**. 결합하면 비결합보다 해변면에서 빠져나가는 순 운반이 크게 준다 (위쪽 1/3 에서 가장).
+- **Pritchard & Hogg (2005)**, "On the transport of suspended sediment by a swash event on a plane beach", *Coastal Eng.* 52, 1–23 ✓ (초록) — bore 붕괴로 뜬 모래: 오르내림 비대칭은 바다 쪽으로, **침강 지연(settling lag)은 약한 육지 쪽 이동** → 뜬 모래 `s` 를 이류하는 Mei 구조가 이 메커니즘을 담는다.
+- Masselink & Puleo (2006), "Swash-zone morphodynamics", *Cont. Shelf Res.* 26(5) 661–680 ✓ (서지) — 리뷰.
+- 주의 △: "Limitations of empirical sediment transport formulas for shallow water and their consequences for swash zone modelling" ([arXiv 1608.06710](https://arxiv.org/pdf/1608.06710)) — u³ 경험식의 한계를 다룬다. 계수는 튜닝 대상으로 둔다.
+- (조사 에이전트 메모 △, 원문 미확인) 침투(infiltration)가 되돌림을 약하게 해 둔덕(berm)을 쌓는다 — Turner & Masselink 1998, Masselink & Li 2001 (F 절과 같은 이야기). 해변 잔물결 파장(cm~dm)은 격자 5cm 와 같은 크기라 격자에서 창발시키기 어렵다 → 렌더 세부로.
+
+### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
+- Epic 의 얕은 물은 있다: `Engine/Plugins/FX/NiagaraFluids/Content/Modules/Grid2D/ShallowWater/` (`Grid2D_SW_Advect · UpdateDepthGrid · FilterOvershoot · ExtrapolateVelocities · MovingWindow_*` …) · `Plugins/Experimental/WaterAdvanced` 의 `ShallowWaterRiverActor.cpp:339` 가 `Grid2D_SW_River` 를 쓴다. 바닥은 **SceneCapture 깊이로 찍어 읽기만** (`:107`) — 단방향 시각 효과. 침식 · 모래 · 수분 채널 없음. 모듈 이름으로 보아 이류 + 넘침 거르기 계열 (uasset 그래프라 알고리즘 세부는 미확인).
+- Niagara GPU 틱은 정해진 세 시점에만 돈다: `ENiagaraGpuComputeTickStage { PreInitViews, PostInitViews, PostOpaqueRender }` (`Niagara/Public/NiagaraCommon.h:1924-1926`). 우리 입자 시뮬 RDG 패스 사이에 끼울 수 없다 → M4 의 **같은 프레임 양방향 결합**(격자 → 입자 하중 · 수분, 입자 → 장애물 · 파괴 환원)이 막히거나 1 프레임 늦는다. 외부 RDG 버퍼를 읽히려면 사용자 정의 DI 를 C++ 로 써야 한다.
+- 자체 RDG 는 SandGpu 와 같은 `FRDGBuilder` 에서 순서를 우리가 정한다 (M1 메셔가 이미 같은 프레임에 시뮬 버퍼를 읽는다, C15).
+
+---
+
 ## E. 증발 / 건조 — 토양물리학 (그래픽스 공백)
 
 > **여기가 논문 공백.** 그래픽스에 증발/건조를 다룬 논문이 사실상 없다.
