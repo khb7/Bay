@@ -88,7 +88,7 @@ bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage)
 	WetSum->A.Connect(0, WetParam); WetSum->B.Connect(1, VCol);   // 출력 1 = R
 	UMaterialExpressionSaturate* Wet = AddExpr<UMaterialExpressionSaturate>(M, -900, 400);
 	Wet->Input.Connect(0, WetSum);
-	// 젖음 곡선 Wc — 색 · 반짝임 · 알갱이 요철 · 러프니스가 모두 이것을 쓴다 (#34). WetModel 0 이면 예전처럼 선형 W
+	// 젖음 곡선 Wc — 색 (#33). WetModel 0 이면 예전처럼 선형 W
 	//   Wc = (1 − e^(−6W)) / (1 − e^(−6)) — 해변 모래는 조금 젖을 때 급변 후 평탄 (Nolet 2014, papers L-3 ①-a)
 	UMaterialExpressionScalarParameter* WetModel = AddExpr<UMaterialExpressionScalarParameter>(M, -1100, 300);
 	WetModel->ParameterName = TEXT("WetModel");
@@ -99,10 +99,18 @@ bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage)
 	WetC->Inputs.SetNum(2);
 	WetC->Inputs[0].InputName = TEXT("W");     WetC->Inputs[0].Input.Connect(0, Wet);
 	WetC->Inputs[1].InputName = TEXT("Model"); WetC->Inputs[1].Input.Connect(0, WetModel);
+	// 광택 곡선 Wg — 러프니스 · 반짝임 · 알갱이 요철 (#35). 물이 빠진 모래(pendular · funicular)는 어둡지만 무광,
+	//   포화 근처에서 틈이 표면까지 차 물막이 생길 때만 반들거린다 (Jensen 1999 두 효과 분리, papers L-3 ①-a). 문턱 0.8 은 화면으로 정한 값
+	UMaterialExpressionCustom* WetG = AddExpr<UMaterialExpressionCustom>(M, -800, 480);
+	WetG->OutputType = CMOT_Float1;
+	WetG->Code = TEXT("return Model < 0.5 ? W : smoothstep(0.8, 1.0, W);");
+	WetG->Inputs.SetNum(2);
+	WetG->Inputs[0].InputName = TEXT("W");     WetG->Inputs[0].Input.Connect(0, Wet);
+	WetG->Inputs[1].InputName = TEXT("Model"); WetG->Inputs[1].Input.Connect(0, WetModel);
 	UMaterialExpressionConstant* One = AddExpr<UMaterialExpressionConstant>(M, -500, -50);
 	One->R = 1.f;
 	UMaterialExpressionLinearInterpolate* SpeckW = AddExpr<UMaterialExpressionLinearInterpolate>(M, -300, -100);
-	SpeckW->A.Connect(0, Speck); SpeckW->B.Connect(0, One); SpeckW->Alpha.Connect(0, WetC);
+	SpeckW->A.Connect(0, Speck); SpeckW->B.Connect(0, One); SpeckW->Alpha.Connect(0, WetG);
 	UMaterialExpressionMultiply* ColDry = AddExpr<UMaterialExpressionMultiply>(M, -150, -200);
 	ColDry->A.Connect(0, Mix); ColDry->B.Connect(0, SpeckW);
 	// 젖은 색 (papers L-3 ①-a). WetModel 0 = 예전 (선형 W · 알베도 × 0.5), 1 = 채널별 Ångström 식 + 빨리 포화하는 W 곡선
@@ -131,7 +139,7 @@ bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage)
 	UMaterialExpressionConstant* Seventy = AddExpr<UMaterialExpressionConstant>(M, -700, 200);
 	Seventy->R = 0.3f;
 	UMaterialExpressionLinearInterpolate* GrainScale = AddExpr<UMaterialExpressionLinearInterpolate>(M, -550, 200);   // 1 → 0.3
-	GrainScale->A.Connect(0, One); GrainScale->B.Connect(0, Seventy); GrainScale->Alpha.Connect(0, WetC);
+	GrainScale->A.Connect(0, One); GrainScale->B.Connect(0, Seventy); GrainScale->Alpha.Connect(0, WetG);
 	UMaterialExpressionMultiply* GrainHW = AddExpr<UMaterialExpressionMultiply>(M, -450, 120);
 	GrainHW->A.Connect(0, GrainH); GrainHW->B.Connect(0, GrainScale);
 	Call->FunctionInputs[0].Input.Connect(0, GrainHW);
@@ -143,7 +151,7 @@ bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage)
 	UMaterialExpressionConstant* RoughWet = AddExpr<UMaterialExpressionConstant>(M, -300, 300);
 	RoughWet->R = 0.2f;
 	UMaterialExpressionLinearInterpolate* Rough = AddExpr<UMaterialExpressionLinearInterpolate>(M, -150, 250);
-	Rough->A.Connect(0, RoughDry); Rough->B.Connect(0, RoughWet); Rough->Alpha.Connect(0, WetC);
+	Rough->A.Connect(0, RoughDry); Rough->B.Connect(0, RoughWet); Rough->Alpha.Connect(0, WetG);
 	Ed->Roughness.Connect(0, Rough);
 
 	// 모션 벡터 (m1-plan-render R1): 정점이 버퍼 안에서 움직이므로 엔진은 정지로 본다.
