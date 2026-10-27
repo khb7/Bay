@@ -459,6 +459,9 @@ namespace
 
 	// 프레임 틱이 없는 커맨드릿에서는 RDG 풀도 RHI 프레임도 스스로 안 넘어간다. RHI 프레임을 안 닫으면
 	// 올리기용 임시 메모리와 지연 삭제가 쌓이다가 수천 스텝 뒤 GPU 페이지 폴트로 죽는다 (stage11 첫 실행, 8분째)
+	bool StatsReady(FSandGpuSim::FState* S);
+	void FetchStats(FSandGpuSim::FState* S, int32 Groups, bool bWait);
+
 	void EndGpuFrame(FRHICommandListImmediate& RHICmdList)
 	{
 		FRDGBuilder::TickPoolElements();
@@ -639,7 +642,13 @@ struct FSandGpuSim::FState
 	FRHIGPUBufferReadback HandRB{ TEXT("SandGpu.Hand") };
 	FRHIGPUBufferReadback DlWet{ TEXT("SandGpu.DlWet") }, DlBondIJ{ TEXT("SandGpu.DlBondIJ") };
 	FRHIGPUBufferReadback BondTotalRB{ TEXT("SandGpu.BondTotal") };
-	bool bCompactedThisStep = false;   // A2 — 이번 스텝에 결합 칸을 압축했다 → NumB 를 줄여도 된다
+	bool bCompactedThisStep = false;
+	// A5 — 통계 비동기 (P.bAsyncStats). 렌더 스레드가 준비된 리드백을 Latest 로 옮기고, 게임 스레드는 Step 끝에 한 번 가져간다
+	struct FRaw { TArray<FVector4f> Partial; uint32 Counters[4] = {}, FrameCounts[4] = {}, BatchStats[8] = {}, Hand[4] = {}, BondTot[4] = {}; float StageMs[4] = {}; bool bValid = false; };
+	FRaw Latest;
+	FCriticalSection StatsLock;
+	bool bStatsInFlight = false;
+	int32 InFlightGroups = 0;   // A2 — 이번 스텝에 결합 칸을 압축했다 → NumB 를 줄여도 된다
 	// M2 T5 — 위치만 비동기 리드백 (커서 높이장). 렌더 스레드만 InFlight 를 만지고, 결과는 잠금 아래 게임 스레드로
 	FRHIGPUBufferReadback AsyncPosRB{ TEXT("SandGpu.AsyncPos") };
 	bool bAsyncInFlight = false;
@@ -817,16 +826,14 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 	uint32 TableSize = 1;
 	while ((int32)TableSize < LN * 2) { TableSize <<= 1; }
 	const int32 NumStatGroups = FMath::DivideAndRoundUp(LN, StatsGroup);
-	S->StatsPartial.SetNumUninitialized(NumStatGroups);
-	uint32 Counters[4] = {};
-	uint32 FrameCounts[4] = {};
-	uint32 BatchStats[8] = {};
-	float StageMs[4] = {};
-	uint32 Hand[4] = {};
-	uint32 BondTot[4] = {};
+	// A5 — 결합 칸 수(NumB)가 바뀌는 사건 결합 프레임은 늘 동기 (다음 프레임 디스패치 크기)
+	const bool bSync = !P.bAsyncStats || P.bFormBonds;
 
-	ENQUEUE_RENDER_COMMAND(SandGpuSimStep)([S, &P, LN, LB, LMax, TableSize, NumStatGroups, &Counters, &FrameCounts, &BatchStats, &StageMs, &Hand, &BondTot](FRHICommandListImmediate& RHICmdList)
+	ENQUEUE_RENDER_COMMAND(SandGpuSimStep)([S, PCopy = P, bSync, LN, LB, LMax, TableSize, NumStatGroups](FRHICommandListImmediate& RHICmdList)
 	{
+		const FSandGpuFrameParams& P = PCopy;
+		if (S->bStatsInFlight && StatsReady(S)) { FetchStats(S, S->InFlightGroups, false); S->bStatsInFlight = false; }
+		const bool bCopyStats = bSync || !S->bStatsInFlight;   // 앞 것이 아직이면 이번 프레임 통계는 건너뛴다
 		const int32 Cur = S->Cur, Old = 1 - S->Cur;
 		{
 			FRDGBuilder GraphBuilder(RHICmdList, RDG_EVENT_NAME("SandGpuSimStep"));
@@ -1060,7 +1067,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 						AddDirectPass<FSandBondToolCS>(GraphBuilder, RDG_EVENT_NAME("SandBondTool"), ShaderMap, TB, LB, 64);
 					}
 				}
-				AddEnqueueCopyPass(GraphBuilder, &S->HandRB, HandCountBuf, 4 * sizeof(uint32));
+				if (bCopyStats) { AddEnqueueCopyPass(GraphBuilder, &S->HandRB, HandCountBuf, 4 * sizeof(uint32)); }
 			}
 			AddDirectPass<FSandCellKeyCS>(GraphBuilder, RDG_EVENT_NAME("SandCellKey"), ShaderMap, F, LN, 64);
 			AddScan(GraphBuilder, ShaderMap, F, CellCount, CellStart, TableSize);
@@ -1238,36 +1245,43 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 					BL.BondAdjOffsetRO = GraphBuilder.CreateSRV(BondAdjOffset);
 					AddDirectPass<FSandBondFillCS>(GraphBuilder, RDG_EVENT_NAME("SandBondFill"), ShaderMap, BL, S->CapB, 64);
 				}
-				AddEnqueueCopyPass(GraphBuilder, &S->BondTotalRB, BondTotal, 4 * sizeof(uint32));
+				if (bCopyStats) { AddEnqueueCopyPass(GraphBuilder, &S->BondTotalRB, BondTotal, 4 * sizeof(uint32)); }
 			}
 
 			Stamp(4);
-			AddEnqueueCopyPass(GraphBuilder, &S->StatsRB, Stats, NumStatGroups * sizeof(FVector4f));
-			AddEnqueueCopyPass(GraphBuilder, &S->CountersRB, CountersBuf, 4 * sizeof(uint32));
-			AddEnqueueCopyPass(GraphBuilder, &S->FrameCountsRB, FrameCountsBuf, 4 * sizeof(uint32));
-			AddEnqueueCopyPass(GraphBuilder, &S->BatchStatsRB, BatchStatsBuf, 8 * sizeof(uint32));
+			if (bCopyStats)
+			{
+				AddEnqueueCopyPass(GraphBuilder, &S->StatsRB, Stats, NumStatGroups * sizeof(FVector4f));
+				AddEnqueueCopyPass(GraphBuilder, &S->CountersRB, CountersBuf, 4 * sizeof(uint32));
+				AddEnqueueCopyPass(GraphBuilder, &S->FrameCountsRB, FrameCountsBuf, 4 * sizeof(uint32));
+				AddEnqueueCopyPass(GraphBuilder, &S->BatchStatsRB, BatchStatsBuf, 8 * sizeof(uint32));
+			}
 			GraphBuilder.Execute();
 		}
-		RHICmdList.SubmitAndBlockUntilGPUIdle();
-		FetchReadback(S->StatsRB, S->StatsPartial.GetData(), NumStatGroups * sizeof(FVector4f));
-		FetchReadback(S->CountersRB, Counters, 4 * sizeof(uint32));
-		FetchReadback(S->FrameCountsRB, FrameCounts, 4 * sizeof(uint32));
-		FetchReadback(S->BatchStatsRB, BatchStats, 8 * sizeof(uint32));
-		FetchReadback(S->HandRB, Hand, 4 * sizeof(uint32));
-		FetchReadback(S->BondTotalRB, BondTot, 4 * sizeof(uint32));
-		if (S->StageTs[0].IsValid())
+		if (bSync)
 		{
-			uint64 Us[5] = {};
-			bool bOk = true;
-			for (int32 k = 0; k < 5; ++k) { bOk &= RHIGetRenderQueryResult(S->StageTs[k].GetReference(), Us[k], true); }
-			if (bOk) { for (int32 k = 0; k < 4; ++k) { StageMs[k] = (float)(Us[k + 1] - Us[k]) * 0.001f; } }
+			RHICmdList.SubmitAndBlockUntilGPUIdle();
+			FetchStats(S, NumStatGroups, true);
+			S->bStatsInFlight = false;
 		}
+		else if (bCopyStats) { S->bStatsInFlight = true; S->InFlightGroups = NumStatGroups; }
 		S->Cur = Old;
 		EndGpuFrame(RHICmdList);
 	});
-	FlushRenderingCommands();
+	if (bSync) { FlushRenderingCommands(); }
 
-	for (const FVector4f& G : S->StatsPartial)
+	// 결과 — 동기면 이번 프레임, 비동기면 준비된 지난 프레임 것 (없으면 0 · NumB 그대로)
+	FState::FRaw R;
+	{
+		FScopeLock L(&S->StatsLock);
+		if (!S->Latest.bValid) { Out.GpuMs = (FPlatformTime::Seconds() - T0) * 1000.0; return; }
+		R = MoveTemp(S->Latest);
+		S->Latest = FState::FRaw();
+	}
+	const uint32* Counters = R.Counters; const uint32* FrameCounts = R.FrameCounts; const uint32* BatchStats = R.BatchStats;
+	const uint32* Hand = R.Hand; const uint32* BondTot = R.BondTot; const float* StageMs = R.StageMs;
+
+	for (const FVector4f& G : R.Partial)
 	{
 		Out.SumSpeed  += G.X;
 		Out.MaxSpeed   = FMath::Max(Out.MaxSpeed, G.Y);
@@ -1292,6 +1306,36 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 	for (int32 k = 0; k < 4; ++k) { Out.StageMs[k] = StageMs[k]; }
 	LastNumPairs = Out.NumPairs;
 	Out.GpuMs = (FPlatformTime::Seconds() - T0) * 1000.0;
+}
+
+namespace
+{
+	bool StatsReady(FSandGpuSim::FState* S)
+	{
+		return S->StatsRB.IsReady() && S->CountersRB.IsReady() && S->FrameCountsRB.IsReady() && S->BatchStatsRB.IsReady() && S->HandRB.IsReady() && S->BondTotalRB.IsReady();
+	}
+
+	void FetchStats(FSandGpuSim::FState* S, int32 Groups, bool bWait)
+	{
+		FSandGpuSim::FState::FRaw R;
+		R.Partial.SetNumUninitialized(Groups);
+		FetchReadback(S->StatsRB, R.Partial.GetData(), Groups * sizeof(FVector4f));
+		FetchReadback(S->CountersRB, R.Counters, 4 * sizeof(uint32));
+		FetchReadback(S->FrameCountsRB, R.FrameCounts, 4 * sizeof(uint32));
+		FetchReadback(S->BatchStatsRB, R.BatchStats, 8 * sizeof(uint32));
+		FetchReadback(S->HandRB, R.Hand, 4 * sizeof(uint32));
+		FetchReadback(S->BondTotalRB, R.BondTot, 4 * sizeof(uint32));
+		if (S->StageTs[0].IsValid())
+		{
+			uint64 Us[5] = {};
+			bool bOk = true;
+			for (int32 k = 0; k < 5; ++k) { bOk &= RHIGetRenderQueryResult(S->StageTs[k].GetReference(), Us[k], bWait); }
+			if (bOk) { for (int32 k = 0; k < 4; ++k) { R.StageMs[k] = (float)(Us[k + 1] - Us[k]) * 0.001f; } }
+		}
+		R.bValid = true;
+		FScopeLock L(&S->StatsLock);
+		S->Latest = MoveTemp(R);
+	}
 }
 
 void FSandGpuSim::RequestPositionsAsync() const

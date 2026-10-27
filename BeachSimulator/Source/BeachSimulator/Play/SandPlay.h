@@ -56,7 +56,7 @@ private:
 	FVector2D LastMouse = FVector2D::ZeroVector;
 	bool bLooking = false;
 
-	struct FCost { double Stage[4] = {}; double Gpu = 0, Height = 0, HeightMax = 0; int32 N = 0, NH = 0; };
+	struct FCost { double Stage[4] = {}; double Gpu = 0, Frame = 0, Height = 0, HeightMax = 0; int32 N = 0, NH = 0; };
 	FCost Cost[4];
 
 	// 자동 시험 (-sandplayshot)

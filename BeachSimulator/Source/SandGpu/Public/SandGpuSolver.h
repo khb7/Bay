@@ -123,6 +123,8 @@ struct FSandGpuFrameParams
 	// M2 T3 쌓기 — 놓을 자리 (xyz). GPU 가 손 재고 수만큼만 채운다 (뒤에 넣은 것부터)
 	TArray<FVector4f> PileTargets;
 	float  PileDropVel = 0.f;         // 놓을 때 아래로 주는 속도 (cm/s)
+	// A5 — 통계를 기다리지 않는다 (한 프레임 이상 늦은 값). 사건 결합 프레임만 동기. 결정성 시험(커맨드릿)은 끈다
+	bool   bAsyncStats = false;
 };
 
 /** 프레임 통계 — UpdateSettleState 가 쓰는 것 전부 */
@@ -188,8 +190,8 @@ public:
 	int32 NumBonds() const { return NumB; }
 	int32 MaxPairs() const { return MaxPairCount; }
 
+	struct FState;   // 렌더 스레드 소유 버퍼 (구현 파일 안의 도우미가 쓰도록 공개 선언만)
 private:
-	struct FState;
 	FState* State = nullptr;   // 렌더 스레드 소유 버퍼
 	int32 N = 0;
 	int32 NumB = 0;

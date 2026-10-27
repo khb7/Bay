@@ -370,7 +370,8 @@ public:
 	int32 GetLastBondsFormed() const { return LastBondsFormed; }
 	int32 GetLastPiled() const { return LastPiled; }
 	int32 GetLastBondsCompacted() const { return LastBondsCompacted; }
-	float PileDropVel = 0.f;                            // 쌓기: 놓을 때 아래로 속도 (cm/s)
+	float PileDropVel = 0.f;
+	bool  bAsyncStats = false;                          // A5 — GPU 통계를 기다리지 않는다 (플레이용. 결정성 시험은 끈다)                            // 쌓기: 놓을 때 아래로 속도 (cm/s)
 	int32 HandCap = 600;                                // 손 용량 — 반지름 10cm 구 한 삽 (m2-plan)
 	float DrainTau = 0.f;                               // M2 임시 배수 τ (초). 0 = 끔. W > WOptEnd 를 WOptEnd 쪽으로
 	bool  IsDead(int32 i) const { return Dead.IsValidIndex(i) && Dead[i] != 0; }

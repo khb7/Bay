@@ -127,6 +127,7 @@ void USandPlaySubsystem::OnWorldBeginPlay(UWorld& World)
 	}
 	FParse::Value(FCommandLine::Get(), TEXT("sandplayshot="), ShotPath);
 	// m2-plan 물붓기 ③ — 과포화(W > WOptEnd)는 τ 초로 WOptEnd 쪽으로 이완 (M2 임시 배수, M5 에서 교체). -sanddrain=0 이면 끔
+	Sim->bAsyncStats = !FParse::Param(FCommandLine::Get(), TEXT("sandsyncstats"));   // A5 — 대조: -sandsyncstats
 	Sim->DrainTau = 10.f; FParse::Value(FCommandLine::Get(), TEXT("sanddrain="), Sim->DrainTau);
 	bAsyncHeight = !FParse::Param(FCommandLine::Get(), TEXT("sandsyncheight"));   // 대조: 예전 동기 내려받기
 	{ const bool bA = bAsyncHeight; bAsyncHeight = false; RebuildHeight(); bAsyncHeight = bA; }   // 처음 한 번은 동기
@@ -330,7 +331,7 @@ bool USandPlaySubsystem::Tick(float DeltaTime)
 	{
 		FCost& C = Cost[Tool + 1];
 		for (int32 k = 0; k < 4; ++k) { C.Stage[k] += Sim->LastStageMs(k); }
-		C.Gpu += Sim->LastGpuMs(); ++C.N;
+		C.Gpu += Sim->LastGpuMs(); C.Frame += DeltaTime * 1000.0; ++C.N;
 		if (HMs >= 0.0) { C.Height += HMs; ++C.NH; C.HeightMax = FMath::Max(C.HeightMax, HMs); }
 	}
 
@@ -369,8 +370,8 @@ bool USandPlaySubsystem::Tick(float DeltaTime)
 			{
 				const FCost& C = Cost[t];
 				if (C.N == 0) { continue; }
-				UE_LOG(LogSandPlay, Display, TEXT("T5 %s (%d 프레임): 단계 ms [이웃·도구 %.3f · 워밍 %.3f · 반복 %.3f · 파단 %.3f] · 스텝 벽시계 %.2f · 높이장(내려받기 포함) 평균 %.2f 최대 %.2f ms"),
-					Names[t], C.N, C.Stage[0] / C.N, C.Stage[1] / C.N, C.Stage[2] / C.N, C.Stage[3] / C.N, C.Gpu / C.N, C.NH ? C.Height / C.NH : 0.0, C.HeightMax);
+				UE_LOG(LogSandPlay, Display, TEXT("T5 %s (%d 프레임): 단계 ms [이웃·도구 %.3f · 워밍 %.3f · 반복 %.3f · 파단 %.3f] · 스텝 벽시계 %.2f · 높이장(내려받기 포함) 평균 %.2f 최대 %.2f ms · 프레임 %.2f ms"),
+					Names[t], C.N, C.Stage[0] / C.N, C.Stage[1] / C.N, C.Stage[2] / C.N, C.Stage[3] / C.N, C.Gpu / C.N, C.NH ? C.Height / C.NH : 0.0, C.HeightMax, C.Frame / C.N);
 			}
 			FPlatformMisc::RequestExit(false); return false;
 		}
