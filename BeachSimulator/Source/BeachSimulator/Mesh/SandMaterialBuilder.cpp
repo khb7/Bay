@@ -88,29 +88,36 @@ bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage)
 	WetSum->A.Connect(0, WetParam); WetSum->B.Connect(1, VCol);   // 출력 1 = R
 	UMaterialExpressionSaturate* Wet = AddExpr<UMaterialExpressionSaturate>(M, -900, 400);
 	Wet->Input.Connect(0, WetSum);
+	// 젖음 곡선 Wc — 색 · 반짝임 · 알갱이 요철 · 러프니스가 모두 이것을 쓴다 (#34). WetModel 0 이면 예전처럼 선형 W
+	//   Wc = (1 − e^(−6W)) / (1 − e^(−6)) — 해변 모래는 조금 젖을 때 급변 후 평탄 (Nolet 2014, papers L-3 ①-a)
+	UMaterialExpressionScalarParameter* WetModel = AddExpr<UMaterialExpressionScalarParameter>(M, -1100, 300);
+	WetModel->ParameterName = TEXT("WetModel");
+	WetModel->DefaultValue = 1.f;
+	UMaterialExpressionCustom* WetC = AddExpr<UMaterialExpressionCustom>(M, -800, 400);
+	WetC->OutputType = CMOT_Float1;
+	WetC->Code = TEXT("return Model < 0.5 ? W : (1 - exp(-6 * W)) / (1 - exp(-6.0));");
+	WetC->Inputs.SetNum(2);
+	WetC->Inputs[0].InputName = TEXT("W");     WetC->Inputs[0].Input.Connect(0, Wet);
+	WetC->Inputs[1].InputName = TEXT("Model"); WetC->Inputs[1].Input.Connect(0, WetModel);
 	UMaterialExpressionConstant* One = AddExpr<UMaterialExpressionConstant>(M, -500, -50);
 	One->R = 1.f;
 	UMaterialExpressionLinearInterpolate* SpeckW = AddExpr<UMaterialExpressionLinearInterpolate>(M, -300, -100);
-	SpeckW->A.Connect(0, Speck); SpeckW->B.Connect(0, One); SpeckW->Alpha.Connect(0, Wet);
+	SpeckW->A.Connect(0, Speck); SpeckW->B.Connect(0, One); SpeckW->Alpha.Connect(0, WetC);
 	UMaterialExpressionMultiply* ColDry = AddExpr<UMaterialExpressionMultiply>(M, -150, -200);
 	ColDry->A.Connect(0, Mix); ColDry->B.Connect(0, SpeckW);
 	// 젖은 색 (papers L-3 ①-a). WetModel 0 = 예전 (선형 W · 알베도 × 0.5), 1 = 채널별 Ångström 식 + 빨리 포화하는 W 곡선
 	//   A_wet = (1 − r_e)(1 − x)·A / (1 − A·x), r_e 0.04 · x 0.6 (n 1.33 물막 안 전반사) — 어두운 채널이 더 어두워져 채도가 오른다
 	//   곡선 Wc = (1 − e^(−6W)) / (1 − e^(−6)) — 해변 모래는 조금 젖을 때 급락 후 평탄 (Nolet 2014)
-	UMaterialExpressionScalarParameter* WetModel = AddExpr<UMaterialExpressionScalarParameter>(M, -1100, 300);
-	WetModel->ParameterName = TEXT("WetModel");
-	WetModel->DefaultValue = 1.f;
 	UMaterialExpressionCustom* WetCol = AddExpr<UMaterialExpressionCustom>(M, -150, -120);
 	WetCol->OutputType = CMOT_Float3;
 	WetCol->Code = TEXT(
 		"if (Model < 0.5) return lerp(A, A * 0.5, W);\n"
-		"const float Wc = (1 - exp(-6 * W)) / (1 - exp(-6.0));\n"
 		"const float X = 0.6;\n"
 		"const float3 Aw = (1 - 0.04) * (1 - X) * A / (1 - A * X);\n"
-		"return lerp(A, Aw, Wc);");
+		"return lerp(A, Aw, W);");
 	WetCol->Inputs.SetNum(3);
 	WetCol->Inputs[0].InputName = TEXT("A");     WetCol->Inputs[0].Input.Connect(0, ColDry);
-	WetCol->Inputs[1].InputName = TEXT("W");     WetCol->Inputs[1].Input.Connect(0, Wet);
+	WetCol->Inputs[1].InputName = TEXT("W");     WetCol->Inputs[1].Input.Connect(0, WetC);
 	WetCol->Inputs[2].InputName = TEXT("Model"); WetCol->Inputs[2].Input.Connect(0, WetModel);
 	Ed->BaseColor.Connect(0, WetCol);
 
@@ -124,7 +131,7 @@ bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage)
 	UMaterialExpressionConstant* Seventy = AddExpr<UMaterialExpressionConstant>(M, -700, 200);
 	Seventy->R = 0.3f;
 	UMaterialExpressionLinearInterpolate* GrainScale = AddExpr<UMaterialExpressionLinearInterpolate>(M, -550, 200);   // 1 → 0.3
-	GrainScale->A.Connect(0, One); GrainScale->B.Connect(0, Seventy); GrainScale->Alpha.Connect(0, Wet);
+	GrainScale->A.Connect(0, One); GrainScale->B.Connect(0, Seventy); GrainScale->Alpha.Connect(0, WetC);
 	UMaterialExpressionMultiply* GrainHW = AddExpr<UMaterialExpressionMultiply>(M, -450, 120);
 	GrainHW->A.Connect(0, GrainH); GrainHW->B.Connect(0, GrainScale);
 	Call->FunctionInputs[0].Input.Connect(0, GrainHW);
@@ -136,7 +143,7 @@ bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage)
 	UMaterialExpressionConstant* RoughWet = AddExpr<UMaterialExpressionConstant>(M, -300, 300);
 	RoughWet->R = 0.2f;
 	UMaterialExpressionLinearInterpolate* Rough = AddExpr<UMaterialExpressionLinearInterpolate>(M, -150, 250);
-	Rough->A.Connect(0, RoughDry); Rough->B.Connect(0, RoughWet); Rough->Alpha.Connect(0, Wet);
+	Rough->A.Connect(0, RoughDry); Rough->B.Connect(0, RoughWet); Rough->Alpha.Connect(0, WetC);
 	Ed->Roughness.Connect(0, Rough);
 
 	// 모션 벡터 (m1-plan-render R1): 정점이 버퍼 안에서 움직이므로 엔진은 정지로 본다.
