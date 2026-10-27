@@ -126,6 +126,8 @@ void USandPlaySubsystem::OnWorldBeginPlay(UWorld& World)
 		PC->SetInputMode(Mode);
 	}
 	FParse::Value(FCommandLine::Get(), TEXT("sandplayshot="), ShotPath);
+	// m2-plan 물붓기 ③ — 과포화(W > WOptEnd)는 τ 초로 WOptEnd 쪽으로 이완 (M2 임시 배수, M5 에서 교체). -sanddrain=0 이면 끔
+	Sim->DrainTau = 10.f; FParse::Value(FCommandLine::Get(), TEXT("sanddrain="), Sim->DrainTau);
 	bAsyncHeight = !FParse::Param(FCommandLine::Get(), TEXT("sandsyncheight"));   // 대조: 예전 동기 내려받기
 	{ const bool bA = bAsyncHeight; bAsyncHeight = false; RebuildHeight(); bAsyncHeight = bA; }   // 처음 한 번은 동기
 	Frames = 0;
