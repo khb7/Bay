@@ -632,6 +632,13 @@ struct FSandGpuSim::FState
 	FRHIGPUBufferReadback HandRB{ TEXT("SandGpu.Hand") };
 	FRHIGPUBufferReadback DlWet{ TEXT("SandGpu.DlWet") }, DlBondIJ{ TEXT("SandGpu.DlBondIJ") };
 	FRHIGPUBufferReadback BondTotalRB{ TEXT("SandGpu.BondTotal") };
+	// M2 T5 — 위치만 비동기 리드백 (커서 높이장). 렌더 스레드만 InFlight 를 만지고, 결과는 잠금 아래 게임 스레드로
+	FRHIGPUBufferReadback AsyncPosRB{ TEXT("SandGpu.AsyncPos") };
+	bool bAsyncInFlight = false;
+	int32 AsyncN = 0;
+	FCriticalSection AsyncLock;
+	TArray<FVector4f> AsyncPos;
+	bool bAsyncReady = false;
 	// 영구 (결합)
 	TRefCountPtr<FRDGPooledBuffer> BondIJ, BondData, BondAdjOffset, BondAdj;
 	// 쌍 목록 두 벌 — [Cur] 이번 프레임 · [1-Cur] 지난 프레임 (워밍 조회)
@@ -1250,6 +1257,42 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 	for (int32 k = 0; k < 4; ++k) { Out.StageMs[k] = StageMs[k]; }
 	LastNumPairs = Out.NumPairs;
 	Out.GpuMs = (FPlatformTime::Seconds() - T0) * 1000.0;
+}
+
+void FSandGpuSim::RequestPositionsAsync() const
+{
+	if (N == 0) { return; }
+	FState* S = State;
+	const int32 LN = N;
+	ENQUEUE_RENDER_COMMAND(SandGpuAsyncPos)([S, LN](FRHICommandListImmediate& RHICmdList)
+	{
+		if (S->bAsyncInFlight)
+		{
+			if (!S->AsyncPosRB.IsReady()) { return; }   // 아직 — 다음 요청 때 다시 본다
+			TArray<FVector4f> Tmp; Tmp.SetNumUninitialized(S->AsyncN);
+			FetchReadback(S->AsyncPosRB, Tmp.GetData(), S->AsyncN * sizeof(FVector4f));
+			{
+				FScopeLock L(&S->AsyncLock);
+				S->AsyncPos = MoveTemp(Tmp);
+				S->bAsyncReady = true;
+			}
+			S->bAsyncInFlight = false;
+		}
+		FRDGBuilder GraphBuilder(RHICmdList, RDG_EVENT_NAME("SandGpuAsyncPos"));
+		AddEnqueueCopyPass(GraphBuilder, &S->AsyncPosRB, GraphBuilder.RegisterExternalBuffer(S->Pos), LN * sizeof(FVector4f));
+		GraphBuilder.Execute();
+		S->AsyncN = LN;
+		S->bAsyncInFlight = true;
+	});
+}
+
+bool FSandGpuSim::TakePositionsAsync(TArray<FVector4f>& Out) const
+{
+	FScopeLock L(&State->AsyncLock);
+	if (!State->bAsyncReady) { return false; }
+	Out = MoveTemp(State->AsyncPos);
+	State->bAsyncReady = false;
+	return true;
 }
 
 void FSandGpuSim::Download(FSandGpuDownload& Out) const

@@ -172,6 +172,10 @@ public:
 	void Upload(const FSandGpuUpload& In, bool bKeepPairs);
 	void Step(const FSandGpuFrameParams& P, FSandGpuStats& OutStats);
 	void Download(FSandGpuDownload& Out) const;
+	/** M2 T5 — 위치만 비동기로 읽는다 (기다리지 않음). 매 프레임 불러도 된다: 앞 요청이 끝났으면 결과를 넘기고 새로 건다.
+	 *  Take 는 새 결과가 있을 때만 true (몇 프레임 늦은 값) */
+	void RequestPositionsAsync() const;
+	bool TakePositionsAsync(TArray<FVector4f>& Out) const;
 
 	int32 NumParticles() const { return N; }
 	/** 렌더 스레드 — 위치 버퍼 (float4 xyz · w 역질량, 구조 버퍼). M1 G3 메셔가 내려받기 없이 같은 프레임에 읽는다 */

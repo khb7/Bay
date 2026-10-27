@@ -99,7 +99,8 @@ void USandPlaySubsystem::OnWorldBeginPlay(UWorld& World)
 		PC->SetInputMode(Mode);
 	}
 	FParse::Value(FCommandLine::Get(), TEXT("sandplayshot="), ShotPath);
-	RebuildHeight();
+	bAsyncHeight = !FParse::Param(FCommandLine::Get(), TEXT("sandsyncheight"));   // 대조: 예전 동기 내려받기
+	{ const bool bA = bAsyncHeight; bAsyncHeight = false; RebuildHeight(); bAsyncHeight = bA; }   // 처음 한 번은 동기
 	Frames = 0;
 	TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &USandPlaySubsystem::Tick));
 }
@@ -115,8 +116,10 @@ void USandPlaySubsystem::Deinitialize()
 
 void USandPlaySubsystem::RebuildHeight()
 {
-	// 위치 내려받기 (동기) → 칸마다 입자 윗면 최대
-	const TArray<FVector3f>& P = Sim->GetPositions();
+	// 칸마다 입자 윗면 최대. 위치 = 비동기 리드백 결과 (T5 — 동기 내려받기는 4 프레임마다 12ms 였다)
+	TArray<FVector3f> P;
+	if (bAsyncHeight) { P.Reserve(AsyncPos.Num()); for (const FVector4f& X : AsyncPos) { P.Add(FVector3f(X)); } }
+	else { P = Sim->GetPositions(); }
 	const float R = Sim->GetParams().Radius;
 	Height.Init(Floor, HNX * HNY);
 	const int32 Rc = FMath::CeilToInt(R / HCell);
@@ -256,7 +259,22 @@ bool USandPlaySubsystem::Tick(float DeltaTime)
 
 	Sim->Step(1.f / 60.f);
 	SimComp->UpdateFromSim();
-	if (Frames % HeightEvery == 0) { RebuildHeight(); }
+	double HMs = -1.0;
+	if (bAsyncHeight)
+	{
+		const double T0 = FPlatformTime::Seconds();
+		Sim->GetGpuSim()->RequestPositionsAsync();
+		if (Sim->GetGpuSim()->TakePositionsAsync(AsyncPos)) { RebuildHeight(); HMs = (FPlatformTime::Seconds() - T0) * 1000.0; }
+	}
+	else if (Frames % HeightEvery == 0) { const double T0 = FPlatformTime::Seconds(); RebuildHeight(); HMs = (FPlatformTime::Seconds() - T0) * 1000.0; }
+	// T5 비용 — 자동 시험 구간별 평균 (도구 -1 쉼 · 0 파기 · 1 쌓기 · 2 물붓기)
+	if (bAuto && Frames > WarmFrames + 5)
+	{
+		FCost& C = Cost[Tool + 1];
+		for (int32 k = 0; k < 4; ++k) { C.Stage[k] += Sim->LastStageMs(k); }
+		C.Gpu += Sim->LastGpuMs(); ++C.N;
+		if (HMs >= 0.0) { C.Height += HMs; ++C.NH; C.HeightMax = FMath::Max(C.HeightMax, HMs); }
+	}
 
 	if (bHit)
 	{
@@ -283,7 +301,18 @@ bool USandPlaySubsystem::Tick(float DeltaTime)
 			FScreenshotRequest::RequestScreenshot(ShotPath, false, false);
 			UE_LOG(LogSandPlay, Display, TEXT("스크린샷 요청: %s"), *ShotPath);
 		}
-		if (F >= 300) { FPlatformMisc::RequestExit(false); return false; }
+		if (F >= 300)
+		{
+			static const TCHAR* Names[] = { TEXT("쉼"), TEXT("파기"), TEXT("쌓기"), TEXT("물붓기") };
+			for (int32 t = 0; t < 4; ++t)
+			{
+				const FCost& C = Cost[t];
+				if (C.N == 0) { continue; }
+				UE_LOG(LogSandPlay, Display, TEXT("T5 %s (%d 프레임): 단계 ms [이웃·도구 %.3f · 워밍 %.3f · 반복 %.3f · 파단 %.3f] · 스텝 벽시계 %.2f · 높이장(내려받기 포함) 평균 %.2f 최대 %.2f ms"),
+					Names[t], C.N, C.Stage[0] / C.N, C.Stage[1] / C.N, C.Stage[2] / C.N, C.Stage[3] / C.N, C.Gpu / C.N, C.NH ? C.Height / C.NH : 0.0, C.HeightMax);
+			}
+			FPlatformMisc::RequestExit(false); return false;
+		}
 	}
 	return true;
 }
