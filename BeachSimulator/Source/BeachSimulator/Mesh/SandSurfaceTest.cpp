@@ -175,7 +175,9 @@ void USandSurfaceTestSubsystem::StartSim(UWorld& World)
 	Actor->SetActorLocation(Offset);
 	FParse::Value(FCommandLine::Get(), TEXT("sandsmooth="), SimComp->SmoothIters);
 	float Wet = 0.f;
-	if (FParse::Value(FCommandLine::Get(), TEXT("sandwet="), Wet)) { SimComp->SetWetness(Wet); }   // 젖은 모래 보기 (#22)   // 평활화 반복 비교용
+	if (FParse::Value(FCommandLine::Get(), TEXT("sandwet="), Wet)) { SimComp->SetWetness(Wet); }
+	float WetModel = 1.f;
+	if (FParse::Value(FCommandLine::Get(), TEXT("sandwetmodel="), WetModel)) { SimComp->SetMaterialScalar(TEXT("WetModel"), WetModel); }   // 젖은 색 모델 비교 (papers L-3 ①-a)   // 젖은 모래 보기 (#22)   // 평활화 반복 비교용
 	SimComp->SetSimSource(Sim->GetGpuSim(), DMin, DMax);
 
 	EnsureMovableSun(World);

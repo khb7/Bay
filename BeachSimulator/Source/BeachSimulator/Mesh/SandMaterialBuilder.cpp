@@ -12,6 +12,7 @@
 #include "Materials/MaterialExpressionAdd.h"
 #include "Materials/MaterialExpressionConstant.h"
 #include "Materials/MaterialExpressionConstant3Vector.h"
+#include "Materials/MaterialExpressionCustom.h"
 #include "Materials/MaterialExpressionLinearInterpolate.h"
 #include "Materials/MaterialExpressionMaterialFunctionCall.h"
 #include "Materials/MaterialExpressionMultiply.h"
@@ -93,13 +94,25 @@ bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage)
 	SpeckW->A.Connect(0, Speck); SpeckW->B.Connect(0, One); SpeckW->Alpha.Connect(0, Wet);
 	UMaterialExpressionMultiply* ColDry = AddExpr<UMaterialExpressionMultiply>(M, -150, -200);
 	ColDry->A.Connect(0, Mix); ColDry->B.Connect(0, SpeckW);
-	UMaterialExpressionConstant* Half = AddExpr<UMaterialExpressionConstant>(M, -300, -150);
-	Half->R = 0.5f;
-	UMaterialExpressionMultiply* ColWet = AddExpr<UMaterialExpressionMultiply>(M, -150, -120);
-	ColWet->A.Connect(0, ColDry); ColWet->B.Connect(0, Half);
-	UMaterialExpressionLinearInterpolate* Col = AddExpr<UMaterialExpressionLinearInterpolate>(M, -50, -200);
-	Col->A.Connect(0, ColDry); Col->B.Connect(0, ColWet); Col->Alpha.Connect(0, Wet);
-	Ed->BaseColor.Connect(0, Col);
+	// 젖은 색 (papers L-3 ①-a). WetModel 0 = 예전 (선형 W · 알베도 × 0.5), 1 = 채널별 Ångström 식 + 빨리 포화하는 W 곡선
+	//   A_wet = (1 − r_e)(1 − x)·A / (1 − A·x), r_e 0.04 · x 0.6 (n 1.33 물막 안 전반사) — 어두운 채널이 더 어두워져 채도가 오른다
+	//   곡선 Wc = (1 − e^(−6W)) / (1 − e^(−6)) — 해변 모래는 조금 젖을 때 급락 후 평탄 (Nolet 2014)
+	UMaterialExpressionScalarParameter* WetModel = AddExpr<UMaterialExpressionScalarParameter>(M, -1100, 300);
+	WetModel->ParameterName = TEXT("WetModel");
+	WetModel->DefaultValue = 1.f;
+	UMaterialExpressionCustom* WetCol = AddExpr<UMaterialExpressionCustom>(M, -150, -120);
+	WetCol->OutputType = CMOT_Float3;
+	WetCol->Code = TEXT(
+		"if (Model < 0.5) return lerp(A, A * 0.5, W);\n"
+		"const float Wc = (1 - exp(-6 * W)) / (1 - exp(-6.0));\n"
+		"const float X = 0.6;\n"
+		"const float3 Aw = (1 - 0.04) * (1 - X) * A / (1 - A * X);\n"
+		"return lerp(A, Aw, Wc);");
+	WetCol->Inputs.SetNum(3);
+	WetCol->Inputs[0].InputName = TEXT("A");     WetCol->Inputs[0].Input.Connect(0, ColDry);
+	WetCol->Inputs[1].InputName = TEXT("W");     WetCol->Inputs[1].Input.Connect(0, Wet);
+	WetCol->Inputs[2].InputName = TEXT("Model"); WetCol->Inputs[2].Input.Connect(0, WetModel);
+	Ed->BaseColor.Connect(0, WetCol);
 
 	// 알갱이 노멀: 높이 노이즈 (cm) → PerturbNormalLQ → 월드 노멀
 	UMaterialFunction* Perturb = LoadObject<UMaterialFunction>(nullptr, TEXT("/Engine/Functions/Engine_MaterialFunctions03/Procedurals/PerturbNormalLQ.PerturbNormalLQ"));

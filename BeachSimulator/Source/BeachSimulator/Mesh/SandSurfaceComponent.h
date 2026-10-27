@@ -38,7 +38,9 @@ public:
 	int32 SmoothIters = 25;
 
 	/** 젖음 0~1 — 재질의 Wet 파라미터 (#22). 지금은 전역 하나 (시뮬 W 가 입자별이 되면 정점 색으로) */
-	void SetWetness(float InWet);   // 가중 라플라시안 평활화 (m1-log #17, splashsurf 기본과 같음)
+	void SetWetness(float InWet);
+	/** 재질 스칼라 파라미터 (비교용 — WetModel 등) */
+	void SetMaterialScalar(FName Name, float V);   // 가중 라플라시안 평활화 (m1-log #17, splashsurf 기본과 같음)
 
 	//~ UPrimitiveComponent
 	virtual FPrimitiveSceneProxy* CreateSceneProxy() override;

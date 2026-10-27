@@ -295,3 +295,9 @@ void USandSurfaceComponent::SetWetness(float InWet)
 	}
 	WetMID->SetScalarParameterValue(TEXT("Wet"), Wetness);
 }
+
+void USandSurfaceComponent::SetMaterialScalar(FName Name, float V)
+{
+	SetWetness(Wetness);   // MID 보장
+	WetMID->SetScalarParameterValue(Name, V);
+}
