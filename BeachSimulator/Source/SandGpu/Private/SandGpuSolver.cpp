@@ -228,6 +228,43 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandFrameParams, )
 	RDG_BUFFER_ACCESS(IndirectArgs, ERHIAccess::IndirectArgs)
 END_SHADER_PARAMETER_STRUCT()
 
+// M2 T2 — 도구 스탬프 (SandTool.usf)
+BEGIN_SHADER_PARAMETER_STRUCT(FSandToolParams, )
+	SHADER_PARAMETER(uint32, NumParticles)
+	SHADER_PARAMETER(uint32, NumBonds)
+	SHADER_PARAMETER(uint32, NumStamps)
+	SHADER_PARAMETER(uint32, StampSeed)
+	SHADER_PARAMETER(uint32, HandCap)
+	SHADER_PARAMETER(uint32, SleepFrames)
+	SHADER_PARAMETER(float, GraveZ)
+	SHADER_PARAMETER(float, GraveSpacing)
+	SHADER_PARAMETER(float, StepDt)
+	SHADER_PARAMETER(float, DrainTarget)
+	SHADER_PARAMETER(float, DrainTau)
+	SHADER_PARAMETER(uint32, bPerParticleWet)
+	SHADER_PARAMETER(float, WDry)
+	SHADER_PARAMETER(float, WOptStart)
+	SHADER_PARAMETER(float, WOptEnd)
+	SHADER_PARAMETER(float, WSat)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, Stamps)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, PosRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, VelRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, PrevPosRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, WetRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, WetRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, SleepRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, GroundLambdaRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, WallLambdaRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, HandWRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, HandCountRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BondIJ)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, BondDataRW)
+END_SHADER_PARAMETER_STRUCT()
+
+#define TOOL_USF "/Project/Private/SandTool.usf"
+SAND_SHADER(FSandStampCS,    FSandToolParams, TOOL_USF, "StampCS")
+SAND_SHADER(FSandBondToolCS, FSandToolParams, TOOL_USF, "BondToolCS")
+
 #define FRAME_USF "/Project/Private/SandFrame.usf"
 SAND_SHADER(FSandScanBlocksCS,  FSandFrameParams, FRAME_USF, "ScanBlocksCS")
 SAND_SHADER(FSandScanTopCS,     FSandFrameParams, FRAME_USF, "ScanTopCS")
@@ -565,6 +602,10 @@ struct FSandGpuSim::FState
 	TRefCountPtr<FRDGPooledBuffer> Sleep;   // C안 — 정지 프레임 수 (uint)
 	TRefCountPtr<FRDGPooledBuffer> SleepRef;   // 조사 H9 (e) — 잠들 때의 Σλn
 	TRefCountPtr<FRDGPooledBuffer> Wet;        // M1 W1 — 입자별 W
+	TRefCountPtr<FRDGPooledBuffer> HandW, HandCount;   // M2 T2 — 손 재고 W · [0] 수 [1] 판 수 [2] 못 판 수 (올리기와 무관하게 유지)
+	int32 CapHand = 0;
+	FRHIGPUBufferReadback HandRB{ TEXT("SandGpu.Hand") };
+	FRHIGPUBufferReadback DlWet{ TEXT("SandGpu.DlWet") };
 	// 영구 (결합)
 	TRefCountPtr<FRDGPooledBuffer> BondIJ, BondData, BondAdjOffset, BondAdj;
 	// 쌍 목록 두 벌 — [Cur] 이번 프레임 · [1-Cur] 지난 프레임 (워밍 조회)
@@ -739,8 +780,9 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 	uint32 FrameCounts[4] = {};
 	uint32 BatchStats[8] = {};
 	float StageMs[4] = {};
+	uint32 Hand[4] = {};
 
-	ENQUEUE_RENDER_COMMAND(SandGpuSimStep)([S, &P, LN, LB, LMax, TableSize, NumStatGroups, &Counters, &FrameCounts, &BatchStats, &StageMs](FRHICommandListImmediate& RHICmdList)
+	ENQUEUE_RENDER_COMMAND(SandGpuSimStep)([S, &P, LN, LB, LMax, TableSize, NumStatGroups, &Counters, &FrameCounts, &BatchStats, &StageMs, &Hand](FRHICommandListImmediate& RHICmdList)
 	{
 		const int32 Cur = S->Cur, Old = 1 - S->Cur;
 		{
@@ -897,6 +939,69 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 				GraphBuilder.AddPass(RDG_EVENT_NAME("SandStamp%d", Idx), ERDGPassFlags::NeverCull, [Q](FRHICommandListImmediate& Cmd) { Cmd.EndRenderQuery(Q); });
 			};
 			Stamp(0);
+			// M2 T2 — 도구 스탬프 · 배수 (패스 0). 손 재고 버퍼는 처음 한 번 만든다
+			{
+				const int32 HandCap = FMath::Max(1, P.HandCap);
+				if (!S->HandCount.IsValid() || S->CapHand < HandCap)
+				{
+					S->HandW = AllocatePooledBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(float), HandCap), TEXT("SandSim.HandW"));
+					const bool bNewCount = !S->HandCount.IsValid();
+					if (bNewCount) { S->HandCount = AllocatePooledBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 4), TEXT("SandSim.HandCount")); }
+					if (bNewCount) { AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->HandCount)), 0u); }
+					S->CapHand = HandCap;
+				}
+				FRDGBufferRef HandCountBuf = GraphBuilder.RegisterExternalBuffer(S->HandCount);
+				// 이 프레임 계수 [1] [2] 만 0 으로 — [0] 재고는 유지
+				{
+					TArray<uint32> Zero = { 0u, 0u };
+					FRDGBufferRef Z = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 2), TEXT("SandSim.HandZero"));
+					GraphBuilder.QueueBufferUpload(Z, Zero.GetData(), 2 * sizeof(uint32), ERDGInitialDataFlags::None);   // 지역 배열 — 복사해 둔다 (NoCopy 면 실행 전에 사라진다)
+					AddCopyBufferPass(GraphBuilder, HandCountBuf, sizeof(uint32), Z, 0, 2 * sizeof(uint32));
+				}
+				const bool bTool = P.Stamps.Num() > 0 || P.DrainTau > 0.f;
+				if (bTool)
+				{
+					FRDGBufferRef WetBuf = GraphBuilder.RegisterExternalBuffer(S->Wet);
+					TArray<FVector4f> St = P.Stamps;
+					if (St.Num() == 0) { St.Add(FVector4f(0, 0, 0, 0)); St.Add(FVector4f(0, 0, 0, 0)); }
+					FSandToolParams TP;
+					TP.NumParticles = LN;
+					TP.NumBonds = LB;
+					TP.NumStamps = P.Stamps.Num() / 2;
+					TP.StampSeed = P.StampSeed;
+					TP.HandCap = HandCap;
+					TP.SleepFrames = P.bSleep ? (uint32)FMath::Max(1, P.SleepFrames) : 0u;
+					TP.GraveZ = P.GraveZ; TP.GraveSpacing = P.GraveSpacing;
+					TP.StepDt = P.StepDt;
+					TP.DrainTarget = P.DrainTarget; TP.DrainTau = P.DrainTau;
+					TP.bPerParticleWet = P.bPerParticleWet ? 1u : 0u;
+					TP.WDry = P.WDry; TP.WOptStart = P.WOptStart; TP.WOptEnd = P.WOptEnd; TP.WSat = P.WSat;
+					FRDGBufferRef StBuf = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), St.Num()), TEXT("SandSim.Stamps"));
+					GraphBuilder.QueueBufferUpload(StBuf, St.GetData(), St.Num() * sizeof(FVector4f), ERDGInitialDataFlags::None);   // 지역 배열 — 복사
+					TP.Stamps = GraphBuilder.CreateSRV(StBuf);
+					TP.PosRW = GraphBuilder.CreateUAV(Pos);
+					TP.VelRW = GraphBuilder.CreateUAV(Vel);
+					TP.PrevPosRW = GraphBuilder.CreateUAV(PrevPos);
+					TP.WetRW = GraphBuilder.CreateUAV(WetBuf);
+					TP.SleepRW = GraphBuilder.CreateUAV(SleepBuf);
+					TP.GroundLambdaRW = GraphBuilder.CreateUAV(GroundLambda);
+					TP.WallLambdaRW = GraphBuilder.CreateUAV(WallLambda);
+					TP.HandWRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->HandW));
+					TP.HandCountRW = GraphBuilder.CreateUAV(HandCountBuf);
+					TP.BondIJ = GraphBuilder.CreateSRV(BondIJ);
+					AddDirectPass<FSandStampCS>(GraphBuilder, RDG_EVENT_NAME("SandStamp"), ShaderMap, TP, LN, 64);
+					if (LB > 0)
+					{
+						FSandToolParams TB = TP;
+						TB.WetRW = nullptr;
+						TB.WetRO = GraphBuilder.CreateSRV(WetBuf);
+						TB.VelRW = nullptr; TB.PrevPosRW = nullptr; TB.SleepRW = nullptr; TB.GroundLambdaRW = nullptr; TB.WallLambdaRW = nullptr; TB.HandWRW = nullptr; TB.HandCountRW = nullptr;
+						TB.BondDataRW = GraphBuilder.CreateUAV(BondData);
+						AddDirectPass<FSandBondToolCS>(GraphBuilder, RDG_EVENT_NAME("SandBondTool"), ShaderMap, TB, LB, 64);
+					}
+				}
+				AddEnqueueCopyPass(GraphBuilder, &S->HandRB, HandCountBuf, 4 * sizeof(uint32));
+			}
 			AddDirectPass<FSandCellKeyCS>(GraphBuilder, RDG_EVENT_NAME("SandCellKey"), ShaderMap, F, LN, 64);
 			AddScan(GraphBuilder, ShaderMap, F, CellCount, CellStart, TableSize);
 			AddDirectPass<FSandScatterCS>(GraphBuilder, RDG_EVENT_NAME("SandScatter"), ShaderMap, F, LN, 64);
@@ -1014,6 +1119,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 		FetchReadback(S->CountersRB, Counters, 4 * sizeof(uint32));
 		FetchReadback(S->FrameCountsRB, FrameCounts, 4 * sizeof(uint32));
 		FetchReadback(S->BatchStatsRB, BatchStats, 8 * sizeof(uint32));
+		FetchReadback(S->HandRB, Hand, 4 * sizeof(uint32));
 		if (S->StageTs[0].IsValid())
 		{
 			uint64 Us[5] = {};
@@ -1044,6 +1150,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 	Out.BatchOverflow   = (int32)BatchStats[3];
 	Out.NumAwakeBlocks  = (int32)BatchStats[4];
 	Out.NumAsleep       = (int32)Counters[3];
+	Out.HandCount = (int32)Hand[0]; Out.Dug = (int32)Hand[1]; Out.HandFull = (int32)Hand[2];
 	for (int32 k = 0; k < 4; ++k) { Out.StageMs[k] = StageMs[k]; }
 	LastNumPairs = Out.NumPairs;
 	Out.GpuMs = (FPlatformTime::Seconds() - T0) * 1000.0;
@@ -1060,6 +1167,7 @@ void FSandGpuSim::Download(FSandGpuDownload& Out) const
 	Out.GroundLambda.SetNumUninitialized(N);
 	Out.WallLambda.SetNumUninitialized(N);
 	Out.Sleep.SetNumZeroed(N);
+	Out.Wet.SetNumZeroed(N);
 	if (N == 0)
 	{
 		return;
@@ -1076,6 +1184,7 @@ void FSandGpuSim::Download(FSandGpuDownload& Out) const
 			AddEnqueueCopyPass(GraphBuilder, &S->DlGround, GraphBuilder.RegisterExternalBuffer(S->GroundLambda), LN * sizeof(float));
 			AddEnqueueCopyPass(GraphBuilder, &S->DlWall, GraphBuilder.RegisterExternalBuffer(S->WallLambda), LN * sizeof(FVector4f));
 			AddEnqueueCopyPass(GraphBuilder, &S->DlSleep, GraphBuilder.RegisterExternalBuffer(S->Sleep), LN * sizeof(uint32));
+			AddEnqueueCopyPass(GraphBuilder, &S->DlWet, GraphBuilder.RegisterExternalBuffer(S->Wet), LN * sizeof(float));
 			if (LP > 0)
 			{
 				AddEnqueueCopyPass(GraphBuilder, &S->DlPairIJ, GraphBuilder.RegisterExternalBuffer(S->SortedIJ[Last]), 2 * LP * sizeof(uint32));
@@ -1093,6 +1202,7 @@ void FSandGpuSim::Download(FSandGpuDownload& Out) const
 		FetchReadback(S->DlGround, Out.GroundLambda.GetData(), LN * sizeof(float));
 		FetchReadback(S->DlWall, Out.WallLambda.GetData(), LN * sizeof(FVector4f));
 		FetchReadback(S->DlSleep, Out.Sleep.GetData(), LN * sizeof(uint32));
+		FetchReadback(S->DlWet, Out.Wet.GetData(), LN * sizeof(float));
 		FetchReadback(S->DlPairIJ, Out.PairIJ.GetData(), 2 * LP * sizeof(uint32));
 		FetchReadback(S->DlLambda, Out.PairLambda.GetData(), LP * sizeof(FVector4f));
 		FetchReadback(S->DlBond, Out.BondData.GetData(), LB * sizeof(FVector4f));

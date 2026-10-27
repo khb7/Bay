@@ -314,6 +314,18 @@ struct FSandBond
  * 실시간 뷰(ASpikeActor)와 배치 스윕(FSpikeBatch)이 같은 코어를 쓰기 위한 분리다.
  * GPU 이식(M0-b)에서 대조군이 되는 것도 이 코어라, 결정성이 요구사항이다.
  */
+/** M2 T2 도구 스탬프 (m2-plan.md) — GPU 상주 경로에서만. 다음 Step 맨 앞에서 소비된다 */
+enum class ESandTool : uint8 { Dig = 0, Pour = 1 };
+struct FSandToolStamp
+{
+	ESandTool Kind = ESandTool::Dig;
+	FVector3f Center = FVector3f::ZeroVector;
+	float Radius = 10.f;
+	float Strength = 1.f;     // 파기: 구 안 입자를 퍼 담을 확률
+	float WetAdd = 0.f;       // 물붓기: 이 스탬프 하나의 W 증가 (가운데 기준, 가장자리로 갈수록 0)
+	float ImpulseVel = 0.f;   // 물붓기: 아래로 주는 속도 (cm/s, 가운데 기준)
+};
+
 class FSandSpike
 {
 public:
@@ -349,6 +361,13 @@ public:
 	/** 용량까지 죽은 칸을 덧붙인다 (쌓기가 꺼내 쓸 빈 칸). 이미 그 이상이면 아무것도 안 한다 */
 	void  ReservePool(int32 Capacity);
 	int32 NumAlive() const { return Pos.Num() - NumDead; }
+
+	/** M2 T2 — 도구 스탬프를 다음 Step 에 보낸다 (GPU 상주만). 물붓기는 입자별 W 모드로 바꾼다 */
+	void  QueueStamp(const FSandToolStamp& S);
+	int32 GetHandCount() const { return HandCount; }   // 손 재고 (GPU 가 센 값, Step 마다 갱신)
+	int32 GetLastDug() const { return LastDug; }
+	int32 HandCap = 600;                                // 손 용량 — 반지름 10cm 구 한 삽 (m2-plan)
+	float DrainTau = 0.f;                               // M2 임시 배수 τ (초). 0 = 끔. W > WOptEnd 를 WOptEnd 쪽으로
 	bool  IsDead(int32 i) const { return Dead.IsValidIndex(i) && Dead[i] != 0; }
 	void  SetWGlobal(float W) { Params.WGlobal = W; }
 	/**
@@ -517,6 +536,8 @@ private:
 	TArray<float>     Wet;      // 입자별 W — 짧으면 WGlobal 로 채운다 (EnsureWet)
 	TArray<uint8>     Dead;     // M2 T1 — 1 = 죽은 칸 (무덤에 고정). 짧으면 전부 산 것
 	int32             NumDead = 0;
+	TArray<FSandToolStamp> PendingStamps;
+	int32 HandCount = 0, LastDug = 0, LastHandFull = 0;
 	bool bWetPerParticle = false;   // SetWet 뒤 — 결합 점착을 쌍의 W 로 (W3). 아니면 WGlobal 하나 (M0 시험의 W 서서히 낮추기)
 	/** 전역 cohesion 배수 — 입자별 모드면 1 (결합마다 Coh 가 대신한다) */
 	float GlobalCoh() const { return bWetPerParticle ? 1.f : CohesionOfW(Params.WGlobal); }

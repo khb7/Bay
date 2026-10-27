@@ -450,6 +450,18 @@ int32 FSandSpike::KillParticles(TFunctionRef<bool(int32)> ShouldKill)
 	return Killed;
 }
 
+void FSandSpike::QueueStamp(const FSandToolStamp& S)
+{
+	checkf(Params.bGpuResident, TEXT("도구 스탬프는 GPU 상주 경로만 (M2 T2)"));
+	if (S.Kind == ESandTool::Pour && !bWetPerParticle)
+	{
+		SyncFromGpu();
+		EnsureWet();
+		bWetPerParticle = true;   // 결합 cohesion 은 GPU 가 W 에서 다시 계산한다 (BondToolCS)
+	}
+	PendingStamps.Add(S);
+}
+
 void FSandSpike::ReservePool(int32 Capacity)
 {
 	SyncFromGpu();
@@ -1305,6 +1317,14 @@ void FSandSpike::SyncFromGpu() const
 	Self->GpuLiveSleep = D.Sleep;
 	Self->GroundLambdaN = D.GroundLambda;
 	Self->WallLambda    = D.WallLambda;
+	// M2 T2 — GPU 도구가 W 를 바꾸고 입자를 무덤으로 보낸다. 다시 올릴 때 되살아나지 않게 역질량 0
+	if (bWetPerParticle && D.Wet.Num() == N) { Self->Wet = D.Wet; }
+	Self->Dead.SetNumZeroed(N);
+	Self->NumDead = 0;
+	for (int32 i = 0; i < N; ++i)
+	{
+		if (SandPool::IsGrave(Self->Pos[i])) { Self->Dead[i] = 1; Self->InvMass[i] = 0.f; ++Self->NumDead; }
+	}
 
 	const int32 NumC = D.PairLambda.Num();
 	Self->Contacts.SetNum(NumC);
@@ -1388,6 +1408,21 @@ void FSandSpike::StepGpuResident(float Dt)
 	P.WallFriction   = Params.WallFriction;
 	BuildWallParams(P.WallMode, P.WallActiveMask, P.WallLX, P.WallLY, P.WallLimit, P.WallLiftZ);
 
+	// M2 T2 도구 스탬프
+	for (const FSandToolStamp& T : PendingStamps)
+	{
+		P.Stamps.Add(FVector4f(T.Center, T.Radius));
+		P.Stamps.Add(FVector4f((float)(uint8)T.Kind, T.Strength, T.WetAdd, T.ImpulseVel));
+	}
+	PendingStamps.Reset();
+	P.StampSeed = (uint32)Frame;
+	P.HandCap = HandCap;
+	P.GraveZ = SandPool::GraveZ; P.GraveSpacing = SandPool::GraveSpacing;
+	P.DrainTau = bWetPerParticle ? DrainTau : 0.f;
+	P.DrainTarget = Params.WOptEnd;
+	P.bPerParticleWet = bWetPerParticle;
+	P.WDry = Params.WDry; P.WOptStart = Params.WOptStart; P.WOptEnd = Params.WOptEnd; P.WSat = Params.WSat;
+
 	FSandGpuStats S;
 	GpuSim->Step(P, S);
 	checkf(S.PairOverflow == 0, TEXT("GPU 쌍 버퍼 넘침 (%d) — MaxPairs 를 올릴 것"), S.PairOverflow);
@@ -1398,6 +1433,8 @@ void FSandSpike::StepGpuResident(float Dt)
 	}
 
 	BondsBrokenTotal += S.BondsBroken;
+	HandCount = S.HandCount; LastDug = S.Dug; LastHandFull = S.HandFull;
+	NumDead += S.Dug;   // CPU 의 Dead 표시는 SyncFromGpu 에서 위치로 다시 맞춘다
 	LastBoundaryFrac = S.NumPairs > 0 ? (float)S.NumBoundary / S.NumPairs : 0.f;
 	LastAsleep = S.NumAsleep; LastAwakeBlocks = S.NumAwakeBlocks;
 	for (int32 k = 0; k < 4; ++k) { LastStage[k] = S.StageMs[k]; }

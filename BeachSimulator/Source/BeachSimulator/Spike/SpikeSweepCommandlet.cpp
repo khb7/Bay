@@ -826,9 +826,50 @@ namespace
 				Sim.SetWet([Cx](int32, const FVector3f& X) { return X.X < Cx ? 0.6f : 0.f; });
 			}
 			double SumSim = 0, SumMesh = 0, MaxSim = 0, MaxMesh = 0; int32 Cnt = 0, Matches = 0, Checks = 0;
+			// M2 T2 도구 시험: -dig=F 면 F 프레임부터 20 프레임 동안 더미 꼭대기 가운데를 판다 (반지름 12cm · 세기 0.3).
+			// -pour=F 면 F 프레임에 x < 가운데 쪽 반을 큰 구로 한 번 적신다 (W +0.6, 충격 없음) — M1 W3 반 젖은 장면과 견줌
+			int32 DigFrame = -1, PourFrame = -1;
+			FParse::Value(*Params, TEXT("dig="), DigFrame);
+			FParse::Value(*Params, TEXT("pour="), PourFrame);
+			const int32 Alive0 = Sim.NumAlive();
+			float PourImpulse = 0.f; FParse::Value(*Params, TEXT("pourimpulse="), PourImpulse);
 			for (int32 f = 1; f <= Frames; ++f)
 			{
+				if (DigFrame > 0 && f >= DigFrame && f < DigFrame + 20)
+				{
+					float Top = 0.f; FVector3f C(Box.GetCenter());
+					for (const FVector3f& X : Sim.GetPositions()) { if (!SandPool::IsGrave(X) && FMath::Abs(X.X - C.X) < 5.f && FMath::Abs(X.Y - C.Y) < 5.f) { Top = FMath::Max(Top, X.Z); } }
+					FSandToolStamp T; T.Kind = ESandTool::Dig; T.Center = FVector3f(C.X, C.Y, Top); T.Radius = 12.f; T.Strength = 0.3f;
+					Sim.QueueStamp(T);
+				}
+				if (f == PourFrame)
+				{
+					const FVector3f C(Box.GetCenter());
+					// x < 가운데 쪽 반을 작은 구(반지름 6cm)를 6cm 간격으로 채워 적신다 — 겹친 합이 가운데 기준 ≈ 0.6
+					for (float x = (float)Box.Min.X; x < C.X; x += 6.f)
+					for (float y = (float)Box.Min.Y; y <= (float)Box.Max.Y; y += 6.f)
+					for (float z = (float)Box.Min.Z; z <= (float)Box.Max.Z; z += 6.f)
+					{
+						FSandToolStamp T; T.Kind = ESandTool::Pour; T.Center = FVector3f(x, y, z); T.Radius = 6.f; T.WetAdd = 0.27f; T.ImpulseVel = PourImpulse;
+						Sim.QueueStamp(T);
+					}
+				}
 				Sim.Step(1.f / 60.f);
+				// 적신 곳의 닿은 쌍에 물다리 — 붓기가 끝난 다음 프레임에 결합 생성 (지금은 CPU · 전체, m2-log #2)
+				if (f == PourFrame && !FParse::Param(*Params, TEXT("pournobond"))) { UE_LOG(LogSpikeSweep, Display, TEXT("   T2 붓기 뒤 결합 %d"), Sim.FormBonds()); }
+				if (DigFrame > 0 || PourFrame > 0)
+				{
+					if ((DigFrame > 0 && f >= DigFrame && f < DigFrame + 22) || f == PourFrame + 1 || f % Every == 0)
+					{
+						int32 WetN = 0; double WSum = 0;
+						if (PourFrame > 0) { for (int32 i = 0; i < Sim.GetPositions().Num(); ++i) { if (!Sim.IsDead(i)) { const float Wv = Sim.GetWet()[i]; WSum += Wv; WetN += Wv > 0.3f ? 1 : 0; } } }
+						float HL = 0.f, HR = 0.f; const float Cx = (float)Box.GetCenter().X;
+						for (const FVector3f& X : Sim.GetPositions()) { if (SandPool::IsGrave(X)) { continue; } float& H = (X.X < Cx) ? HL : HR; H = FMath::Max(H, X.Z); }
+						UE_LOG(LogSpikeSweep, Display, TEXT("   T2 f %3d: 높이 왼쪽(젖힘) %.1f · 오른쪽 %.1f cm"), f, HL, HR);
+						UE_LOG(LogSpikeSweep, Display, TEXT("   T2 f %3d: 산 입자 %d + 손 %d = %d (처음 %d) · 이 프레임 판 %d · 결합 %d · 젖은(>0.3) %d · 평균 W %.3f"),
+							f, Sim.NumAlive(), Sim.GetHandCount(), Sim.NumAlive() + Sim.GetHandCount(), Alive0, Sim.GetLastDug(), Sim.GetBonds().Num(), WetN, WSum / FMath::Max(1, Sim.NumAlive()));
+					}
+				}
 				const FSandGpuSim* Gs = Sim.GetGpuSim();
 				FSandGpuMeshResult G;
 				SandGpuMesh::BuildFromSim(*Gs, GP, G);

@@ -107,6 +107,15 @@ struct FSandGpuFrameParams
 	int32 WallMode = 0;
 	uint32 WallActiveMask = 0;
 	float WallLX = 0.f, WallLY = 0.f, WallLimit = 0.f, WallLiftZ = 0.f, WallFriction = 0.f;
+
+	// M2 T2 도구 스탬프 (m2-plan.md) — 스텝 맨 앞에서 소비. 스탬프마다 2 개: (중심, 반지름) · (종류 0 파기 / 1 물붓기, 세기, W 증가, 충격 속도)
+	TArray<FVector4f> Stamps;
+	uint32 StampSeed = 0;
+	int32  HandCap = 0;               // 손 재고 용량 (파기가 여기까지 담는다)
+	float  GraveZ = 1.e6f, GraveSpacing = 50.f;   // SandPool (BeachSimulator SandSurface.h) 과 같은 값
+	float  DrainTarget = 0.7f, DrainTau = 0.f;    // M2 임시 배수: W > 목표면 τ 초로 이완 (0 = 끔)
+	bool   bPerParticleWet = false;   // 결합 cohesion 을 W 에서 다시 계산 (도구 · 배수가 W 를 바꿀 때)
+	float  WDry = 0.05f, WOptStart = 0.15f, WOptEnd = 0.70f, WSat = 0.90f;
 };
 
 /** 프레임 통계 — UpdateSettleState 가 쓰는 것 전부 */
@@ -123,6 +132,7 @@ struct FSandGpuStats
 	int32  NumAwakeBlocks = 0, NumAsleep = 0;   // C안 — 풀이를 돈 블록 · 잠든 입자
 	float  StageMs[4] = {};          // 3-4 GPU 타임스탬프: [0] 이웃·쌍·깨우기 [1] 워밍·예측·배치 [2] 반복 [3] 파단·통계
 	double GpuMs = 0.0;               // 스텝 벽시계 (통계 리드백 포함)
+	int32  HandCount = 0, Dug = 0, HandFull = 0;   // M2 T2 — 손 재고 · 이 프레임 판 수 · 손이 차서 못 판 수
 };
 
 /** 전량 내려받기 — 계측·도구 조작 전 */
@@ -135,6 +145,7 @@ struct FSandGpuDownload
 	TArray<float>     GroundLambda;
 	TArray<FVector4f> WallLambda;
 	TArray<uint32>    Sleep;          // C안 정지 카운터 (+ 표시 비트) — 조사 계측용
+	TArray<float>     Wet;            // M2 T2 — 도구 · 배수가 GPU 에서 W 를 바꾼다
 };
 
 /**

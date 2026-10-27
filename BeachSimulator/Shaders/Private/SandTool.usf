@@ -1,0 +1,145 @@
+// M2 T2 — 도구 스탬프 (m2-plan.md). 시뮬 스텝 맨 앞(system-design 패스 0)에서 소비한다. CPU 는 스탬프 구조체만 올린다.
+//
+//   StampCS     입자별: 배수 이완 → 스탬프를 순서대로 (파기 = 손으로 옮김 · 물붓기 = W 올림 + 아래로 충격)
+//   BondToolCS  결합별: 무덤에 간 입자의 결합은 끊고 (x < 0), 입자별 W 모드면 쌍 cohesion 을 W 에서 다시 (W3 · C16)
+//
+// 죽은 입자 = 무덤 자리에 고정 (SandSurface.h SandPool, T1). 손 재고 = HandW (넣은 순서 큐, T3 이 꺼낸다)
+
+#include "/Engine/Public/Platform.ush"
+
+#define TOOL_DIG  0u
+#define TOOL_POUR 1u
+
+uint  NumParticles;
+uint  NumBonds;
+uint  NumStamps;
+uint  StampSeed;                 // 프레임마다 바뀌는 난수 씨앗 (파기 세기 < 1 의 확률)
+uint  HandCap;
+uint  SleepFrames;
+float GraveZ;
+float GraveSpacing;
+float StepDt;
+float DrainTarget;               // 이 W 위면 DrainTau 로 이완 (M2 임시 배수, M5 에서 교체). DrainTau 0 = 끔
+float DrainTau;
+uint  bPerParticleWet;
+// cohesion(W) 제어점 (FSandSpike::CohesionOfW 와 같다). 한 줄 여러 선언은 UE 매개변수 파서가 못 읽는다
+float WDry;
+float WOptStart;
+float WOptEnd;
+float WSat;
+
+StructuredBuffer<float4>   Stamps;       // 스탬프마다 2 개: (중심 xyz, 반지름) · (종류, 세기, W 증가, 충격 속도)
+RWStructuredBuffer<float4> PosRW;
+RWStructuredBuffer<float4> VelRW;
+RWStructuredBuffer<float4> PrevPosRW;
+RWStructuredBuffer<float>  WetRW;
+StructuredBuffer<float>    WetRO;
+RWStructuredBuffer<uint>   SleepRW;
+RWStructuredBuffer<float>  GroundLambdaRW;
+RWStructuredBuffer<float4> WallLambdaRW;
+RWStructuredBuffer<float>  HandWRW;      // 손 재고의 W (넣은 순서)
+RWStructuredBuffer<uint>   HandCountRW;  // [0] 재고 수 · [1] 이 프레임 판 수 · [2] 손이 차서 못 판 수
+StructuredBuffer<uint>     BondIJ;
+RWStructuredBuffer<float4> BondDataRW;   // x 휴지 길이(음수 = 죽음) · y λ · z 쌍 cohesion
+
+float3 GravePos(uint i) { return float3(GraveZ + (i % 1024u) * GraveSpacing, GraveZ + (i / 1024u) * GraveSpacing, GraveZ); }
+bool IsGrave(float3 P) { return P.z >= 0.5f * GraveZ; }
+
+uint Hash(uint x)
+{
+	x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+	return x;
+}
+
+float CohesionOfW(float W)
+{
+	if (W <= WDry || W >= WSat) { return 0.f; }
+	if (W < WOptStart) { return (W - WDry) / max(WOptStart - WDry, 1.e-4f); }
+	if (W <= WOptEnd) { return 1.f; }
+	return (WSat - W) / max(WSat - WOptEnd, 1.e-4f);
+}
+
+[numthreads(64, 1, 1)]
+void StampCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint p = Tid.x;
+	if (p >= NumParticles) { return; }
+	float4 P4 = PosRW[p];
+	if (IsGrave(P4.xyz)) { return; }
+	const uint Sl = SleepRW[p];
+	const bool bAsleep = Sl >= SleepFrames && SleepFrames > 0u;
+	const bool bFree = P4.w > 0.f || bAsleep;   // 고정(바닥) 입자는 도구가 건드리지 않는다
+	if (!bFree) { return; }
+
+	float W = WetRW[p];
+	if (DrainTau > 0.f && W > DrainTarget) { W -= (W - DrainTarget) * min(1.f, StepDt / DrainTau); }
+
+	float3 V = VelRW[p].xyz;
+	bool bWake = false;
+	for (uint s = 0; s < NumStamps; ++s)
+	{
+		const float4 A = Stamps[2 * s], B = Stamps[2 * s + 1];
+		const float3 d = P4.xyz - A.xyz;
+		const float R2 = A.w * A.w;
+		const float D2 = dot(d, d);
+		if (D2 >= R2) { continue; }
+		const uint Kind = (uint)B.x;
+		if (Kind == TOOL_DIG)
+		{
+			// 세기 < 1 이면 확률로 일부만 — 깎기 감
+			const float U = (Hash(p * 0x9E3779B1u ^ Hash(StampSeed * 64u + s)) & 0xFFFFFFu) / 16777216.f;
+			if (U >= B.y) { continue; }
+			uint Slot;
+			InterlockedAdd(HandCountRW[0], 1u, Slot);
+			if (Slot >= HandCap)
+			{
+				uint Dummy;
+				InterlockedAdd(HandCountRW[0], 0xFFFFFFFFu, Dummy);
+				InterlockedAdd(HandCountRW[2], 1u, Dummy);
+				continue;
+			}
+			HandWRW[Slot] = W;
+			uint Dummy2;
+			InterlockedAdd(HandCountRW[1], 1u, Dummy2);
+			const float3 G = GravePos(p);
+			PosRW[p] = float4(G, 0.f);
+			PrevPosRW[p] = float4(G, 0.f);
+			VelRW[p] = 0;
+			GroundLambdaRW[p] = 0.f;
+			WallLambdaRW[p] = 0;
+			SleepRW[p] = 0u;
+			WetRW[p] = W;
+			return;
+		}
+		else
+		{
+			// 물붓기 — 가운데일수록 많이 (1 − d²/r²). W 상한 1. 낙하 충격은 아래로 속도
+			const float K = 1.f - D2 / R2;
+			W = min(1.f, W + B.z * K);
+			V.z -= B.w * K;
+			bWake = true;
+		}
+	}
+	WetRW[p] = W;
+	if (bWake)
+	{
+		VelRW[p] = float4(V, 0.f);
+		if (bAsleep) { SleepRW[p] = 0u; PosRW[p] = float4(P4.xyz, 1.f); }
+	}
+}
+
+[numthreads(64, 1, 1)]
+void BondToolCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint b = Tid.x;
+	if (b >= NumBonds) { return; }
+	float4 D = BondDataRW[b];
+	if (D.x < 0.f) { return; }
+	const uint i = BondIJ[2 * b], j = BondIJ[2 * b + 1];
+	if (IsGrave(PosRW[i].xyz) || IsGrave(PosRW[j].xyz)) { D.x = -1.f; BondDataRW[b] = D; return; }
+	if (bPerParticleWet != 0u)
+	{
+		D.z = CohesionOfW(0.5f * (WetRO[i] + WetRO[j]));
+		BondDataRW[b] = D;
+	}
+}
