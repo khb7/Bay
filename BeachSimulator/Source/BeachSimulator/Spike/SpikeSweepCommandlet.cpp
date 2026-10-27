@@ -781,9 +781,26 @@ namespace
 				Sim.InitTiltBox(SP, S);
 				for (int32 f = 0; f < 600; ++f) { Sim.Step(1.f / 60.f); }
 			}
-			// 고정 영역 = 정지 더미 상자 + 옆으로 60cm (벽을 치우면 퍼진다) · 위로 10cm
+			// M2 T1 입자 풀: -pool=2 면 용량 = 입자 수 × 2 (나머지는 무덤의 죽은 칸). -killhalf 는 x < 가운데를 죽이고, -removehalf 는 같은 입자를 압축 제거 (대조)
+			{
+				float PoolMul = 0.f; FParse::Value(*Params, TEXT("pool="), PoolMul);
+				const int32 N0 = Sim.GetPositions().Num();
+				if (PoolMul > 1.f) { Sim.ReservePool(FMath::RoundToInt(N0 * PoolMul)); }
+				const bool bKill = FParse::Param(*Params, TEXT("killhalf")), bRemove = FParse::Param(*Params, TEXT("removehalf"));
+				if (bKill || bRemove)
+				{
+					FBox B0(ForceInit);
+					for (int32 i = 0; i < N0; ++i) { B0 += FVector(Sim.GetPositions()[i]); }
+					const float Cx = (float)B0.GetCenter().X;
+					TArray<FVector3f> P0 = Sim.GetPositions();
+					const int32 K = bKill ? Sim.KillParticles([&](int32 i) { return P0[i].X < Cx; }) : Sim.RemoveParticles([&](int32 i) { return P0[i].X < Cx; });
+					UE_LOG(LogSpikeSweep, Display, TEXT("T1 %s %d 개"), bKill ? TEXT("죽임") : TEXT("제거"), K);
+				}
+				UE_LOG(LogSpikeSweep, Display, TEXT("T1 풀 — 칸 %d · 산 입자 %d"), Sim.GetPositions().Num(), Sim.NumAlive());
+			}
+			// 고정 영역 = 정지 더미 상자 + 옆으로 60cm (벽을 치우면 퍼진다) · 위로 10cm. 무덤은 뺀다
 			FBox Box(ForceInit);
-			for (const FVector3f& X : Sim.GetPositions()) { Box += FVector(X); }
+			for (const FVector3f& X : Sim.GetPositions()) { if (!SandPool::IsGrave(X)) { Box += FVector(X); } }
 			FSandSurfaceParams Pp = Base;
 			Pp.Field = ESandSurfaceField::Anisotropic;
 			const float Pad = 2.f * Pp.H * Pp.MaxStretch + Pp.Cell;
@@ -846,10 +863,10 @@ namespace
 							f, Sc, Sg, FMath::Abs(Sc - Sg) / FMath::Max(1e-9, Sc), Mnc, Mxc, Mng, Mxg, Hc, Hg);
 					}
 					Matches += bSame ? 1 : 0; ++Checks;
-					float VMax = 0.f; for (const FVector3f& X : Sim.GetPositions()) { VMax = FMath::Max(VMax, X.Z); }
+					float VMax = 0.f; for (const FVector3f& X : Sim.GetPositions()) { if (!SandPool::IsGrave(X)) { VMax = FMath::Max(VMax, X.Z); } }
 					// 기둥 지표: 바닥에서 15cm 위인데 이웃(10cm 안)이 6 개 이하 — 한 줄로 선 입자 (덩어리 표면은 15~25)
 					int32 Thin = 0;
-					for (int32 i = 0; i < Sim.GetPositions().Num(); ++i) { if (Sim.GetPositions()[i].Z > Box.Min.Z + 15.f && M.NeighborCount[i] <= 6) { ++Thin; } }
+					if (Sim.NumAlive() == Sim.GetPositions().Num()) { for (int32 i = 0; i < Sim.GetPositions().Num(); ++i) { if (Sim.GetPositions()[i].Z > Box.Min.Z + 15.f && M.NeighborCount[i] <= 6) { ++Thin; } } }   // 풀이면 CPU 메셔 번호가 달라 생략
 					UE_LOG(LogSpikeSweep, Display, TEXT("   f %3d: 가는 입자(높이 15cm↑ · 이웃 ≤ 6) %d"), f, Thin);
 					UE_LOG(LogSpikeSweep, Display, TEXT("   f %3d: 정점 CPU %d / GPU %d · 삼각형 %d / %d %s · 띠 점 %d / %d · GPU ms 시뮬 %.2f + 메시 %.2f (이웃 %.2f 커널 %.2f 띠·장 %.2f 메시 %.2f) · 최고점 %.1f · 활성 영역 %d / 슬롯 %d / 전체 %d · 넘침 %d"),
 						f, M.Vertices.Num(), G.NumVertsTotal, M.Triangles.Num() / 3, G.NumIndicesTotal / 3, bSame ? TEXT("같음") : TEXT("⚠ 다름"), M.NumBandPoints, G.NumBandPoints,

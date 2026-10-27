@@ -8,6 +8,18 @@
 
 #include "CoreMinimal.h"
 
+/**
+ * M2 T1 입자 풀 — 죽은 입자(파기로 뺀 칸)는 번호를 그대로 두고 아주 먼 "무덤" 자리에 고정해 둔다 (m2-plan).
+ * 무덤끼리도 서로 닿지 않게 칸마다 떨어뜨린다. 시뮬 · 메셔는 위치만으로 무시된다 (이웃 · 메시 영역 밖).
+ */
+namespace SandPool
+{
+	constexpr float GraveZ = 1.e6f;
+	constexpr float GraveSpacing = 50.f;   // 접촉 셀 · 메셔 지지보다 넓게
+	inline FVector3f GravePos(int32 i) { return FVector3f(GraveZ + (i % 1024) * GraveSpacing, GraveZ + (i / 1024) * GraveSpacing, GraveZ); }
+	inline bool IsGrave(const FVector3f& P) { return P.Z >= 0.5f * GraveZ; }
+}
+
 enum class ESandSurfaceField : uint8
 {
 	Isotropic,     // 등방 B-cubic 커널 (Müller 2003 식) — 대조군

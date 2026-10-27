@@ -238,8 +238,26 @@ bool FSandSurfaceMesh::SaveObj(const FString& Path) const
 	return FFileHelper::SaveStringToFile(S, *Path);
 }
 
-void FSandSurfaceBuilder::Build(const TArray<FVector3f>& Pos, const FSandSurfaceParams& P, FSandSurfaceMesh& Out, const TArray<float>& Wet, const TArray<FVector3f>& Vel)
+void FSandSurfaceBuilder::Build(const TArray<FVector3f>& InPos, const FSandSurfaceParams& P, FSandSurfaceMesh& Out, const TArray<float>& InWet, const TArray<FVector3f>& InVel)
 {
+	// M2 T1 — 무덤 입자를 빼고 짓는다 (경계 상자가 무덤까지 늘어나지 않게). 입자당 대조 배열(Smoothed · Cov …)은 뺀 뒤 번호
+	int32 NumGrave = 0;
+	for (const FVector3f& X : InPos) { NumGrave += SandPool::IsGrave(X) ? 1 : 0; }
+	if (NumGrave > 0)
+	{
+		TArray<FVector3f> LPos, LVel; TArray<float> LWet;
+		const bool bW = InWet.Num() >= InPos.Num(), bV = InVel.Num() >= InPos.Num();
+		for (int32 i = 0; i < InPos.Num(); ++i)
+		{
+			if (SandPool::IsGrave(InPos[i])) { continue; }
+			LPos.Add(InPos[i]);
+			if (bW) { LWet.Add(InWet[i]); }
+			if (bV) { LVel.Add(InVel[i]); }
+		}
+		Build(LPos, P, Out, LWet, LVel);
+		return;
+	}
+	const TArray<FVector3f>& Pos = InPos; const TArray<float>& Wet = InWet; const TArray<FVector3f>& Vel = InVel;
 	Out = FSandSurfaceMesh();
 	const int32 N = Pos.Num();
 	Out.NumParticles = N;

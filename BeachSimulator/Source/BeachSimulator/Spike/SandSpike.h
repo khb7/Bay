@@ -11,6 +11,7 @@
 
 #include "CoreMinimal.h"
 #include "SandGpuSolver.h"
+#include "../Mesh/SandSurface.h"   // SandPool (무덤)
 
 /**
  * 솔버 상수.
@@ -339,6 +340,16 @@ public:
 	 * 빠진 입자에 걸린 결합은 삭제. 접촉 목록·워밍 표는 초기화(한 프레임 차가운 시작). 제거된 개수를 돌려준다
 	 */
 	int32 RemoveParticles(TFunctionRef<bool(int32)> ShouldRemove);
+
+	/**
+	 * M2 T1 입자 풀 — 번호를 바꾸지 않고 죽인다: 무덤 자리(SandPool::GravePos)에 고정(w = 0)하고 걸린 결합 삭제.
+	 * 접촉 · 메시는 위치만으로 빠진다. 쌍 목록(워밍)은 유지 — 죽은 쌍은 다음 프레임에 그냥 사라진다. 죽인 개수를 돌려준다
+	 */
+	int32 KillParticles(TFunctionRef<bool(int32)> ShouldKill);
+	/** 용량까지 죽은 칸을 덧붙인다 (쌓기가 꺼내 쓸 빈 칸). 이미 그 이상이면 아무것도 안 한다 */
+	void  ReservePool(int32 Capacity);
+	int32 NumAlive() const { return Pos.Num() - NumDead; }
+	bool  IsDead(int32 i) const { return Dead.IsValidIndex(i) && Dead[i] != 0; }
 	void  SetWGlobal(float W) { Params.WGlobal = W; }
 	/**
 	 * 입자별 W (M1 W1, m1-plan-wet.md). 아직 시간에 따라 변하지 않는다 (침투 · 증발은 M5). 설정하지 않은 입자는 WGlobal.
@@ -504,6 +515,8 @@ private:
 	TArray<FVector3f> PrevPos;  // 스텝 시작 위치. 마찰의 위치 오차가 이 차이를 본다
 	TArray<float>     InvMass;  // 1 = 자유, 0 = 고정(거친 바닥). 접촉이 이 비율로 나뉜다
 	TArray<float>     Wet;      // 입자별 W — 짧으면 WGlobal 로 채운다 (EnsureWet)
+	TArray<uint8>     Dead;     // M2 T1 — 1 = 죽은 칸 (무덤에 고정). 짧으면 전부 산 것
+	int32             NumDead = 0;
 	bool bWetPerParticle = false;   // SetWet 뒤 — 결합 점착을 쌍의 W 로 (W3). 아니면 WGlobal 하나 (M0 시험의 W 서서히 낮추기)
 	/** 전역 cohesion 배수 — 입자별 모드면 1 (결합마다 Coh 가 대신한다) */
 	float GlobalCoh() const { return bWetPerParticle ? 1.f : CohesionOfW(Params.WGlobal); }

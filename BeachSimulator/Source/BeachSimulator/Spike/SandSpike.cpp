@@ -149,6 +149,7 @@ void FSandSpike::SpawnPourBase()
 	Pos.Reset();
 	InvMass.Reset();
 	Wet.Reset();
+	Dead.Reset(); NumDead = 0;
 	for (int32 iz = 0; iz < FMath::Max(1, Pour.BaseLayers); ++iz)
 	{
 		for (int32 iy = -Lat; iy <= Lat; ++iy)
@@ -178,6 +179,7 @@ void FSandSpike::InitCustom(const FSandParams& InParams, const TArray<FVector3f>
 	Pos = InPos;
 	InvMass = InInvMass;
 	Wet.Reset();
+	Dead.Reset(); NumDead = 0;
 	Vel.SetNumZeroed(Pos.Num());
 	PrevPos = Pos;
 	Bonds.Reset();
@@ -402,6 +404,7 @@ int32 FSandSpike::RemoveParticles(TFunctionRef<bool(int32)> ShouldRemove)
 	};
 	EnsureWet();
 	Compact(Pos); Compact(Vel); Compact(PrevPos); Compact(InvMass); Compact(Wet);
+	if (Dead.Num() == NewIndex.Num()) { Compact(Dead); NumDead = 0; for (uint8 D : Dead) { NumDead += D; } }
 	Compact(GroundLambdaN); Compact(GroundLambdaT); Compact(WallLambda);
 
 	for (int32 b = Bonds.Num() - 1; b >= 0; --b)
@@ -416,6 +419,48 @@ int32 FSandSpike::RemoveParticles(TFunctionRef<bool(int32)> ShouldRemove)
 	ResizeBuffers();
 	SettledFrames = 0;
 	return Removed;
+}
+
+int32 FSandSpike::KillParticles(TFunctionRef<bool(int32)> ShouldKill)
+{
+	SyncFromGpu();
+	Dead.SetNumZeroed(Pos.Num());
+	int32 Killed = 0;
+	for (int32 i = 0; i < Pos.Num(); ++i)
+	{
+		if (Dead[i] || InvMass[i] <= 0.f || !ShouldKill(i)) { continue; }
+		Dead[i] = 1;
+		Pos[i] = PrevPos[i] = SandPool::GravePos(i);
+		Vel[i] = FVector3f::ZeroVector;
+		InvMass[i] = 0.f;
+		GroundLambdaN[i] = GroundLambdaT[i] = 0.f;
+		WallLambda[i] = FVector4f::Zero();
+		++Killed;
+	}
+	if (Killed == 0) { return 0; }
+	NumDead += Killed;
+	for (int32 b = Bonds.Num() - 1; b >= 0; --b)
+	{
+		if (Dead[Bonds[b].I] || Dead[Bonds[b].J]) { Bonds.RemoveAtSwap(b); }
+	}
+	const bool bPairsWereValid = bGpuPairsValid;
+	bGpuDirty = true;
+	bGpuPairsValid = bPairsWereValid;   // 번호는 그대로 — 워밍 표 유지
+	SettledFrames = 0;
+	return Killed;
+}
+
+void FSandSpike::ReservePool(int32 Capacity)
+{
+	SyncFromGpu();
+	const int32 N0 = Pos.Num();
+	if (Capacity <= N0) { return; }
+	TArray<FVector3f> Add;
+	for (int32 i = N0; i < Capacity; ++i) { Add.Add(SandPool::GravePos(i)); }
+	AddParticles(Add);
+	Dead.SetNumZeroed(Pos.Num());
+	for (int32 i = N0; i < Capacity; ++i) { Dead[i] = 1; InvMass[i] = 0.f; }
+	NumDead += Capacity - N0;
 }
 
 void FSandSpike::AddParticles(const TArray<FVector3f>& NewPos)
@@ -455,6 +500,7 @@ void FSandSpike::SpawnTiltBox()
 	Pos.Reset();
 	InvMass.Reset();
 	Wet.Reset();
+	Dead.Reset(); NumDead = 0;
 
 	// 고정층(거친 바닥) — 간격 D 로 상자를 덮는다. 겹침은 고정이라 무해. 인덱스 앞쪽에 모은다
 	const int32 BaseN = FMath::CeilToInt(Side * SF / S);
@@ -525,6 +571,7 @@ void FSandSpike::SpawnColumn()
 	Pos.Reset();
 	InvMass.Reset();
 	Wet.Reset();
+	Dead.Reset(); NumDead = 0;
 	for (int32 iz = 0; iz < FMath::CeilToInt((H - R2) / S); ++iz)
 	{
 		// 바닥 몇 층은 고정해 거칠게 만든다. 매끄러운 지면 위에서는 밑동이 미끄러져 각이 낮아진다
