@@ -142,6 +142,7 @@ struct FSandGpuStats
 	int32  Piled = 0;                 // M2 T3 — 이 프레임 쌓은 수
 	int32  HandCount = 0, Dug = 0, HandFull = 0;   // M2 T2 — 손 재고 · 이 프레임 판 수 · 손이 차서 못 판 수
 	int32  BondsFormed = 0, BondFormRejected = 0;  // 사건 결합 — 생성 · 슬롯/용량 넘침
+	int32  BondsCompacted = 0;                      // A2 — 이번 스텝에 비운 죽은 결합 칸
 };
 
 /** 전량 내려받기 — 계측·도구 조작 전 */

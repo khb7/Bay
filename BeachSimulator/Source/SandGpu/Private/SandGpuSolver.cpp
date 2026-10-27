@@ -279,6 +279,10 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandToolParams, )
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BondAdjRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BondCursorRW)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BondAdjOffsetRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BondFlagRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BondRemap)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, TempIJRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, TempDataRW)
 END_SHADER_PARAMETER_STRUCT()
 
 #define TOOL_USF "/Project/Private/SandTool.usf"
@@ -289,6 +293,9 @@ SAND_SHADER(FSandPileFinishCS, FSandToolParams, TOOL_USF, "PileFinishCS")
 SAND_SHADER(FSandBondSlotCountCS, FSandToolParams, TOOL_USF, "BondSlotCountCS")
 SAND_SHADER(FSandBondFormCS,      FSandToolParams, TOOL_USF, "BondFormCS")
 SAND_SHADER(FSandBondFillCS,      FSandToolParams, TOOL_USF, "BondFillCS")
+SAND_SHADER(FSandBondAliveCS,     FSandToolParams, TOOL_USF, "BondAliveCS")
+SAND_SHADER(FSandBondCompactCS,   FSandToolParams, TOOL_USF, "BondCompactCS")
+SAND_SHADER(FSandBondCompactCountCS, FSandToolParams, TOOL_USF, "BondCompactCountCS")
 
 #define FRAME_USF "/Project/Private/SandFrame.usf"
 SAND_SHADER(FSandScanBlocksCS,  FSandFrameParams, FRAME_USF, "ScanBlocksCS")
@@ -632,6 +639,7 @@ struct FSandGpuSim::FState
 	FRHIGPUBufferReadback HandRB{ TEXT("SandGpu.Hand") };
 	FRHIGPUBufferReadback DlWet{ TEXT("SandGpu.DlWet") }, DlBondIJ{ TEXT("SandGpu.DlBondIJ") };
 	FRHIGPUBufferReadback BondTotalRB{ TEXT("SandGpu.BondTotal") };
+	bool bCompactedThisStep = false;   // A2 — 이번 스텝에 결합 칸을 압축했다 → NumB 를 줄여도 된다
 	// M2 T5 — 위치만 비동기 리드백 (커서 높이장). 렌더 스레드만 InFlight 를 만지고, 결과는 잠금 아래 게임 스레드로
 	FRHIGPUBufferReadback AsyncPosRB{ TEXT("SandGpu.AsyncPos") };
 	bool bAsyncInFlight = false;
@@ -1188,6 +1196,31 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 					BP.BondIJRW = GraphBuilder.CreateUAV(BondIJ);
 					BP.BondSlotRW = GraphBuilder.CreateUAV(BondSlot);
 					BP.BondTotalRW = GraphBuilder.CreateUAV(BondTotal);
+					// A2 — 죽은 결합 칸 압축 (사건 결합 프레임마다). 산 것만 앞으로 모으고 칸 수 = 산 수. 옛 인접 목록은 Remap 으로 새 번호를 읽는다
+					FRDGBufferRef Remap = ScratchBuffer(GraphBuilder, TEXT("SandSim.BondRemap"), sizeof(uint32), LB + 1);
+					if (LB > 0)
+					{
+						FRDGBufferRef Flag = ScratchBuffer(GraphBuilder, TEXT("SandSim.BondFlag"), sizeof(uint32), LB);
+						FRDGBufferRef TmpIJ = ScratchBuffer(GraphBuilder, TEXT("SandSim.BondTmpIJ"), sizeof(uint32), 2 * LB);
+						FRDGBufferRef TmpData = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), LB), TEXT("SandSim.BondTmpData"));
+						FSandToolParams CP = BP;
+						CP.BondFlagRW = GraphBuilder.CreateUAV(Flag);
+						CP.TempDataRW = GraphBuilder.CreateUAV(TmpData);
+						AddDirectPass<FSandBondAliveCS>(GraphBuilder, RDG_EVENT_NAME("SandBondAlive"), ShaderMap, CP, LB, 64);
+						AddScan(GraphBuilder, ShaderMap, F, Flag, Remap, LB);
+						FSandToolParams CC = BP;
+						CC.BondRemap = GraphBuilder.CreateSRV(Remap);
+						CC.TempIJRW = GraphBuilder.CreateUAV(TmpIJ);
+						CC.TempDataRW = GraphBuilder.CreateUAV(TmpData);
+						AddDirectPass<FSandBondCompactCS>(GraphBuilder, RDG_EVENT_NAME("SandBondCompact"), ShaderMap, CC, LB, 64);
+						AddCopyBufferPass(GraphBuilder, BondIJ, 0, TmpIJ, 0, 2 * LB * sizeof(uint32));
+						AddCopyBufferPass(GraphBuilder, BondData, 0, TmpData, 0, LB * sizeof(FVector4f));
+						FSandToolParams CN = BP;
+						CN.BondRemap = GraphBuilder.CreateSRV(Remap);
+						AddDirectPass<FSandBondCompactCountCS>(GraphBuilder, RDG_EVENT_NAME("SandBondCompactCount"), ShaderMap, CN, 1, 1);
+						S->bCompactedThisStep = true;
+					}
+					else { AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(Remap), 0u); }
 					if (LB > 0) { AddDirectPass<FSandBondSlotCountCS>(GraphBuilder, RDG_EVENT_NAME("SandBondSlotCount"), ShaderMap, BP, LB, 64); }
 					FSandToolParams BF = BP;
 					BF.PairIJ = GraphBuilder.CreateSRV(SortedIJ);
@@ -1195,6 +1228,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 					BF.BondTrig = GraphBuilder.CreateSRV(BondTrigBuf);
 					BF.OldAdjOffset = GraphBuilder.CreateSRV(OldAdjOff);
 					BF.OldAdj = GraphBuilder.CreateSRV(OldAdjBuf);
+					BF.BondRemap = GraphBuilder.CreateSRV(Remap);
 					AddDirectPass<FSandBondFormCS>(GraphBuilder, RDG_EVENT_NAME("SandBondForm"), ShaderMap, BF, LMax, 64);
 					AddScan(GraphBuilder, ShaderMap, F, BondSlot, BondAdjOffset, LN);
 					FSandToolParams BL = BP;
@@ -1253,7 +1287,8 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 	Out.NumAsleep       = (int32)Counters[3];
 	Out.HandCount = (int32)Hand[0]; Out.Dug = (int32)Hand[1]; Out.HandFull = (int32)Hand[2]; Out.Piled = (int32)Hand[3];
 	Out.BondsFormed = (int32)BondTot[1]; Out.BondFormRejected = (int32)BondTot[2];
-	NumB = FMath::Max(NumB, (int32)BondTot[0]);   // 사건 결합이 덧붙인 칸 (죽은 칸 포함 — CPU 가 내려받아 다시 올릴 때 압축)
+	if (State->bCompactedThisStep) { NumB = (int32)BondTot[0]; Out.BondsCompacted = (int32)BondTot[3]; State->bCompactedThisStep = false; }   // A2 압축 — 죽은 칸이 빠졌다
+	else { NumB = FMath::Max(NumB, (int32)BondTot[0]); }   // 사건 결합이 덧붙인 칸 (죽은 칸 포함 — CPU 가 내려받아 다시 올릴 때 압축)
 	for (int32 k = 0; k < 4; ++k) { Out.StageMs[k] = StageMs[k]; }
 	LastNumPairs = Out.NumPairs;
 	Out.GpuMs = (FPlatformTime::Seconds() - T0) * 1000.0;

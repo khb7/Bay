@@ -1476,6 +1476,7 @@ void FSandSpike::StepGpuResident(float Dt)
 	HandCount = S.HandCount; LastDug = S.Dug; LastHandFull = S.HandFull;
 	LastBondsFormed = S.BondsFormed; LastBondFormRejected = S.BondFormRejected;
 	LastPiled = S.Piled;
+	LastBondsCompacted = S.BondsCompacted;
 	NumDead += S.Dug - S.Piled;   // CPU 의 Dead 표시는 SyncFromGpu 에서 위치로 다시 맞춘다
 	LastBoundaryFrac = S.NumPairs > 0 ? (float)S.NumBoundary / S.NumPairs : 0.f;
 	LastAsleep = S.NumAsleep; LastAwakeBlocks = S.NumAwakeBlocks;

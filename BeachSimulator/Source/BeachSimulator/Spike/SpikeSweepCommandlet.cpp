@@ -849,7 +849,8 @@ namespace
 					FSandToolStamp T; T.Kind = ESandTool::Dig; T.Center = FVector3f(C.X, C.Y, Top); T.Radius = DigR; T.Strength = DigS;
 					Sim.QueueStamp(T);
 				}
-				if (f == PourFrame)
+				int32 RepourFrame = -1; FParse::Value(*Params, TEXT("repour="), RepourFrame);   // A2: 두 번째 붓기 — 그 사이 끊긴 결합 칸이 압축되는지
+				if (f == PourFrame || f == RepourFrame)
 				{
 					const FVector3f C(Box.GetCenter());
 					// x < 가운데 쪽 반을 작은 구(반지름 6cm)를 6cm 간격으로 채워 적신다 — 겹친 합이 가운데 기준 ≈ 0.6
@@ -884,7 +885,14 @@ namespace
 				}
 				// 적신 곳의 닿은 쌍에 물다리 — 붓기가 끝난 다음 프레임에 결합 생성 (지금은 CPU · 전체, m2-log #2)
 				// 결합은 GPU 사건 결합이 붓기 프레임에 만든다 (m2-log #3). -pourcpubond 는 예전 CPU 전체 FormBonds 대조
-				if (f == PourFrame) { UE_LOG(LogSpikeSweep, Display, TEXT("   T2 붓기 프레임 GPU 사건 결합 %d"), Sim.GetLastBondsFormed()); }
+				if (f == PourFrame || f == RepourFrame)
+				{
+					UE_LOG(LogSpikeSweep, Display, TEXT("   T2 붓기 프레임 f%d GPU 사건 결합 %d · 압축으로 비운 칸 %d · 결합 칸 %d · 산 결합 %d"),
+						f, Sim.GetLastBondsFormed(), Sim.GetLastBondsCompacted(), Sim.GetGpuSim()->NumBonds(), Sim.GetBonds().Num());
+					TSet<uint64> Seen; int32 Dup = 0;
+					for (const FSandBond& B : Sim.GetBonds()) { const uint64 K = ((uint64)FMath::Min(B.I, B.J) << 32) | (uint32)FMath::Max(B.I, B.J); bool bIn = false; Seen.Add(K, &bIn); Dup += bIn ? 1 : 0; }
+					UE_LOG(LogSpikeSweep, Display, TEXT("   A2 같은 쌍 중복 결합 %d"), Dup);
+				}
 				if (f == PourFrame && FParse::Param(*Params, TEXT("pourcpubond"))) { UE_LOG(LogSpikeSweep, Display, TEXT("   T2 붓기 뒤 CPU 결합 %d"), Sim.FormBonds()); }
 				if (DigFrame > 0 || PourFrame > 0)
 				{

@@ -72,6 +72,7 @@ void USandPlaySubsystem::OnWorldBeginPlay(UWorld& World)
 		FMemory::Memcpy(Pos.GetData(), Bytes.GetData(), N * sizeof(FVector3f));
 		FMemory::Memcpy(Inv.GetData(), Bytes.GetData() + N * sizeof(FVector3f), N * sizeof(float));
 		Sim->InitCustom(SP, Pos, Inv);
+		Sim->Step(1.f / 60.f);   // GPU 상주 시뮬은 첫 스텝에서 만들어진다 — 메셔에 원천을 넘기기 전에 (안 하면 모래가 안 그려진다)
 		UE_LOG(LogSandPlay, Display, TEXT("T4 바닥 캐시 읽음: %s (%d 개)"), *CachePath, N);
 	}
 	else
@@ -221,7 +222,27 @@ void USandPlaySubsystem::UpdateCamera(APlayerController* PC, float Dt)
 	Cam->SetActorLocationAndRotation(Cam->GetActorLocation() + Move.GetSafeNormal() * Speed * Dt, Rot);
 }
 
-void USandPlaySubsystem::ApplyBrush(int32 Tool, const FVector3f& At)
+void USandPlaySubsystem::ApplyStroke(int32 Tool, const FVector3f& At)
+{
+	// 연속 브러시 — 같은 도구로 끄는 중이면 지난 커서 → 지금 커서 사이를 반지름 0.4 배 간격으로 채운다 (빨리 끌어도 점선이 안 되게).
+	// 쌓기는 한 프레임 양을 나눠 놓는다. 너무 먼 점프(150cm, 다른 곳 클릭)는 잇지 않는다
+	TArray<FVector3f> Pts;
+	if (Tool == LastTool && bLastHit)
+	{
+		const float Len = FVector3f::Dist(LastHit, At);
+		const float Gap = 0.4f * BrushR;
+		if (Len > Gap && Len < 150.f)
+		{
+			const int32 K = FMath::Min(32, FMath::CeilToInt(Len / Gap));
+			for (int32 k = 1; k <= K; ++k) { Pts.Add(FMath::Lerp(LastHit, At, (float)k / K)); }
+		}
+	}
+	if (Pts.Num() == 0) { Pts.Add(At); }
+	LastStrokeStamps = Pts.Num();
+	for (const FVector3f& X : Pts) { ApplyBrush(Tool, X, 1.f / Pts.Num()); }
+}
+
+void USandPlaySubsystem::ApplyBrush(int32 Tool, const FVector3f& At, float Share)
 {
 	APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
 	const float Mul = (PC && PC->IsInputKeyDown(EKeys::LeftShift)) ? 3.f : 1.f;
@@ -238,7 +259,7 @@ void USandPlaySubsystem::ApplyBrush(int32 Tool, const FVector3f& At)
 	else
 	{
 		// 표면 위에 한 번에 조금씩 (T3 의 원기둥이 무너지지 않을 만큼)
-		const int32 N = FMath::Min(Sim->GetHandCount(), FMath::RoundToInt(4.f * Mul));
+		const int32 N = FMath::Min(Sim->GetHandCount(), FMath::Max(1, FMath::RoundToInt(4.f * Mul * Share)));
 		if (N <= 0) { return; }
 		T.Kind = ESandTool::Pile; T.Radius = FMath::Max(2.f * Sim->GetParams().Radius, 0.4f * BrushR); T.Strength = (float)N;
 	}
@@ -272,6 +293,7 @@ bool USandPlaySubsystem::Tick(float DeltaTime)
 		if (F >= 0 && F < 60) { Tool = ToolDig; Aim = Fwd; }
 		else if (F >= 60 && F < 100) { Tool = ToolPour; Aim = (Fwd - 0.18 * Right).GetSafeNormal(); }
 		else if (F >= 100 && F < 220) { Tool = ToolPile; Aim = (Fwd + 0.18 * Right).GetSafeNormal(); }
+		else if (F >= 220 && F < 250) { Tool = ToolDig; Aim = (Fwd + (-0.12 + 0.24 * (F - 220) / 30.0) * Right).GetSafeNormal(); }   // 빠르게 끌기 (연속 브러시)
 		bHit = Pick(Cam->GetActorLocation(), Aim, Hit);
 	}
 	else if (PC->DeprojectMousePositionToWorld(O, Dir))
@@ -281,7 +303,12 @@ bool USandPlaySubsystem::Tick(float DeltaTime)
 		else if (PC->IsInputKeyDown(EKeys::RightMouseButton)) { Tool = ToolPile; }
 		else if (PC->IsInputKeyDown(EKeys::F)) { Tool = ToolPour; }
 	}
-	if (bHit && Tool >= 0 && Frames > WarmFrames) { ApplyBrush(Tool, Hit); }
+	LastStrokeStamps = 0;
+	if (bHit && Tool >= 0 && Frames > WarmFrames) { ApplyStroke(Tool, Hit); }
+	bLastHit = bHit && Tool >= 0;
+	LastTool = Tool;
+	LastHit = Hit;
+	if (bAuto && Tool >= 0 && LastStrokeStamps > 1) { UE_LOG(LogSandPlay, Display, TEXT("A1 f %d: 끌기 스탬프 %d"), Frames - WarmFrames, LastStrokeStamps); }
 
 	Sim->Step(1.f / 60.f);
 	SimComp->UpdateFromSim();
@@ -290,7 +317,10 @@ bool USandPlaySubsystem::Tick(float DeltaTime)
 	{
 		const double T0 = FPlatformTime::Seconds();
 		Sim->GetGpuSim()->RequestPositionsAsync();
-		if (Sim->GetGpuSim()->TakePositionsAsync(AsyncPos)) { RebuildHeight(); HMs = (FPlatformTime::Seconds() - T0) * 1000.0; }
+		if (Sim->GetGpuSim()->TakePositionsAsync(AsyncPos))
+		{
+			RebuildHeight(); HMs = (FPlatformTime::Seconds() - T0) * 1000.0;
+		}
 	}
 	else if (Frames % HeightEvery == 0) { const double T0 = FPlatformTime::Seconds(); RebuildHeight(); HMs = (FPlatformTime::Seconds() - T0) * 1000.0; }
 	// T5 비용 — 자동 시험 구간별 평균 (도구 -1 쉼 · 0 파기 · 1 쌓기 · 2 물붓기)
@@ -305,11 +335,14 @@ bool USandPlaySubsystem::Tick(float DeltaTime)
 	if (bHit)
 	{
 		const FColor C = Tool == ToolDig ? FColor::Red : Tool == ToolPile ? FColor::Green : Tool == ToolPour ? FColor::Cyan : FColor::White;
-		DrawDebugCircle(World, FVector(Hit) + Offset + FVector(0, 0, 0.5), BrushR, 48, C, false, -1.f, 0, 0.3f, FVector(1, 0, 0), FVector(0, 1, 0), false);
+		DrawDebugCircle(World, FVector(Hit) + Offset + FVector(0, 0, 0.5), BrushR, 48, C, false, -1.f, SDPG_Foreground, 0.4f, FVector(1, 0, 0), FVector(0, 1, 0), false);
 	}
 	if (GEngine)
 	{
 		GEngine->AddOnScreenDebugMessage(1, 0.f, FColor::White, FString::Printf(TEXT("좌 파기 · 우 쌓기 · F 물붓기 · 휠 반지름 %.0fcm · Shift ×3 · 가운데 끌기 둘러보기 · WASDQE"), BrushR));
+		// A4 손 재고 막대 (20 칸)
+		const int32 Fill = FMath::Clamp(FMath::RoundToInt(20.f * Sim->GetHandCount() / FMath::Max(1, Sim->HandCap)), 0, 20);
+		GEngine->AddOnScreenDebugMessage(3, 0.f, FColor::Green, FString::Printf(TEXT("손 [%s%s]"), *FString::ChrN(Fill, TEXT('#')), *FString::ChrN(20 - Fill, TEXT('.'))));
 		GEngine->AddOnScreenDebugMessage(2, 0.f, FColor::Yellow, FString::Printf(TEXT("손 %d / %d · 산 입자 %d · 합 %d · GPU %.2f ms"),
 			Sim->GetHandCount(), Sim->HandCap, Sim->NumAlive(), Sim->NumAlive() + Sim->GetHandCount(), Sim->LastGpuMs()));
 	}
@@ -322,12 +355,12 @@ bool USandPlaySubsystem::Tick(float DeltaTime)
 			UE_LOG(LogSandPlay, Display, TEXT("T4 f %3d: 도구 %d · 명중 %d (%.1f %.1f %.1f) · 손 %d · 산 %d · 합 %d · 결합 %d"),
 				F, Tool, bHit ? 1 : 0, Hit.X, Hit.Y, Hit.Z, Sim->GetHandCount(), Sim->NumAlive(), Sim->NumAlive() + Sim->GetHandCount(), Sim->GetBonds().Num());
 		}
-		if (F == 280)
+		if (F == 310)
 		{
 			FScreenshotRequest::RequestScreenshot(ShotPath, false, false);
 			UE_LOG(LogSandPlay, Display, TEXT("스크린샷 요청: %s"), *ShotPath);
 		}
-		if (F >= 300)
+		if (F >= 330)
 		{
 			static const TCHAR* Names[] = { TEXT("쉼"), TEXT("파기"), TEXT("쌓기"), TEXT("물붓기") };
 			for (int32 t = 0; t < 4; ++t)

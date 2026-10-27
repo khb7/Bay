@@ -369,6 +369,7 @@ public:
 	int32 GetLastDug() const { return LastDug; }
 	int32 GetLastBondsFormed() const { return LastBondsFormed; }
 	int32 GetLastPiled() const { return LastPiled; }
+	int32 GetLastBondsCompacted() const { return LastBondsCompacted; }
 	float PileDropVel = 0.f;                            // 쌓기: 놓을 때 아래로 속도 (cm/s)
 	int32 HandCap = 600;                                // 손 용량 — 반지름 10cm 구 한 삽 (m2-plan)
 	float DrainTau = 0.f;                               // M2 임시 배수 τ (초). 0 = 끔. W > WOptEnd 를 WOptEnd 쪽으로
@@ -542,7 +543,7 @@ private:
 	int32             NumDead = 0;
 	TArray<FSandToolStamp> PendingStamps;
 	int32 HandCount = 0, LastDug = 0, LastHandFull = 0;
-	int32 LastBondsFormed = 0, LastBondFormRejected = 0, LastPiled = 0;
+	int32 LastBondsFormed = 0, LastBondFormRejected = 0, LastPiled = 0, LastBondsCompacted = 0;
 	bool bWetPerParticle = false;   // SetWet 뒤 — 결합 점착을 쌍의 W 로 (W3). 아니면 WGlobal 하나 (M0 시험의 W 서서히 낮추기)
 	/** 전역 cohesion 배수 — 입자별 모드면 1 (결합마다 Coh 가 대신한다) */
 	float GlobalCoh() const { return bWetPerParticle ? 1.f : CohesionOfW(Params.WGlobal); }

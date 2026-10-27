@@ -27,7 +27,12 @@ private:
 	void RebuildHeight();
 	bool Pick(const FVector& WorldOrigin, const FVector& WorldDir, FVector3f& OutSim) const;
 	void UpdateCamera(class APlayerController* PC, float Dt);
-	void ApplyBrush(int32 Tool, const FVector3f& At);   // 0 파기 · 1 쌓기 · 2 물붓기
+	void ApplyStroke(int32 Tool, const FVector3f& At);
+	void ApplyBrush(int32 Tool, const FVector3f& At, float Share);   // 0 파기 · 1 쌓기 · 2 물붓기. Share = 이 프레임 몫 (연속 브러시로 나눌 때)
+	FVector3f LastHit = FVector3f::ZeroVector;
+	int32 LastTool = -1;
+	bool bLastHit = false;
+	int32 LastStrokeStamps = 0;
 
 	TUniquePtr<class FSandSpike> Sim;
 	UPROPERTY()

@@ -65,6 +65,11 @@ RWStructuredBuffer<uint>   BondTotalRW;  // [0] 결합 칸 수 (산 것 + 죽은
 RWStructuredBuffer<uint>   BondAdjRW;
 RWStructuredBuffer<uint>   BondCursorRW;
 StructuredBuffer<uint>     BondAdjOffsetRO;
+// 죽은 결합 칸 압축 (A2) — 사건 결합 프레임 앞에서. Remap = 산 표시의 배타 스캔 (Remap[b+1] − Remap[b] = 1 이면 산 것)
+RWStructuredBuffer<uint>   BondFlagRW;
+StructuredBuffer<uint>     BondRemap;
+RWStructuredBuffer<uint>   TempIJRW;
+RWStructuredBuffer<float4> TempDataRW;
 
 float3 GravePos(uint i) { return float3(GraveZ + (i % 1024u) * GraveSpacing, GraveZ + (i / 1024u) * GraveSpacing, GraveZ); }
 bool IsGrave(float3 P) { return P.z >= 0.5f * GraveZ; }
@@ -223,12 +228,44 @@ void BondSlotCountCS(uint3 Tid : SV_DispatchThreadID)
 	InterlockedAdd(BondSlotRW[BondIJRW[2 * b + 1]], 1u, D0);
 }
 
+// ---- 압축: 산 표시 → (스캔) → 새 칸으로 옮김 → 칸 수 = 산 수
+[numthreads(64, 1, 1)]
+void BondAliveCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint b = Tid.x;
+	if (b >= NumBonds) { return; }
+	BondFlagRW[b] = BondDataRW[b].x >= 0.f ? 1u : 0u;
+	TempDataRW[b] = float4(-1.f, 0.f, 0.f, 0.f);
+}
+
+[numthreads(64, 1, 1)]
+void BondCompactCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint b = Tid.x;
+	if (b >= NumBonds) { return; }
+	const uint n = BondRemap[b];
+	if (BondRemap[b + 1] == n) { return; }
+	TempIJRW[2 * n] = BondIJRW[2 * b];
+	TempIJRW[2 * n + 1] = BondIJRW[2 * b + 1];
+	TempDataRW[n] = BondDataRW[b];
+}
+
+[numthreads(1, 1, 1)]
+void BondCompactCountCS(uint3 Tid : SV_DispatchThreadID)
+{
+	BondTotalRW[0] = BondRemap[NumBonds];
+	BondTotalRW[3] = NumBonds - BondRemap[NumBonds];   // 이번에 비운 칸
+}
+
 bool HasBond(uint i, uint j)
 {
+	// 옛 인접 목록은 압축 전 번호 — Remap 으로 새 번호로
 	for (uint e = OldAdjOffset[i]; e < OldAdjOffset[i + 1]; ++e)
 	{
 		const uint A = OldAdj[e];
-		const uint b = A >> 1;
+		const uint b0 = A >> 1;
+		if (BondRemap[b0 + 1] == BondRemap[b0]) { continue; }
+		const uint b = BondRemap[b0];
 		if (BondDataRW[b].x < 0.f) { continue; }
 		const uint Other = (A & 1u) ? BondIJRW[2 * b] : BondIJRW[2 * b + 1];
 		if (Other == j) { return true; }
