@@ -11,6 +11,7 @@
 #include "InputCoreTypes.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/CommandLine.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "UnrealClient.h"
 #include "../Mesh/SandSurface.h"
@@ -59,9 +60,34 @@ void USandPlaySubsystem::OnWorldBeginPlay(UWorld& World)
 	ApplySandGpuProfile(TEXT("-gpu2"), SP);
 	SP.bGatherApply = false; SP.bMassSplit = false;
 	Sim = MakeUnique<FSandSpike>();
-	SpikeBatch::PourBoxBlock(*Sim, SP, Count, BoxHalf);
-	for (int32 f = 0; f < 300; ++f) { Sim->Step(1.f / 60.f); }
-	Sim->ReleaseWalls();
+	// 붓기는 한 알씩이라 2만 개면 4분 — 벽을 치우고 가라앉은 바닥을 캐시에 저장해 두고 다음부터 읽는다 (-sandrebuild 로 다시 짓기)
+	const FString CachePath = FPaths::ProjectSavedDir() / FString::Printf(TEXT("Play/bed_%d_%.0f.bin"), Count, BoxHalf);
+	TArray<uint8> Bytes;
+	const int32 Rec = sizeof(FVector3f) + sizeof(float);
+	if (!FParse::Param(FCommandLine::Get(), TEXT("sandrebuild")) && FFileHelper::LoadFileToArray(Bytes, *CachePath) && Bytes.Num() > 0 && Bytes.Num() % Rec == 0)
+	{
+		const int32 N = Bytes.Num() / Rec;
+		TArray<FVector3f> Pos; TArray<float> Inv;
+		Pos.SetNumUninitialized(N); Inv.SetNumUninitialized(N);
+		FMemory::Memcpy(Pos.GetData(), Bytes.GetData(), N * sizeof(FVector3f));
+		FMemory::Memcpy(Inv.GetData(), Bytes.GetData() + N * sizeof(FVector3f), N * sizeof(float));
+		Sim->InitCustom(SP, Pos, Inv);
+		UE_LOG(LogSandPlay, Display, TEXT("T4 바닥 캐시 읽음: %s (%d 개)"), *CachePath, N);
+	}
+	else
+	{
+		SpikeBatch::PourBoxBlock(*Sim, SP, Count, BoxHalf);
+		for (int32 f = 0; f < 300; ++f) { Sim->Step(1.f / 60.f); }
+		Sim->ReleaseWalls();
+		for (int32 f = 0; f < 300; ++f) { Sim->Step(1.f / 60.f); }   // 퍼져 가라앉을 때까지
+		const TArray<FVector3f>& Pos = Sim->GetPositions();
+		const TArray<float>& Inv = Sim->GetInvMass();
+		Bytes.SetNumUninitialized(Pos.Num() * Rec);
+		FMemory::Memcpy(Bytes.GetData(), Pos.GetData(), Pos.Num() * sizeof(FVector3f));
+		FMemory::Memcpy(Bytes.GetData() + Pos.Num() * sizeof(FVector3f), Inv.GetData(), Inv.Num() * sizeof(float));
+		FFileHelper::SaveArrayToFile(Bytes, *CachePath);
+		UE_LOG(LogSandPlay, Display, TEXT("T4 바닥 캐시 저장: %s"), *CachePath);
+	}
 
 	FBox Box(ForceInit);
 	for (const FVector3f& X : Sim->GetPositions()) { if (!SandPool::IsGrave(X)) { Box += FVector(X); } }
