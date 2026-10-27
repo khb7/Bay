@@ -62,9 +62,9 @@
 
 1. ~~모양 · 질감 전반~~ — **좋음** (사용자, 2026-10-27). — `img/m1-nrm-f270.png` (마름) · `img/m1-wet08-f270.png` (젖음 0.8) · `img/m1-big20k-f270.png` (2만 입자 큰 둔덕). 큰 장면: `-sandcount=20000 -sandboxhalf=80`. 시험: `UnrealEditor.exe BeachSimulator.uproject /Engine/Maps/Templates/Template_Default -game -sandsurfacetest -sandsim -sandscene=pour [-sandwet=0.8] [-sandsmooth=N]`
 2. ~~평활화 25 회의 대가~~ — **25 회로 확정** (사용자, 2026-10-27).
-3. 젖은 모래 거칠기 0.2 (papers L-3 ① 값) — 다소 반들거려 보일 수 있다.
+3. ~~젖은 모래 거칠기 0.2~~ — 광택은 포화 근처(W 0.8~1)에서만 켜지게 바꿈 (#35, 사용자 관찰 · Jensen 1999). **좋음** (사용자).
 4. 둔덕 가장자리의 물결 · 작은 돌기 — 바닥에 흩어진 알갱이를 알갱이로 남기는 가중 때문 (의도).
-5. 젖음 어두워짐이 약하다 — 알베도 × 0.5 가 반사광 · 자동 노출에 묻힌다 (`img/m1-w2half1-f270.png`, #28).
+5. ~~젖음 어두워짐이 약하다~~ — 채널별 Ångström 식 + 빨리 포화하는 곡선 (#33~#35, `img/m1-wetgloss-cmp.png`). **좋음** (사용자).
 
 ## 6. 남은 일
 
