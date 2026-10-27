@@ -42,6 +42,25 @@ RWStructuredBuffer<uint>   HandCountRW;  // [0] 재고 수 · [1] 이 프레임 
 StructuredBuffer<uint>     BondIJ;
 RWStructuredBuffer<float4> BondDataRW;   // x 휴지 길이(음수 = 죽음) · y λ · z 쌍 cohesion
 
+// 사건 결합 생성 (아래 BondFormCS)
+uint  NumPairsMax;               // 쌍 버퍼 용량 (실제 수는 FrameCounts[0])
+uint  BondCap;
+uint  BondSlots;
+float FormRange;                 // D · BondFormStretch
+float FormMinRest;               // D
+StructuredBuffer<uint>     PairIJ;       // 풀이 순서 쌍 (2k, 2k+1)
+StructuredBuffer<uint>     FrameCounts;  // [0] 쌍 수
+StructuredBuffer<uint>     BondTrig;     // 1 = 이번 프레임 결합 검사 대상
+RWStructuredBuffer<uint>   BondTrigRW;
+RWStructuredBuffer<uint>   BondSlotRW;   // 입자별 산 결합 수
+StructuredBuffer<uint>     OldAdjOffset;
+StructuredBuffer<uint>     OldAdj;
+RWStructuredBuffer<uint>   BondIJRW;
+RWStructuredBuffer<uint>   BondTotalRW;  // [0] 결합 칸 수 (산 것 + 죽은 것) · [1] 생성 수 · [2] 슬롯 · 용량 넘침
+RWStructuredBuffer<uint>   BondAdjRW;
+RWStructuredBuffer<uint>   BondCursorRW;
+StructuredBuffer<uint>     BondAdjOffsetRO;
+
 float3 GravePos(uint i) { return float3(GraveZ + (i % 1024u) * GraveSpacing, GraveZ + (i / 1024u) * GraveSpacing, GraveZ); }
 bool IsGrave(float3 P) { return P.z >= 0.5f * GraveZ; }
 
@@ -118,6 +137,7 @@ void StampCS(uint3 Tid : SV_DispatchThreadID)
 			W = min(1.f, W + B.z * K);
 			V.z -= B.w * K;
 			bWake = true;
+			if (B.z > 0.f) { BondTrigRW[p] = 1u; }   // 젖음이 올랐다 → 이번 프레임 결합 검사 (사건 결합)
 		}
 	}
 	WetRW[p] = W;
@@ -143,3 +163,99 @@ void BondToolCS(uint3 Tid : SV_DispatchThreadID)
 		BondDataRW[b] = D;
 	}
 }
+
+// ------------------------------------------------------------------------------------------------
+// 사건 결합 생성 (m2-log #3, papers C17 · m2-plan 결정 A). 물붓기 · 쌓기가 표시한 입자(BondTrig)의 닿은 쌍에만 다리를 만든다.
+// 생성 기준 = 문헌 (Mani 2012 · Roy 2018): 닿음 (거리 < D · BondFormStretch) · 양쪽 W > W_dry · 쌍 cohesion > 0 · 슬롯 남음.
+// 저절로 다시 붙지는 않는다 (m0-spike ①) — 사건이 없는 프레임엔 돌지 않는다.
+//
+//   BondSlotCountCS  산 결합 → 입자별 결합 수 (슬롯)
+//   BondFormCS       이번 프레임 쌍 목록(풀이 순서)에서 생성 — 뒤에 덧붙인다 (원자 계수)
+//   (스캔)           입자별 결합 수 → BondAdjOffset
+//   BondFillCS       산 결합 → 인접 목록 (죽은 결합은 빠진다. 저장 칸은 CPU 가 가끔 압축)
+
+
+[numthreads(64, 1, 1)]
+void BondSlotCountCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint b = Tid.x;
+	if (b >= NumBonds) { return; }
+	if (BondDataRW[b].x < 0.f) { return; }
+	uint D0;
+	InterlockedAdd(BondSlotRW[BondIJRW[2 * b]], 1u, D0);
+	InterlockedAdd(BondSlotRW[BondIJRW[2 * b + 1]], 1u, D0);
+}
+
+bool HasBond(uint i, uint j)
+{
+	for (uint e = OldAdjOffset[i]; e < OldAdjOffset[i + 1]; ++e)
+	{
+		const uint A = OldAdj[e];
+		const uint b = A >> 1;
+		if (BondDataRW[b].x < 0.f) { continue; }
+		const uint Other = (A & 1u) ? BondIJRW[2 * b] : BondIJRW[2 * b + 1];
+		if (Other == j) { return true; }
+	}
+	return false;
+}
+
+bool TakeSlot(uint p)
+{
+	uint Old;
+	InterlockedAdd(BondSlotRW[p], 1u, Old);
+	if (Old < BondSlots) { return true; }
+	InterlockedAdd(BondSlotRW[p], 0xFFFFFFFFu, Old);
+	return false;
+}
+
+[numthreads(64, 1, 1)]
+void BondFormCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint k = Tid.x;
+	if (k >= min(FrameCounts[0], NumPairsMax)) { return; }
+	const uint i = PairIJ[2 * k], j = PairIJ[2 * k + 1];
+	if (BondTrig[i] == 0u && BondTrig[j] == 0u) { return; }
+	const float4 Pi = PosRW[i], Pj = PosRW[j];
+	if (Pi.w <= 0.f && Pj.w <= 0.f) { return; }   // 고정끼리 (또는 무덤)
+	if (IsGrave(Pi.xyz) || IsGrave(Pj.xyz)) { return; }
+	const float Dist = distance(Pi.xyz, Pj.xyz);
+	if (Dist >= FormRange) { return; }
+	const float Wi = WetRO[i], Wj = WetRO[j];
+	if (Wi <= WDry || Wj <= WDry) { return; }
+	const float Coh = CohesionOfW(0.5f * (Wi + Wj));
+	if (Coh <= 0.f) { return; }
+	if (HasBond(i, j)) { return; }
+	uint D0;
+	if (!TakeSlot(i)) { InterlockedAdd(BondTotalRW[2], 1u, D0); return; }
+	if (!TakeSlot(j)) { InterlockedAdd(BondSlotRW[i], 0xFFFFFFFFu, D0); InterlockedAdd(BondTotalRW[2], 1u, D0); return; }
+	uint b;
+	InterlockedAdd(BondTotalRW[0], 1u, b);
+	if (b >= BondCap)
+	{
+		InterlockedAdd(BondTotalRW[0], 0xFFFFFFFFu, D0);
+		InterlockedAdd(BondSlotRW[i], 0xFFFFFFFFu, D0);
+		InterlockedAdd(BondSlotRW[j], 0xFFFFFFFFu, D0);
+		InterlockedAdd(BondTotalRW[2], 1u, D0);
+		return;
+	}
+	BondIJRW[2 * b] = i;
+	BondIJRW[2 * b + 1] = j;
+	// 휴지 길이 하한 = D (FormBonds 와 같다 — 침투한 쌍을 D 아래로 당기지 않게)
+	BondDataRW[b] = float4(max(Dist, FormMinRest), 0.f, Coh, 0.f);
+	InterlockedAdd(BondTotalRW[1], 1u, D0);
+}
+
+[numthreads(64, 1, 1)]
+void BondFillCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint b = Tid.x;
+	if (b >= min(BondTotalRW[0], BondCap)) { return; }
+	if (BondDataRW[b].x < 0.f) { return; }
+	const uint i = BondIJRW[2 * b], j = BondIJRW[2 * b + 1];
+	uint Ci, Cj;
+	InterlockedAdd(BondCursorRW[i], 1u, Ci);
+	InterlockedAdd(BondCursorRW[j], 1u, Cj);
+	BondAdjRW[BondAdjOffsetRO[i] + Ci] = (b << 1);
+	BondAdjRW[BondAdjOffsetRO[j] + Cj] = (b << 1) | 1u;
+}
+

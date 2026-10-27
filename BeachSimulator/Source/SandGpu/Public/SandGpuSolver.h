@@ -116,6 +116,10 @@ struct FSandGpuFrameParams
 	float  DrainTarget = 0.7f, DrainTau = 0.f;    // M2 임시 배수: W > 목표면 τ 초로 이완 (0 = 끔)
 	bool   bPerParticleWet = false;   // 결합 cohesion 을 W 에서 다시 계산 (도구 · 배수가 W 를 바꿀 때)
 	float  WDry = 0.05f, WOptStart = 0.15f, WOptEnd = 0.70f, WSat = 0.90f;
+	// 사건 결합 생성 (m2-log #3, papers C17 결정 A) — 이번 프레임 물붓기 · 쌓기가 표시한 입자의 닿은 쌍
+	bool   bFormBonds = false;
+	float  BondFormRange = 0.f;       // D · BondFormStretch
+	int32  BondSlots = 12;
 };
 
 /** 프레임 통계 — UpdateSettleState 가 쓰는 것 전부 */
@@ -133,6 +137,7 @@ struct FSandGpuStats
 	float  StageMs[4] = {};          // 3-4 GPU 타임스탬프: [0] 이웃·쌍·깨우기 [1] 워밍·예측·배치 [2] 반복 [3] 파단·통계
 	double GpuMs = 0.0;               // 스텝 벽시계 (통계 리드백 포함)
 	int32  HandCount = 0, Dug = 0, HandFull = 0;   // M2 T2 — 손 재고 · 이 프레임 판 수 · 손이 차서 못 판 수
+	int32  BondsFormed = 0, BondFormRejected = 0;  // 사건 결합 — 생성 · 슬롯/용량 넘침
 };
 
 /** 전량 내려받기 — 계측·도구 조작 전 */
@@ -146,6 +151,7 @@ struct FSandGpuDownload
 	TArray<FVector4f> WallLambda;
 	TArray<uint32>    Sleep;          // C안 정지 카운터 (+ 표시 비트) — 조사 계측용
 	TArray<float>     Wet;            // M2 T2 — 도구 · 배수가 GPU 에서 W 를 바꾼다
+	TArray<uint32>    BondIJ;         // 사건 결합이 GPU 에서 덧붙으므로 결합 목록 전체를 받는다
 };
 
 /**

@@ -259,11 +259,31 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandToolParams, )
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, HandCountRW)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BondIJ)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, BondDataRW)
+	SHADER_PARAMETER(uint32, NumPairsMax)
+	SHADER_PARAMETER(uint32, BondCap)
+	SHADER_PARAMETER(uint32, BondSlots)
+	SHADER_PARAMETER(float, FormRange)
+	SHADER_PARAMETER(float, FormMinRest)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, PairIJ)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, FrameCounts)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BondTrig)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BondTrigRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BondSlotRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, OldAdjOffset)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, OldAdj)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BondIJRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BondTotalRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BondAdjRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BondCursorRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BondAdjOffsetRO)
 END_SHADER_PARAMETER_STRUCT()
 
 #define TOOL_USF "/Project/Private/SandTool.usf"
 SAND_SHADER(FSandStampCS,    FSandToolParams, TOOL_USF, "StampCS")
 SAND_SHADER(FSandBondToolCS, FSandToolParams, TOOL_USF, "BondToolCS")
+SAND_SHADER(FSandBondSlotCountCS, FSandToolParams, TOOL_USF, "BondSlotCountCS")
+SAND_SHADER(FSandBondFormCS,      FSandToolParams, TOOL_USF, "BondFormCS")
+SAND_SHADER(FSandBondFillCS,      FSandToolParams, TOOL_USF, "BondFillCS")
 
 #define FRAME_USF "/Project/Private/SandFrame.usf"
 SAND_SHADER(FSandScanBlocksCS,  FSandFrameParams, FRAME_USF, "ScanBlocksCS")
@@ -605,7 +625,8 @@ struct FSandGpuSim::FState
 	TRefCountPtr<FRDGPooledBuffer> HandW, HandCount;   // M2 T2 — 손 재고 W · [0] 수 [1] 판 수 [2] 못 판 수 (올리기와 무관하게 유지)
 	int32 CapHand = 0;
 	FRHIGPUBufferReadback HandRB{ TEXT("SandGpu.Hand") };
-	FRHIGPUBufferReadback DlWet{ TEXT("SandGpu.DlWet") };
+	FRHIGPUBufferReadback DlWet{ TEXT("SandGpu.DlWet") }, DlBondIJ{ TEXT("SandGpu.DlBondIJ") };
+	FRHIGPUBufferReadback BondTotalRB{ TEXT("SandGpu.BondTotal") };
 	// 영구 (결합)
 	TRefCountPtr<FRDGPooledBuffer> BondIJ, BondData, BondAdjOffset, BondAdj;
 	// 쌍 목록 두 벌 — [Cur] 이번 프레임 · [1-Cur] 지난 프레임 (워밍 조회)
@@ -655,12 +676,13 @@ void FSandGpuSim::Upload(const FSandGpuUpload& In, bool bKeepPairs)
 	const bool bGrowN = N > S->CapN || S->CapN == 0;
 	const bool bGrowB = NumB > S->CapB || S->CapB == 0;   // 결합 0개여도 버퍼는 있어야 한다 (등록이 유효한 버퍼를 요구한다)
 	const int32 NewCapN = bGrowN ? (int32)FMath::RoundUpToPowerOfTwo((uint32)FMath::Max(1024, N)) : S->CapN;
-	const int32 NewCapB = bGrowB ? (int32)FMath::RoundUpToPowerOfTwo((uint32)FMath::Max(1024, NumB)) : S->CapB;
+	const bool bGrowB2 = bGrowB || S->CapB < N * 6;   // 사건 결합 (m2-log #3) — 입자당 슬롯 12 의 절반만큼은 GPU 가 덧붙일 수 있게
+	const int32 NewCapB = bGrowB2 ? (int32)FMath::RoundUpToPowerOfTwo((uint32)FMath::Max3(1024, NumB, N * 6)) : S->CapB;
 	const int32 NewCapPairs = NewCapN * 32;   // 탐색 반경 상한 2R(= 지름 2배)에서 입자당 ≈ 19쌍, 여유 포함
 	MaxPairCount = NewCapPairs;
 	const int32 LN = N, LB = NumB;
 
-	ENQUEUE_RENDER_COMMAND(SandGpuSimUpload)([S, &In, LN, LB, OldN, OldPairs, bKeepPairs, bGrowN, bGrowB, NewCapN, NewCapB, NewCapPairs](FRHICommandListImmediate& RHICmdList)
+	ENQUEUE_RENDER_COMMAND(SandGpuSimUpload)([S, &In, LN, LB, OldN, OldPairs, bKeepPairs, bGrowN, bGrowB = bGrowB2, NewCapN, NewCapB, NewCapPairs](FRHICommandListImmediate& RHICmdList)
 	{
 		const FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 		auto Persist = [&](uint32 Stride, int32 Num, const TCHAR* Name)
@@ -781,8 +803,9 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 	uint32 BatchStats[8] = {};
 	float StageMs[4] = {};
 	uint32 Hand[4] = {};
+	uint32 BondTot[4] = {};
 
-	ENQUEUE_RENDER_COMMAND(SandGpuSimStep)([S, &P, LN, LB, LMax, TableSize, NumStatGroups, &Counters, &FrameCounts, &BatchStats, &StageMs, &Hand](FRHICommandListImmediate& RHICmdList)
+	ENQUEUE_RENDER_COMMAND(SandGpuSimStep)([S, &P, LN, LB, LMax, TableSize, NumStatGroups, &Counters, &FrameCounts, &BatchStats, &StageMs, &Hand, &BondTot](FRHICommandListImmediate& RHICmdList)
 	{
 		const int32 Cur = S->Cur, Old = 1 - S->Cur;
 		{
@@ -939,6 +962,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 				GraphBuilder.AddPass(RDG_EVENT_NAME("SandStamp%d", Idx), ERDGPassFlags::NeverCull, [Q](FRHICommandListImmediate& Cmd) { Cmd.EndRenderQuery(Q); });
 			};
 			Stamp(0);
+			FRDGBufferRef BondTrigBuf = nullptr;
 			// M2 T2 — 도구 스탬프 · 배수 (패스 0). 손 재고 버퍼는 처음 한 번 만든다
 			{
 				const int32 HandCap = FMath::Max(1, P.HandCap);
@@ -959,6 +983,8 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 					AddCopyBufferPass(GraphBuilder, HandCountBuf, sizeof(uint32), Z, 0, 2 * sizeof(uint32));
 				}
 				const bool bTool = P.Stamps.Num() > 0 || P.DrainTau > 0.f;
+				BondTrigBuf = ScratchBuffer(GraphBuilder, TEXT("SandSim.BondTrig"), sizeof(uint32), LN);
+				AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(BondTrigBuf), 0u);
 				if (bTool)
 				{
 					FRDGBufferRef WetBuf = GraphBuilder.RegisterExternalBuffer(S->Wet);
@@ -989,13 +1015,14 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 					TP.HandWRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->HandW));
 					TP.HandCountRW = GraphBuilder.CreateUAV(HandCountBuf);
 					TP.BondIJ = GraphBuilder.CreateSRV(BondIJ);
+					TP.BondTrigRW = GraphBuilder.CreateUAV(BondTrigBuf);
 					AddDirectPass<FSandStampCS>(GraphBuilder, RDG_EVENT_NAME("SandStamp"), ShaderMap, TP, LN, 64);
 					if (LB > 0)
 					{
 						FSandToolParams TB = TP;
 						TB.WetRW = nullptr;
 						TB.WetRO = GraphBuilder.CreateSRV(WetBuf);
-						TB.VelRW = nullptr; TB.PrevPosRW = nullptr; TB.SleepRW = nullptr; TB.GroundLambdaRW = nullptr; TB.WallLambdaRW = nullptr; TB.HandWRW = nullptr; TB.HandCountRW = nullptr;
+						TB.VelRW = nullptr; TB.PrevPosRW = nullptr; TB.SleepRW = nullptr; TB.GroundLambdaRW = nullptr; TB.WallLambdaRW = nullptr; TB.HandWRW = nullptr; TB.HandCountRW = nullptr; TB.BondTrigRW = nullptr;
 						TB.BondDataRW = GraphBuilder.CreateUAV(BondData);
 						AddDirectPass<FSandBondToolCS>(GraphBuilder, RDG_EVENT_NAME("SandBondTool"), ShaderMap, TB, LB, 64);
 					}
@@ -1107,6 +1134,54 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			}
 			AddDirectPass<FSandStatsCS>(GraphBuilder, RDG_EVENT_NAME("SandStats"), ShaderMap, F, NumStatGroups * StatsGroup, StatsGroup);
 
+			// 사건 결합 생성 (m2-log #3) — 이번 쌍 목록 · 파단 뒤. 새 결합은 다음 프레임부터 푼다
+			{
+				TArray<uint32> Tot = { (uint32)LB, 0u, 0u, 0u };
+				FRDGBufferRef BondTotal = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 4), TEXT("SandSim.BondTotal"));
+				GraphBuilder.QueueBufferUpload(BondTotal, Tot.GetData(), 4 * sizeof(uint32), ERDGInitialDataFlags::None);
+				if (P.bFormBonds && BondTrigBuf)
+				{
+					FRDGBufferRef WetBuf = GraphBuilder.RegisterExternalBuffer(S->Wet);
+					FRDGBufferRef BondSlot = ScratchBuffer(GraphBuilder, TEXT("SandSim.BondSlot"), sizeof(uint32), LN);
+					FRDGBufferRef Cursor   = ScratchBuffer(GraphBuilder, TEXT("SandSim.BondCursor"), sizeof(uint32), LN);
+					FRDGBufferRef OldAdjOff = ScratchBuffer(GraphBuilder, TEXT("SandSim.OldBondAdjOffset"), sizeof(uint32), LN + 1);
+					FRDGBufferRef OldAdjBuf = ScratchBuffer(GraphBuilder, TEXT("SandSim.OldBondAdj"), sizeof(uint32), FMath::Max(1, 2 * LB));
+					AddCopyBufferPass(GraphBuilder, OldAdjOff, 0, BondAdjOffset, 0, (LN + 1) * sizeof(uint32));
+					if (LB > 0) { AddCopyBufferPass(GraphBuilder, OldAdjBuf, 0, BondAdj, 0, 2 * LB * sizeof(uint32)); }
+					else { AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(OldAdjBuf), 0u); }   // 결합 0 개 — 읽기 전에 만들어져 있어야 한다
+					AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(BondSlot), 0u);
+					AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(Cursor), 0u);
+					FSandToolParams BP;
+					BP.NumParticles = LN; BP.NumBonds = LB;
+					BP.GraveZ = P.GraveZ; BP.GraveSpacing = P.GraveSpacing;
+					BP.WDry = P.WDry; BP.WOptStart = P.WOptStart; BP.WOptEnd = P.WOptEnd; BP.WSat = P.WSat;
+					BP.NumPairsMax = LMax; BP.BondCap = S->CapB; BP.BondSlots = P.BondSlots;
+					BP.FormRange = P.BondFormRange; BP.FormMinRest = 2.f * P.Radius;
+					BP.PosRW = GraphBuilder.CreateUAV(Pos);
+					BP.WetRO = GraphBuilder.CreateSRV(WetBuf);
+					BP.BondDataRW = GraphBuilder.CreateUAV(BondData);
+					BP.BondIJRW = GraphBuilder.CreateUAV(BondIJ);
+					BP.BondSlotRW = GraphBuilder.CreateUAV(BondSlot);
+					BP.BondTotalRW = GraphBuilder.CreateUAV(BondTotal);
+					if (LB > 0) { AddDirectPass<FSandBondSlotCountCS>(GraphBuilder, RDG_EVENT_NAME("SandBondSlotCount"), ShaderMap, BP, LB, 64); }
+					FSandToolParams BF = BP;
+					BF.PairIJ = GraphBuilder.CreateSRV(SortedIJ);
+					BF.FrameCounts = GraphBuilder.CreateSRV(FrameCountsBuf);
+					BF.BondTrig = GraphBuilder.CreateSRV(BondTrigBuf);
+					BF.OldAdjOffset = GraphBuilder.CreateSRV(OldAdjOff);
+					BF.OldAdj = GraphBuilder.CreateSRV(OldAdjBuf);
+					AddDirectPass<FSandBondFormCS>(GraphBuilder, RDG_EVENT_NAME("SandBondForm"), ShaderMap, BF, LMax, 64);
+					AddScan(GraphBuilder, ShaderMap, F, BondSlot, BondAdjOffset, LN);
+					FSandToolParams BL = BP;
+					BL.BondSlotRW = nullptr; BL.PosRW = nullptr; BL.WetRO = nullptr;
+					BL.BondAdjRW = GraphBuilder.CreateUAV(BondAdj);
+					BL.BondCursorRW = GraphBuilder.CreateUAV(Cursor);
+					BL.BondAdjOffsetRO = GraphBuilder.CreateSRV(BondAdjOffset);
+					AddDirectPass<FSandBondFillCS>(GraphBuilder, RDG_EVENT_NAME("SandBondFill"), ShaderMap, BL, S->CapB, 64);
+				}
+				AddEnqueueCopyPass(GraphBuilder, &S->BondTotalRB, BondTotal, 4 * sizeof(uint32));
+			}
+
 			Stamp(4);
 			AddEnqueueCopyPass(GraphBuilder, &S->StatsRB, Stats, NumStatGroups * sizeof(FVector4f));
 			AddEnqueueCopyPass(GraphBuilder, &S->CountersRB, CountersBuf, 4 * sizeof(uint32));
@@ -1120,6 +1195,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 		FetchReadback(S->FrameCountsRB, FrameCounts, 4 * sizeof(uint32));
 		FetchReadback(S->BatchStatsRB, BatchStats, 8 * sizeof(uint32));
 		FetchReadback(S->HandRB, Hand, 4 * sizeof(uint32));
+		FetchReadback(S->BondTotalRB, BondTot, 4 * sizeof(uint32));
 		if (S->StageTs[0].IsValid())
 		{
 			uint64 Us[5] = {};
@@ -1151,6 +1227,8 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 	Out.NumAwakeBlocks  = (int32)BatchStats[4];
 	Out.NumAsleep       = (int32)Counters[3];
 	Out.HandCount = (int32)Hand[0]; Out.Dug = (int32)Hand[1]; Out.HandFull = (int32)Hand[2];
+	Out.BondsFormed = (int32)BondTot[1]; Out.BondFormRejected = (int32)BondTot[2];
+	NumB = FMath::Max(NumB, (int32)BondTot[0]);   // 사건 결합이 덧붙인 칸 (죽은 칸 포함 — CPU 가 내려받아 다시 올릴 때 압축)
 	for (int32 k = 0; k < 4; ++k) { Out.StageMs[k] = StageMs[k]; }
 	LastNumPairs = Out.NumPairs;
 	Out.GpuMs = (FPlatformTime::Seconds() - T0) * 1000.0;
@@ -1164,6 +1242,7 @@ void FSandGpuSim::Download(FSandGpuDownload& Out) const
 	Out.PairIJ.SetNumUninitialized(2 * LastNumPairs);
 	Out.PairLambda.SetNumUninitialized(LastNumPairs);
 	Out.BondData.SetNumUninitialized(NumB);
+	Out.BondIJ.SetNumUninitialized(2 * NumB);
 	Out.GroundLambda.SetNumUninitialized(N);
 	Out.WallLambda.SetNumUninitialized(N);
 	Out.Sleep.SetNumZeroed(N);
@@ -1193,6 +1272,7 @@ void FSandGpuSim::Download(FSandGpuDownload& Out) const
 			if (LB > 0)
 			{
 				AddEnqueueCopyPass(GraphBuilder, &S->DlBond, GraphBuilder.RegisterExternalBuffer(S->BondData), LB * sizeof(FVector4f));
+				AddEnqueueCopyPass(GraphBuilder, &S->DlBondIJ, GraphBuilder.RegisterExternalBuffer(S->BondIJ), 2 * LB * sizeof(uint32));
 			}
 			GraphBuilder.Execute();
 		}
@@ -1206,6 +1286,7 @@ void FSandGpuSim::Download(FSandGpuDownload& Out) const
 		FetchReadback(S->DlPairIJ, Out.PairIJ.GetData(), 2 * LP * sizeof(uint32));
 		FetchReadback(S->DlLambda, Out.PairLambda.GetData(), LP * sizeof(FVector4f));
 		FetchReadback(S->DlBond, Out.BondData.GetData(), LB * sizeof(FVector4f));
+		FetchReadback(S->DlBondIJ, Out.BondIJ.GetData(), 2 * LB * sizeof(uint32));
 		EndGpuFrame(RHICmdList);
 	});
 	FlushRenderingCommands();

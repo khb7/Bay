@@ -856,7 +856,9 @@ namespace
 				}
 				Sim.Step(1.f / 60.f);
 				// 적신 곳의 닿은 쌍에 물다리 — 붓기가 끝난 다음 프레임에 결합 생성 (지금은 CPU · 전체, m2-log #2)
-				if (f == PourFrame && !FParse::Param(*Params, TEXT("pournobond"))) { UE_LOG(LogSpikeSweep, Display, TEXT("   T2 붓기 뒤 결합 %d"), Sim.FormBonds()); }
+				// 결합은 GPU 사건 결합이 붓기 프레임에 만든다 (m2-log #3). -pourcpubond 는 예전 CPU 전체 FormBonds 대조
+				if (f == PourFrame) { UE_LOG(LogSpikeSweep, Display, TEXT("   T2 붓기 프레임 GPU 사건 결합 %d"), Sim.GetLastBondsFormed()); }
+				if (f == PourFrame && FParse::Param(*Params, TEXT("pourcpubond"))) { UE_LOG(LogSpikeSweep, Display, TEXT("   T2 붓기 뒤 CPU 결합 %d"), Sim.FormBonds()); }
 				if (DigFrame > 0 || PourFrame > 0)
 				{
 					if ((DigFrame > 0 && f >= DigFrame && f < DigFrame + 22) || f == PourFrame + 1 || f % Every == 0)

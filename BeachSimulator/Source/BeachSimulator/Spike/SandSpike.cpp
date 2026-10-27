@@ -1340,13 +1340,16 @@ void FSandSpike::SyncFromGpu() const
 
 	// 결합 — GPU 는 죽은 결합을 표시만 한다(x < 0). CPU 목록은 올린 순서(GpuBondsUploaded)에서 산 것만 추린다.
 	// GPU 쪽 번호는 올린 순서 그대로라 다시 올릴 필요가 없다
-	check(D.BondData.Num() == GpuBondsUploaded.Num());
-	Self->Bonds.Reset(GpuBondsUploaded.Num());
-	for (int32 b = 0; b < GpuBondsUploaded.Num(); ++b)
+	// 사건 결합(m2-log #3)이 GPU 에서 덧붙으므로 IJ 까지 받아 산 것만 추린다. 올린 결합(앞쪽)은 APGD 등 CPU 전용 값을 이어 받는다
+	Self->Bonds.Reset(D.BondData.Num());
+	for (int32 b = 0; b < D.BondData.Num(); ++b)
 	{
 		if (D.BondData[b].X < 0.f) { continue; }
-		FSandBond B = GpuBondsUploaded[b];
+		FSandBond B = b < GpuBondsUploaded.Num() ? GpuBondsUploaded[b] : FSandBond{};
+		B.I = (int32)D.BondIJ[2 * b]; B.J = (int32)D.BondIJ[2 * b + 1];
+		B.RestLen = D.BondData[b].X;
 		B.Lambda = D.BondData[b].Y;
+		B.Coh = D.BondData[b].Z;
 		Self->Bonds.Add(B);
 	}
 
@@ -1422,6 +1425,11 @@ void FSandSpike::StepGpuResident(float Dt)
 	P.DrainTarget = Params.WOptEnd;
 	P.bPerParticleWet = bWetPerParticle;
 	P.WDry = Params.WDry; P.WOptStart = Params.WOptStart; P.WOptEnd = Params.WOptEnd; P.WSat = Params.WSat;
+	// 사건 결합 (결정 A, papers C17) — 젖음을 올린 스탬프가 있는 프레임만
+	P.bFormBonds = false;
+	for (int32 k = 1; k < P.Stamps.Num(); k += 2) { P.bFormBonds |= (P.Stamps[k].X == (float)(uint8)ESandTool::Pour && P.Stamps[k].Z > 0.f); }
+	P.BondFormRange = 2.f * Params.Radius * Params.BondFormStretch;
+	P.BondSlots = Params.BondSlots;
 
 	FSandGpuStats S;
 	GpuSim->Step(P, S);
@@ -1434,6 +1442,7 @@ void FSandSpike::StepGpuResident(float Dt)
 
 	BondsBrokenTotal += S.BondsBroken;
 	HandCount = S.HandCount; LastDug = S.Dug; LastHandFull = S.HandFull;
+	LastBondsFormed = S.BondsFormed; LastBondFormRejected = S.BondFormRejected;
 	NumDead += S.Dug;   // CPU 의 Dead 표시는 SyncFromGpu 에서 위치로 다시 맞춘다
 	LastBoundaryFrac = S.NumPairs > 0 ? (float)S.NumBoundary / S.NumPairs : 0.f;
 	LastAsleep = S.NumAsleep; LastAwakeBlocks = S.NumAwakeBlocks;
