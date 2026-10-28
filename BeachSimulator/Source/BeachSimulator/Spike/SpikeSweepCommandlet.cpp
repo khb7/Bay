@@ -1796,10 +1796,15 @@ USpikeSweepCommandlet::USpikeSweepCommandlet()
 }
 
 int32 RunSandGridTest(const FString& Params);
+int32 RunWaveMeasure(const FString& Params);
 
 int32 USpikeSweepCommandlet::Main(const FString& Params)
 {
 	GSpikeSerial = FParse::Param(*Params, TEXT("gpu")) || FParse::Param(*Params, TEXT("gpu2"));
+	if (FParse::Param(*Params, TEXT("gridwaves")))
+	{
+		return RunWaveMeasure(Params);   // M3 T3b — 파도 · 장주기파 측정 (Play/SandWaves.cpp)
+	}
 	if (FParse::Param(*Params, TEXT("gridtest")))
 	{
 		return RunSandGridTest(Params);   // M3 T1 — 얕은 물 CPU 기준판 검증 (Grid/SandGridTest.cpp)

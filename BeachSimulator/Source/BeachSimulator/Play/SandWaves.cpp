@@ -14,6 +14,8 @@
 #include "Misc/CommandLine.h"
 #include "ProceduralMeshComponent.h"
 #include "UnrealClient.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "SandGridGpu.h"
 #include "../Grid/SandGridCpu.h"
 #include "../Mesh/SandMaterialBuilder.h"
@@ -325,4 +327,57 @@ bool USandWavesSubsystem::Tick(float DeltaTime)
 	}
 	if (bAuto && NextShot >= ShotTimes.Num() && SimTime > ShotTimes.Last() + 1.f) { FPlatformMisc::RequestExit(false); return false; }   // 마지막 스크린샷이 찍힐 프레임을 남긴다
 	return true;
+}
+
+// ------------------------------------------------------------------------------------------------
+// T3b 측정 — `-run=SpikeSweep -gridwaves -AllowCommandletRendering [장면 옵션] [-wavesecs=1500] [-wavetag=]`
+// 화면 없이 GPU 격자를 돌려 0.1 s 마다 CSV: 시각 · 해안선 4 줄 처오름 높이 · 경계 근처 η · u · 포락선 A² (m3-plan T3b, USGS DS 602 방식으로 분석)
+int32 RunWaveMeasure(const FString& Params)
+{
+	FWaveScene Sc;
+	BuildWaveScene(*Params, Sc);
+	UE_LOG(LogSandWaves, Display, TEXT("%s"), *Sc.Info);
+	FSandGridGpu Grid;
+	Grid.Init(Sc.G);
+	float Secs = 1500.f; FParse::Value(*Params, TEXT("wavesecs="), Secs);
+	FString Tag = TEXT("run"); FParse::Value(*Params, TEXT("wavetag="), Tag);
+	const FString Path = FPaths::ProjectSavedDir() / TEXT("MeshRuns") / FString::Printf(TEXT("waves_%s.csv"), *Tag);
+	const int32 NX = Sc.NX, NY = Sc.NY;
+	const int32 Rows[4] = { NY / 8, 3 * NY / 8, 5 * NY / 8, 7 * NY / 8 };
+	const int32 Jb = NY / 2, Ib = NX - 2;
+	FString Csv = FString::Printf(TEXT("# %s\n# beta %.4f deepH0 %.3f Tp %.2f boundary_h0 %.3f\nt,R0,R1,R2,R3,eta_b,u_b,A2\n"), *Sc.Info, Sc.Slope, Sc.DeepH0, Sc.Tp, Sc.H0);
+	TArray<float> W, HU, HV;
+	// 물가 판정 수심 (기본 2cm) — 침투가 없어 되돌림 뒤 얇은 막이 남는다 (m3-log #7). Stockdon 은 비디오로 본 물가
+	float RunH = 0.02f; FParse::Value(*Params, TEXT("runh="), RunH);
+	float T = 0.f, NextRec = 0.f;
+	const double T0 = FPlatformTime::Seconds();
+	while (T < Secs)
+	{
+		Grid.Advance(1.f / 60.f, 64);
+		Grid.Download(W, HU, HV, &T);   // 동기 — 측정용
+		if (T + 1e-4f < NextRec) { continue; }
+		NextRec += 0.1f;
+		float R[4];
+		for (int32 r = 0; r < 4; ++r)
+		{
+			// 바다 쪽에서 땅 쪽으로: 처음 3 칸 연속 마른 곳 바로 앞의 젖은 칸 수면 (뒤에 남은 웅덩이는 무시)
+			const int32 j = Rows[r];
+			int32 Last = NX - 1, Dry = 0;
+			for (int32 i = NX - 1; i >= 0; --i)
+			{
+				const int32 k = j * NX + i;
+				if (W[k] - Sc.BCellV[k] > RunH) { Last = i; Dry = 0; } else if (++Dry >= 3) { break; }
+			}
+			R[r] = W[j * NX + Last];
+		}
+		const int32 kb = Jb * NX + Ib;
+		const float Hb = FMath::Max(1e-4f, W[kb] - Sc.BCellV[kb]);
+		double Re = 0, Im = 0;
+		for (const FVector4f& Wv : Sc.G.Waves) { const double Ph = Wv.Z + Wv.W * (Jb + 0.5) * Sc.Dx - Wv.Y * T; Re += Wv.X * FMath::Cos(Ph); Im += Wv.X * FMath::Sin(Ph); }
+		Csv += FString::Printf(TEXT("%.2f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f\n"), T, R[0], R[1], R[2], R[3], W[kb], HU[kb] / Hb, Re * Re + Im * Im);
+		if (FMath::FloorToInt(T / 100.f) != FMath::FloorToInt((T - 0.1f) / 100.f)) { UE_LOG(LogSandWaves, Display, TEXT("T3b %.0fs / %.0fs (벽시계 %.0fs)"), T, Secs, FPlatformTime::Seconds() - T0); }
+	}
+	FFileHelper::SaveStringToFile(Csv, *Path, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	UE_LOG(LogSandWaves, Display, TEXT("T3b 측정 끝 → %s (벽시계 %.0fs)"), *Path, FPlatformTime::Seconds() - T0);
+	return 0;
 }
