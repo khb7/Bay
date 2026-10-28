@@ -1853,6 +1853,22 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
 - **Dean 평형 단면** h = A·x^(2/3), A = 0.21·D^0.48 → 모래 0.2mm 에서 A ≈ 0.1 m^⅓ ✓ (2차 자료: [Bosboom & Stive, Coastal Dynamics 7.2.2](https://geo.libretexts.org/Bookshelves/Oceanography/Coastal_Dynamics_(Bosboom_and_Stive)/07%3A_Cross-shore_transport_and_profile_development/7.02%3A_Equilibrium_shorface_profile/7.2.2%3A_(Semi-)_empirical_derivations) · USGS). 물가에서 기울기가 무한이라 물 위는 1:15 직선 (해변면).
 - **쇄파대 안쪽 파고 포화** H_rms = 0.42·h — Thornton & Guza (1982), "Energy saturation and phase speeds measured on a natural beach", *JGR* 87(C12) 9499–9508 ✓ (초록). 격자 영역(26~51m)이 쇄파대 전체를 못 담으므로 경계는 쇄파대 안 → 경계 유의파고 Hs ≈ √2·0.42·h₀.
 
+### D-M3-7. ★ 장주기파 (IG) — 우리 경계에는 없다 (2026-10-29)
+- **얼마나 큰가 (관측)**:
+  - Ruessink, Kleinhans & van den Beukel (1998), "Observations of swash under highly dissipative conditions", *JGR* 103(C2) 3111–3118 ✓ (초록): Iribarren < 0.2 해변에서 swash 높이의 **85% 가 장주기 (0.004–0.05 Hz)**, IG swash ≈ 먼바다 파고의 30%. 높은 IG 주파수도 포화.
+  - Guza & Thornton (1982), "Swash oscillations on a natural beach", *JGR* 87(C1) 483 ✓ (초록): 파도 주파수 처오름 에너지는 **입사 파고와 무관 (포화, f⁻³)**, 장주기 처오름 에너지는 입사 에너지에 **선형으로 늘어난다**.
+  - Stockdon et al. (2006) △ (원문 PDF 못 받음 — 계수 미확인): swash 를 입사 · IG 대역으로 나눠 따로 맞춤. IG swash 는 **해변 경사와 무관**, 먼바다 H₀ · L₀ 로만 (S_IG ≈ 0.06·√(H₀L₀) 로 흔히 인용). 입사 swash ∝ β·√(H₀L₀).
+  - → 우리 기본 장면 (1:15, H₀ ~1m · T 12s 가정): Iribarren ≈ 1.0 (중간형). 흔히 인용되는 계수로 S_inc ≈ 0.75 · S_IG ≈ 0.9 m — **같은 크기. 무시할 수 없다.**
+- **왜 우리 경계엔 없나**: 경계가 쇄파대 안 (수심 0.6m). 장주기파는 ① 파군에 묶인 장주기파 (bound, Longuet-Higgins & Stewart 1962) 가 쇄파점에서 풀려나는 것 ② 쇄파점이 파군 따라 오가며 만드는 것 — 둘 다 **경계 바깥(쇄파점)에서 생긴다**. 선형 성분 합 (0.04–0.40 Hz) 에는 IG 대역이 아예 없다. (G-6b 의 "성분 합에서 장주기파가 저절로 나온다" 는 틀렸다 — 파군은 나오지만 장주기파는 아니다.)
+- **해안 모델은 어떻게 넣나**:
+  - XBeach ([매뉴얼](https://xbeach.readthedocs.io/en/latest/xbeach_manual.html)) ✓: 경계를 **쇄파대 밖**에 두고, 입사 파도 시계열에서 묶인 장주기파를 Longuet-Higgins & Stewart (1964) 로 계산해 넣는다. 반사파는 van Dongeren & Svendsen (1997) 특성선 경계 (`abs2d`, 기본값 — 우리 D-M3-5 와 같다).
+  - SWASH — Rijnsdorp, Smit & Zijlema (2014), *Coastal Eng.* ✓ (초록): 쇄파대 밖 경계에서 **2 차 파이론 묶인 IG** 생성 경계.
+  - 주의 △: 경계에서 국소 평형(묶인 파 이론)을 가정하면 경사 바닥에선 IG 를 **과대** 추정한다 (TU Delft 학위논문 · van Dongeren et al. SHORECIRC: 실제 장주기파는 평형 이론보다 느리게 자란다).
+  - 묶인 파 식은 얕은 물에서 분모 (gh − c_g²) → 0 이라 **쇄파대 안 경계(우리)에서는 쓸 수 없다**.
+- **선택지**:
+  - A. 경계를 쇄파대 밖으로 (영역 +40~60m, 경계 수심 ~1.5m) + 묶인 IG 경계 (XBeach · SWASH 방식). 단, **얕은 물은 분산이 없어 쇄파 전 짧은 파를 잘못 변형한다** (m3-log #4: 쇄파 전 수면 11~12% 오차) — SWASH 는 비정수압(분산)이라 된다. 우리에겐 비정수압 확장이 필요할 수 있다.
+  - B. 경계는 쇄파대 안 그대로 + **풀려난 장주기파를 자유파로 입사** — 진폭은 관측 관계 (Guza & Thornton 1982 선형 · Ruessink 1998 · Stockdon IG swash) 로, 시간 모양은 입사 파군 포락선에서. 게임 근사 — 방법 자체의 문헌 근거는 약하다.
+
 ### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
 - Epic 의 얕은 물은 있다: `Engine/Plugins/FX/NiagaraFluids/Content/Modules/Grid2D/ShallowWater/` (`Grid2D_SW_Advect · UpdateDepthGrid · FilterOvershoot · ExtrapolateVelocities · MovingWindow_*` …) · `Plugins/Experimental/WaterAdvanced` 의 `ShallowWaterRiverActor.cpp:339` 가 `Grid2D_SW_River` 를 쓴다. 바닥은 **SceneCapture 깊이로 찍어 읽기만** (`:107`) — 단방향 시각 효과. 침식 · 모래 · 수분 채널 없음. 모듈 이름으로 보아 이류 + 넘침 거르기 계열 (uasset 그래프라 알고리즘 세부는 미확인).
 - Niagara GPU 틱은 정해진 세 시점에만 돈다: `ENiagaraGpuComputeTickStage { PreInitViews, PostInitViews, PostOpaqueRender }` (`Niagara/Public/NiagaraCommon.h:1924-1926`). 우리 입자 시뮬 RDG 패스 사이에 끼울 수 없다 → M4 의 **같은 프레임 양방향 결합**(격자 → 입자 하중 · 수분, 입자 → 장애물 · 파괴 환원)이 막히거나 1 프레임 늦는다. 외부 RDG 버퍼를 읽히려면 사용자 정의 DI 를 C++ 로 써야 한다.
@@ -2586,7 +2602,8 @@ for (int i = 0; i < N; i++)
 if (isOceanBoundary) d = max(0f, surface - b);
 ```
 
-자동으로 나오는 것: Rayleigh 분포 / 파군 / setup / 장주기파 / swash 중첩.
+자동으로 나오는 것: Rayleigh 분포 / 파군 / setup / swash 중첩.
+> ⚠ (2026-10-29 정정) **장주기파는 저절로 안 나온다** — 선형 합은 파군만 만들고, 파군에 묶인 장주기파와 쇄파점에서 풀려나는 장주기파는 비선형 · 쇄파 과정이라 따로 넣어야 한다. → D-M3-7.
 
 > **⚠ 함정 — 반복 주기.** 주파수를 정확히 등간격으로 잡으면 전체 패턴이
 > `N/(fMax−fMin)` 주기로 **정확히 반복된다.**
