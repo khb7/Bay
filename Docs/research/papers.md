@@ -1869,6 +1869,17 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
   - A. 경계를 쇄파대 밖으로 (영역 +40~60m, 경계 수심 ~1.5m) + 묶인 IG 경계 (XBeach · SWASH 방식). 단, **얕은 물은 분산이 없어 쇄파 전 짧은 파를 잘못 변형한다** (m3-log #4: 쇄파 전 수면 11~12% 오차) — SWASH 는 비정수압(분산)이라 된다. 우리에겐 비정수압 확장이 필요할 수 있다.
   - B. 경계는 쇄파대 안 그대로 + **풀려난 장주기파를 자유파로 입사** — 진폭은 관측 관계 (Guza & Thornton 1982 선형 · Ruessink 1998 · Stockdon IG swash) 로, 시간 모양은 입사 파군 포락선에서. 게임 근사 — 방법 자체의 문헌 근거는 약하다.
 
+### D-M3-8. 장주기파 검증 기준의 근거 (2026-10-29)
+- **Stockdon et al. (2006)** 식 — 원문 PDF 는 못 받음. 여러 2차 자료 (coastalwiki · nhess 2017 보충 · 검색 요약) 가 **같은 계수** △:
+  - setup η̄ = 0.35·β·√(H₀L₀) · 입사 swash S_inc = 0.75·β·√(H₀L₀) · **IG swash S_IG = 0.06·√(H₀L₀) (경사 무관)**
+  - R2% = 1.1·(η̄ + ½√(S_inc² + S_IG²)) (ξ ≥ 0.3) · 매우 완만 (ξ < 0.3) 은 R2% = 0.043·√(H₀L₀). 1.1 = 처오름 분포가 정규가 아님. 현장 오차 편향 −17cm · RMS 38cm.
+  - H₀ = 먼바다로 **역천수** 한 유의파고, L₀ = gT²/2π (T = 첨두 주기), β = 전면 해변 경사 (setup ± 2σ 구간).
+- **측정 방법** — Stockdon & Holman, USGS Data Series 602 설명서 ✓ ([readme](https://pubs.usgs.gov/ds/602/readme.pdf)): 물가 수위 시계열의 PSD 로 유의 swash = 4√(Σ PSD·df), **입사 = 0.05 Hz 위, IG = 0.05 Hz 아래**. R2% = 개별 처오름 최댓값의 2% 초과값. setup = 수위 시계열 평균 (정지 수위 기준). 자료 자체도 공개 (10 개 현장).
+- **반사** — Battjes, Bakkenes, Janssen & van Dongeren (2004), "Shoaling of subharmonic gravity waves", *JGR* 109 ✓ (초록): 낮은 IG 주파수는 물가에서 **거의 다 반사**, 높은 주파수는 swash 근처 좁은 띠에서 소산. 주파수 의존성을 **정규화 바닥 경사** 하나로 (완만 / 가파름 영역). van Dongeren et al. (2007), *JGR* 112 C02011 ✓ (초록): 들어오는 장주기파 성장 지수 0.25~2.5 가 이 경사에 따라. (식 β_b = (h_x/ω)·√(g/h) 와 문턱값은 원문 확인 필요 △)
+  - 들어오는 / 나가는 분리: 선형 얕은 물 η± = ½(η ± √(h/g)·u) (Guza, Thornton & Holman 1984 방식으로 흔히 인용 △) — 우리 리만 불변량 경계와 같은 식.
+- **위상** — Janssen, Battjes & van Dongeren (2003), "Long waves induced by short-wave groups over a sloping bottom", *JGR* 108 ✓ (초록): 묶인 장주기파는 **파군 포락선보다 늦게** 오고, 그 지연은 **얕을수록 커진다** (경사가 만드는 위상 이동 — 1 차 선형 모형이 관측과 맞음). 물가에서 풀려나 반사되어 자유파로 나간다.
+- **스펙트럼 포화** — Ruessink et al. (1998) (D-M3-7): ξ ≲ 0.27 에서 높은 IG 주파수 포화. 우리 기본 해변 (ξ ≈ 1) 은 해당 없음 → 기준 8 은 완만한 프리셋에서만.
+
 ### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
 - Epic 의 얕은 물은 있다: `Engine/Plugins/FX/NiagaraFluids/Content/Modules/Grid2D/ShallowWater/` (`Grid2D_SW_Advect · UpdateDepthGrid · FilterOvershoot · ExtrapolateVelocities · MovingWindow_*` …) · `Plugins/Experimental/WaterAdvanced` 의 `ShallowWaterRiverActor.cpp:339` 가 `Grid2D_SW_River` 를 쓴다. 바닥은 **SceneCapture 깊이로 찍어 읽기만** (`:107`) — 단방향 시각 효과. 침식 · 모래 · 수분 채널 없음. 모듈 이름으로 보아 이류 + 넘침 거르기 계열 (uasset 그래프라 알고리즘 세부는 미확인).
 - Niagara GPU 틱은 정해진 세 시점에만 돈다: `ENiagaraGpuComputeTickStage { PreInitViews, PostInitViews, PostOpaqueRender }` (`Niagara/Public/NiagaraCommon.h:1924-1926`). 우리 입자 시뮬 RDG 패스 사이에 끼울 수 없다 → M4 의 **같은 프레임 양방향 결합**(격자 → 입자 하중 · 수분, 입자 → 장애물 · 파괴 환원)이 막히거나 1 프레임 늦는다. 외부 RDG 버퍼를 읽히려면 사용자 정의 DI 를 C++ 로 써야 한다.
