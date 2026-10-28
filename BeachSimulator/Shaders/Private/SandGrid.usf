@@ -31,6 +31,9 @@ uint  bOpenEast;
 float SeaLevel;
 float BoundaryDepth;     // 경계 정지 수심 h₀ = SeaLevel − B_경계
 uint  NumWaves;
+// T3b 장주기파 (B 안, m3-plan · papers D-M3-7/8): 쇄파점에서 풀려난 묶인 장주기파를 자유파로 입사.
+// η_IG = IgGain · (A² − Σa²) — A = 짧은 파 포락선 (성분 복소 합), IgGain = Longuet-Higgins & Stewart (1962) 평형 식을 쇄파 수심에서 (CPU 가 계산)
+float IgGain;
 StructuredBuffer<float4> Waves;   // (진폭 a, 각진동수 ω, 위상 φ, 해안선 방향 파수 k_y) — η_i(y, t) = Σ a·cos(φ + k_y·y − ω t)
 uint  bPeriodicY;        // 해안선 방향(y) 주기 경계 — 비스듬한 파도가 옆 벽에서 튕기지 않게 (k_y 는 2π m / L_y 로 맞춘다)          // 바닥 마찰 n (s/m^⅓) — CPU FixDry 와 같은 암시적 꼴
 
@@ -128,13 +131,19 @@ float3 IncidentWave(float t, float y, float h0)
 {
 	const float C = sqrt(Gravity * h0);
 	float3 E = 0;
+	float Re = 0.f, Im = 0.f, A2m = 0.f;
 	for (uint n = 0; n < NumWaves; ++n)
 	{
 		const float4 W = Waves[n];
-		const float e = W.x * cos(W.z + W.w * y - W.y * t);
+		const float Ph = W.z + W.w * y - W.y * t;
+		const float e = W.x * cos(Ph);
 		const float S = clamp(W.w * C / max(W.y, 1e-4f), -1.f, 1.f);
 		E += float3(e, e * sqrt(1.f - S * S), -e * S) * float3(1.f, C / h0, C / h0);
+		Re += W.x * cos(Ph); Im += W.x * sin(Ph); A2m += W.x * W.x;
 	}
+	// 장주기파 — 평균 0 (A² 의 평균 = Σa²) 이라 물이 쌓이지 않는다. 해안 쪽 법선 속도 = η·√(g/h₀)
+	const float Eig = IgGain * (Re * Re + Im * Im - A2m);
+	E += float3(Eig, Eig * C / h0, 0.f);
 	return E;
 }
 

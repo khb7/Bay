@@ -4,6 +4,7 @@
 //   스펙트럼 = 풍파 JONSWAP γ 3.3 + 너울 γ 20 (G-6c), 32 성분, 주파수를 칸 안에서 무작위 (반복 방지)
 //   가운데 끌기 둘러보기 · WASD QE 이동 · -sandwavesshot= (자동: 스크린샷 몇 장 후 종료)
 //   -swellfrac= (0.6) -swelltp= (12) -windtp= (5) -wavehs= (경계 포화값) -wavecells= (512) -manning= (0.025)
+//   -waveh0= (먼바다 H0 1m) -igcoef= (경계 IG 유의파고 / H0, 0.25) -igoff -beachslope= (15 → 1:15) -waveseed=
 //   -wavedir= (평균 방향 10°) -swellspread= (15°) -windspread= (40°) — 방향 분산 (G-6c), 해안선 방향은 주기 경계
 
 #pragma once
@@ -13,6 +14,18 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "SandGridGpu.h"   // TUniquePtr 소멸에 완전한 형 (generated.cpp 에서도)
 #include "SandWaves.generated.h"
+
+/** 파도 장면 (화면 · 측정 커맨드릿이 같이 쓴다) — 명령줄 옵션은 위 주석 */
+struct FWaveScene
+{
+	FSandGridGpuInit G;
+	TArray<float> BCorner, BCellV;
+	int32 NX = 0, NY = 0;
+	float Dx = 0.05f, H0 = 0.f, Hs = 0.f;
+	double Xs = 0.0, Slope = 0.0, DeepH0 = 1.0, Tp = 12.0;
+	FString Info;
+};
+void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out);
 
 UCLASS()
 class USandWavesSubsystem : public UWorldSubsystem

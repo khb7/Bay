@@ -64,6 +64,77 @@ namespace
 	}
 }
 
+void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
+{
+	const float Dx = 0.05f;
+	int32 NX = 512; FParse::Value(Cmd, TEXT("wavecells="), NX);
+	const int32 NY = NX / 2;
+	// 해변 단면 (papers D-M3-6): 물가 x_s 에서 바다 쪽(+x) Dean h = A·(x − x_s)^(2/3), 땅 쪽 직선 (기본 1:15)
+	double Slope = 1.0 / 15.0; { double Inv = 0; if (FParse::Value(Cmd, TEXT("beachslope="), Inv) && Inv > 0) { Slope = 1.0 / Inv; } }   // -beachslope=10 → 1:10
+	const double A = 0.1, Xs = 0.45 * NX * Dx;   // 땅 45% — 처오름이 뒷벽에 닿지 않게 (m3-log #5)
+	TArray<float>& BCorner = Out.BCorner;
+	BCorner.SetNum((NX + 1) * (NY + 1));
+	for (int32 j = 0; j <= NY; ++j)
+	for (int32 i = 0; i <= NX; ++i)
+	{
+		const double x = i * Dx, y = j * Dx;
+		double B = x >= Xs ? -A * FMath::Pow(x - Xs, 2.0 / 3.0) : (Xs - x) * Slope;
+		const double Ky = UE_TWO_PI / (NY * Dx);   // 해안선 방향 주기 경계와 맞는 파수
+		B += 0.01 * FMath::Sin(2.0 * Ky * y + 0.4 * x) + 0.006 * FMath::Sin(6.0 * Ky * y - 1.7 * x);   // 1cm 남짓 굴곡
+		BCorner[j * (NX + 1) + i] = (float)B;
+	}
+	const float H0 = -BCorner[NX];   // 경계 정지 수심
+	float Hs = (float)(1.416 * 0.42 * H0);   // 쇄파대 포화 H_rms = 0.42·h (Thornton & Guza 1982)
+	FParse::Value(Cmd, TEXT("wavehs="), Hs);
+	double SwellFrac = 0.6, SwellTp = 12.0, WindTp = 5.0;
+	FParse::Value(Cmd, TEXT("swellfrac="), SwellFrac);
+	FParse::Value(Cmd, TEXT("swelltp="), SwellTp);
+	FParse::Value(Cmd, TEXT("windtp="), WindTp);
+	float Manning = 0.025f; FParse::Value(Cmd, TEXT("manning="), Manning);
+	FSandGridGpuInit& G = Out.G;
+	G.NX = NX; G.NY = NY; G.Dx = Dx; G.Dy = Dx; G.Manning = Manning;
+	G.bOpenEast = true; G.SeaLevel = 0.f; G.BoundaryDepth = H0;
+	double MeanDeg = 10.0, SwellSpread = 15.0, WindSpread = 40.0;
+	FParse::Value(Cmd, TEXT("wavedir="), MeanDeg);
+	FParse::Value(Cmd, TEXT("swellspread="), SwellSpread);
+	FParse::Value(Cmd, TEXT("windspread="), WindSpread);
+	G.bPeriodicY = true;
+	int32 Seed = 1234; FParse::Value(Cmd, TEXT("waveseed="), Seed);
+	G.Waves = MakeWaves(Hs, SwellFrac, SwellTp, WindTp, Seed, H0, NY * Dx, MeanDeg, SwellSpread, WindSpread);
+	// T3b 장주기파 (B 안, m3-plan): 경계 IG 유의파고 = IgCoef · H₀(먼바다). 이론 식(LH&S 1962)은 쇄파 수심에선 발산 · 깊은 곳 + Green 법칙은
+	// 관측의 수십 분의 1 이라 (m3-log #7) 관측(Stockdon IG swash)에 맞춰 계수 하나를 정한다. 부호 = 파군 밑 수위 하강이 풀려 들어온다
+	double DeepH0 = 1.0, IgCoef = 0.25;
+	FParse::Value(Cmd, TEXT("waveh0="), DeepH0);
+	FParse::Value(Cmd, TEXT("igcoef="), IgCoef);
+	{
+		// A² − Σa² 의 표준편차 (y = 0, 1 시간 1 초 간격) → 이득
+		double S2 = 0, Sum2 = 0; int32 Nn = 0;
+		for (int32 t = 0; t < 3600; ++t)
+		{
+			double Re = 0, Im = 0, Am = 0;
+			for (const FVector4f& W : G.Waves) { const double Ph = W.Z - W.Y * t; Re += W.X * FMath::Cos(Ph); Im += W.X * FMath::Sin(Ph); Am += W.X * W.X; }
+			const double D = Re * Re + Im * Im - Am; S2 += D * D; Sum2 += D; ++Nn;
+		}
+		const double Sd = FMath::Sqrt(FMath::Max(1e-12, S2 / Nn - FMath::Square(Sum2 / Nn)));
+		G.IgGain = FParse::Param(Cmd, TEXT("igoff")) ? 0.f : (float)(-IgCoef * DeepH0 / (4.0 * Sd));
+	}
+	Out.BCellV.SetNum(NX * NY);
+	G.W.SetNum(NX * NY); G.HU.Init(0.f, NX * NY); G.HV.Init(0.f, NX * NY);
+	for (int32 j = 0; j < NY; ++j)
+	for (int32 i = 0; i < NX; ++i)
+	{
+		const double Bc[4] = { BCorner[j * (NX + 1) + i], BCorner[j * (NX + 1) + i + 1], BCorner[(j + 1) * (NX + 1) + i], BCorner[(j + 1) * (NX + 1) + i + 1] };
+		const double Bm = 0.25 * (Bc[0] + Bc[1] + Bc[2] + Bc[3]);
+		Out.BCellV[j * NX + i] = (float)Bm;
+		G.W[j * NX + i] = (float)(Bm + FSandGridCpu::CellVolume(Bc, 0.0));   // 정지 수면 0 (이산 평형)
+	}
+	G.BCorner = BCorner;
+	Out.NX = NX; Out.NY = NY; Out.Dx = Dx; Out.H0 = H0; Out.Hs = Hs; Out.Xs = Xs; Out.Slope = Slope; Out.DeepH0 = DeepH0;
+	Out.Tp = SwellFrac >= 0.5 ? SwellTp : WindTp;
+	Out.Info = FString::Printf(TEXT("T3 파도 — 격자 %d×%d (칸 %.0fcm, %.1f×%.1fm) · 해변 1:%.0f · 경계 수심 %.2fm · 경계 Hs %.2fm · 먼바다 H0 %.2fm · 너울 %.0f%% Tp %.0fs · 풍파 Tp %.0fs · Manning %.3f · IG 계수 %.2f (이득 %.2f)"),
+		NX, NY, Dx * 100, NX * Dx, NY * Dx, 1.0 / Slope, H0, Hs, DeepH0, SwellFrac * 100, SwellTp, WindTp, Manning, IgCoef, G.IgGain);
+}
+
 bool USandWavesSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 {
 	return FString(FCommandLine::Get()).Contains(TEXT("-sandwaves"));
@@ -74,49 +145,11 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 	Super::OnWorldBeginPlay(World);
 	if (!World.IsGameWorld()) { return; }
 	const TCHAR* Cmd = FCommandLine::Get();
-	NX = 512; FParse::Value(Cmd, TEXT("wavecells="), NX);
-	NY = NX / 2;
-	// 해변 단면 (papers D-M3-6): 물가 x_s 에서 바다 쪽(+x) Dean h = A·(x − x_s)^(2/3), 땅 쪽 1:15
-	const double A = 0.1, Xs = 0.45 * NX * Dx, Slope = 1.0 / 15.0;   // 땅 45% — 처오름(Stockdon 어림 ~0.6m)이 뒷벽에 닿지 않게 (m3-log #5)
-	BCorner.SetNum((NX + 1) * (NY + 1));
-	for (int32 j = 0; j <= NY; ++j)
-	for (int32 i = 0; i <= NX; ++i)
-	{
-		const double x = i * Dx, y = j * Dx;
-		double B = x >= Xs ? -A * FMath::Pow(x - Xs, 2.0 / 3.0) : (Xs - x) * Slope;
-		const double Ky = UE_TWO_PI / (NY * Dx);   // 해안선 방향 주기 경계와 맞는 파수
-		B += 0.01 * FMath::Sin(2.0 * Ky * y + 0.4 * x) + 0.006 * FMath::Sin(6.0 * Ky * y - 1.7 * x);   // 1cm 남짓 굴곡 (완전 평평하면 밋밋)
-		BCorner[j * (NX + 1) + i] = (float)B;
-	}
-	H0 = -BCorner[NX];   // 경계 정지 수심 (j = 0 꼭짓점 근사)
-	Hs = (float)(1.416 * 0.42 * H0);   // 쇄파대 포화 H_rms = 0.42·h (Thornton & Guza 1982), Hs ≈ √2·H_rms
-	FParse::Value(Cmd, TEXT("wavehs="), Hs);
-	double SwellFrac = 0.6, SwellTp = 12.0, WindTp = 5.0;
-	FParse::Value(Cmd, TEXT("swellfrac="), SwellFrac);
-	FParse::Value(Cmd, TEXT("swelltp="), SwellTp);
-	FParse::Value(Cmd, TEXT("windtp="), WindTp);
-	float Manning = 0.025f; FParse::Value(Cmd, TEXT("manning="), Manning);
-
-	FSandGridGpuInit G;
-	G.NX = NX; G.NY = NY; G.Dx = Dx; G.Dy = Dx; G.Manning = Manning;
-	G.bOpenEast = true; G.SeaLevel = 0.f; G.BoundaryDepth = H0;
-	double MeanDeg = 10.0, SwellSpread = 15.0, WindSpread = 40.0;
-	FParse::Value(Cmd, TEXT("wavedir="), MeanDeg);
-	FParse::Value(Cmd, TEXT("swellspread="), SwellSpread);
-	FParse::Value(Cmd, TEXT("windspread="), WindSpread);
-	G.bPeriodicY = true;
-	G.Waves = MakeWaves(Hs, SwellFrac, SwellTp, WindTp, 1234, H0, NY * Dx, MeanDeg, SwellSpread, WindSpread);
-	G.BCorner = BCorner;
-	BCellV.SetNum(NX * NY);
-	G.W.SetNum(NX * NY); G.HU.Init(0.f, NX * NY); G.HV.Init(0.f, NX * NY);
-	for (int32 j = 0; j < NY; ++j)
-	for (int32 i = 0; i < NX; ++i)
-	{
-		const double Bc[4] = { BCorner[j * (NX + 1) + i], BCorner[j * (NX + 1) + i + 1], BCorner[(j + 1) * (NX + 1) + i], BCorner[(j + 1) * (NX + 1) + i + 1] };
-		const double Bm = 0.25 * (Bc[0] + Bc[1] + Bc[2] + Bc[3]);
-		BCellV[j * NX + i] = (float)Bm;
-		G.W[j * NX + i] = (float)(Bm + FSandGridCpu::CellVolume(Bc, 0.0));   // 정지 수면 0 (이산 평형)
-	}
+	FWaveScene Sc;
+	BuildWaveScene(Cmd, Sc);
+	NX = Sc.NX; NY = Sc.NY; BCorner = Sc.BCorner; BCellV = Sc.BCellV; H0 = Sc.H0; Hs = Sc.Hs;
+	FSandGridGpuInit& G = Sc.G;
+	const double Xs = Sc.Xs;
 	// 맵에 놓인 예전 입자 시험 액터는 끈다 (프레임마다 14ms — 이 화면과 무관)
 	for (TActorIterator<AActor> It(&World); It; ++It)
 	{
@@ -124,8 +157,7 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 	}
 	Grid = MakeUnique<FSandGridGpu>();
 	Grid->Init(G);
-	UE_LOG(LogSandWaves, Display, TEXT("T3 파도 — 격자 %d×%d (칸 %.0fcm, %.1f×%.1fm) · 경계 수심 %.2fm · Hs %.2fm · 너울 %.0f%% Tp %.0fs · 풍파 Tp %.0fs · Manning %.3f"),
-		NX, NY, Dx * 100, NX * Dx, NY * Dx, H0, Hs, SwellFrac * 100, SwellTp, WindTp, Manning);
+	UE_LOG(LogSandWaves, Display, TEXT("%s"), *Sc.Info);
 
 	// 메시: 지형(모래) · 물 — Step 칸마다 정점
 	const int32 VX = NX / Step + 1, VY = NY / Step + 1;

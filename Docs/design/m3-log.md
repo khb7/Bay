@@ -106,3 +106,11 @@
 ![](img/m3-waves-dir.png)
 
 - 남은 것: 영역이 바닥판 위 네모난 판으로 보인다 (가장자리) — 화면 마감에서 (영역 바깥 지형 · 바다 확장).
+
+## 진행 중 — T3b 장주기파 B 안 (2026-10-29 05:20, 이어서 할 것)
+- 됨 (커밋): 셰이더 `IncidentWave` 에 IG 항 η_IG = IgGain·(A² − Σa²) (A = 성분 포락선, 평균 0) · `FSandGridGpuInit::IgGain` · `BuildWaveScene()` (SandWaves.cpp — 화면/측정 공용, 옵션 `-waveh0= -igcoef= -igoff -beachslope= -waveseed=`). 빌드 성공.
+- 발견: IG 진폭을 이론으로 못 정한다 — LH&S 1962 평형 식은 쇄파 수심에서 발산 (H0 1m·T 12s → ~3m), kh=1 깊이 + Green 법칙은 ~1cm (관측 S_IG ~0.9m). → 경계 IG 유의파고 = IgCoef·H0, 계수는 Stockdon IG swash 에 맞춰 한 번 정함. 기준 1·2 는 맞춘 것 — **진짜 시험은 3 (경사 무관) · 6 (반사) · 7 (위상)**.
+- 다음:
+  1. 측정 커맨드릿 `-run=SpikeSweep -gridwaves` (화면 없이 GPU): BuildWaveScene → Advance(1/60) 1500 s, 0.1 s 마다 내려받아 CSV — 해안선 4 개 줄의 처오름 높이 (바다 쪽에서 첫 마른 구간 앞 젖은 칸 수면, h > 5mm), 경계 근처 η · u (η± = ½(η ± √(h/g)u)), 포락선 A²(t). `Saved/MeshRuns/waves_*.csv`.
+  2. Python 분석: USGS DS 602 방식 (PSD, 0.05 Hz 분리, 4√ΣPSDdf, R2% = 처오름 최댓값 2% 초과, setup = 평균) vs Stockdon (η̄ 0.35β√(H0L0), S_inc 0.75β√, S_IG 0.06√, R2% 1.1(η̄+½√(S²)) ), 교차상관 지연 A² ↔ 처오름.
+  3. 기준 3: -beachslope=10/15/20 · 기준 2: -waveh0=0.5/1/1.5 · igcoef 조정 · 기준 6 · 7 · 화면.
