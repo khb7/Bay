@@ -1849,6 +1849,10 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
 - 감쇠층 (Larsen & Dancy 1983 · Zhang et al. 2014 Coastal Eng. 84) △: 경계 밖에 띠를 두고 매 스텝 수면 · 유량을 거리별로 줄인다. 구현은 쉽지만 띠 칸 수만큼 비용, 큰 진폭 흡수가 약하다는 보고 (arXiv 2312.15251).
 - **결정**: 리만 불변량 경계 (선형 입사 u_i = η_i·√(g/h₀) 가정). 장주기파 · 큰 반사가 남으면 바깥 감쇠층을 덧댄다.
 
+### D-M3-6. 시험 해변 · 경계 파고 (T3, 2026-10-29)
+- **Dean 평형 단면** h = A·x^(2/3), A = 0.21·D^0.48 → 모래 0.2mm 에서 A ≈ 0.1 m^⅓ ✓ (2차 자료: [Bosboom & Stive, Coastal Dynamics 7.2.2](https://geo.libretexts.org/Bookshelves/Oceanography/Coastal_Dynamics_(Bosboom_and_Stive)/07%3A_Cross-shore_transport_and_profile_development/7.02%3A_Equilibrium_shorface_profile/7.2.2%3A_(Semi-)_empirical_derivations) · USGS). 물가에서 기울기가 무한이라 물 위는 1:15 직선 (해변면).
+- **쇄파대 안쪽 파고 포화** H_rms = 0.42·h — Thornton & Guza (1982), "Energy saturation and phase speeds measured on a natural beach", *JGR* 87(C12) 9499–9508 ✓ (초록). 격자 영역(26~51m)이 쇄파대 전체를 못 담으므로 경계는 쇄파대 안 → 경계 유의파고 Hs ≈ √2·0.42·h₀.
+
 ### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
 - Epic 의 얕은 물은 있다: `Engine/Plugins/FX/NiagaraFluids/Content/Modules/Grid2D/ShallowWater/` (`Grid2D_SW_Advect · UpdateDepthGrid · FilterOvershoot · ExtrapolateVelocities · MovingWindow_*` …) · `Plugins/Experimental/WaterAdvanced` 의 `ShallowWaterRiverActor.cpp:339` 가 `Grid2D_SW_River` 를 쓴다. 바닥은 **SceneCapture 깊이로 찍어 읽기만** (`:107`) — 단방향 시각 효과. 침식 · 모래 · 수분 채널 없음. 모듈 이름으로 보아 이류 + 넘침 거르기 계열 (uasset 그래프라 알고리즘 세부는 미확인).
 - Niagara GPU 틱은 정해진 세 시점에만 돈다: `ENiagaraGpuComputeTickStage { PreInitViews, PostInitViews, PostOpaqueRender }` (`Niagara/Public/NiagaraCommon.h:1924-1926`). 우리 입자 시뮬 RDG 패스 사이에 끼울 수 없다 → M4 의 **같은 프레임 양방향 결합**(격자 → 입자 하중 · 수분, 입자 → 장애물 · 파괴 환원)이 막히거나 1 프레임 늦는다. 외부 RDG 버퍼를 읽히려면 사용자 정의 DI 를 C++ 로 써야 한다.

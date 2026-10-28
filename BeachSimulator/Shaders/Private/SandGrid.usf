@@ -25,7 +25,13 @@ uint  bWetDry;
 uint  Stage;            // 1 또는 2
 uint  bFixedDt;
 float FixedDt;
-float Manning;          // 바닥 마찰 n (s/m^⅓) — CPU FixDry 와 같은 암시적 꼴
+float Manning;
+// T3 바다 쪽 경계 (+x, i = NX) — 리만 불변량 (papers D-M3-5): 나가는 R⁺ = u + 2√(gh) 안쪽에서, 들어오는 R⁻ 는 입사파로
+uint  bOpenEast;
+float SeaLevel;
+float BoundaryDepth;     // 경계 정지 수심 h₀ = SeaLevel − B_경계
+uint  NumWaves;
+StructuredBuffer<float4> Waves;   // (진폭 a, 각진동수 ω, 위상 φ, 0) — η_i(t) = Σ a·cos(φ − ω t)          // 바닥 마찰 n (s/m^⅓) — CPU FixDry 와 같은 암시적 꼴
 
 StructuredBuffer<float>    BCorner;
 StructuredBuffer<float4>   URO;      // 이 단계 입력 (1 단계: U0, 2 단계: U1)
@@ -115,9 +121,35 @@ void LevelCS(uint3 Tid : SV_DispatchThreadID)
 // 칸 c (축 방향 번호) 의 재구성. Axis 0: c = i, m = j. 반환: 경계 −½ / +½ 의 (w, q 진행, r 가로)
 struct FRec { float wm, wp, qm, qp, rm, rp, wbar, bm, bp; bool bPartial; };
 
+float IncidentEta(float t)
+{
+	float E = 0.f;
+	for (uint n = 0; n < NumWaves; ++n) { const float4 W = Waves[n]; E += W.x * cos(W.z - W.y * t); }
+	return E;
+}
+
 void Fetch(uint Axis, int c, uint m, out float w, out float q, out float r, out float L, out bool bPart, out float bm, out float bp)
 {
 	int i = Axis == 0 ? c : (int)m, j = Axis == 0 ? (int)m : c;
+	if (bOpenEast != 0u && i >= (int)NX)
+	{
+		// 바다 쪽 유령 칸: 안쪽 끝 칸의 나가는 불변량 + 입사파의 들어오는 불변량 (선형 입사 u_i = −η_i·√(g/h₀), −x 로 진행)
+		const uint kIn = Idx(NX - 1, j < 0 ? 0u : min((uint)j, NY - 1));
+		const float4 Ui = URO[kIn];
+		const float Bb = BFaceX((int)NX - 1, Axis == 0 ? m : (uint)clamp(j, 0, (int)NY - 1));
+		const float hIn = max(0.f, Ui.x - Bb);
+		const float uIn = hIn > 0.f ? Desing(hIn, Ui.y) : 0.f, vIn = hIn > 0.f ? Desing(hIn, Ui.z) : 0.f;
+		const float Eta = IncidentEta(TimeRO[2]);
+		const float h0 = max(BoundaryDepth, 1e-3f);
+		const float Rp = uIn + 2.f * sqrt(Gravity * hIn);
+		const float Rm = -Eta * sqrt(Gravity / h0) - 2.f * sqrt(Gravity * max(0.f, h0 + Eta));
+		const float Cg = max(0.f, 0.25f * (Rp - Rm));
+		const float hG = Cg * Cg / Gravity, uG = 0.5f * (Rp + Rm);
+		w = Bb + hG; L = w; bPart = false;
+		q = Axis == 0 ? hG * uG : hG * vIn; r = Axis == 0 ? hG * vIn : hG * uG;
+		bm = Bb; bp = Bb;
+		return;
+	}
 	uint oi, oj; float Su, Sv;
 	Mirror(i, j, oi, oj, Su, Sv);
 	const float4 U = URO[Idx(oi, oj)];
@@ -205,6 +237,7 @@ void DtCS(uint3 Tid : SV_DispatchThreadID)
 	TimeRW[0] = Dt;
 	TimeRW[1] = Rem - Dt;
 	TimeRW[2] = TimeRW[2] + Dt;
+	TimeRW[3] = max(TimeRW[3], A);   // 이번 Advance 의 최대 a/Δ — CPU 가 다음 프레임 서브스텝 수를 정한다
 }
 
 [numthreads(8, 8, 1)]

@@ -13,6 +13,11 @@ struct FSandGridGpuInit
 	float EpsDesing = 0.f;          // 0 이면 max(Dx, Dy)⁴
 	bool  bWetDry = true;
 	float Manning = 0.f;            // 바닥 마찰 n. 실험 유리 수조 0.01 (m3-log #4), 모래 0.02~0.03
+	// T3 바다 쪽 경계 (+x) — 리만 불변량 입사 · 반사 흡수 (papers D-M3-5). 끄면 벽
+	bool  bOpenEast = false;
+	float SeaLevel = 0.f;
+	float BoundaryDepth = 0.f;      // 경계 정지 수심
+	TArray<FVector4f> Waves;        // (a, ω, φ, 0) 성분 — 입사 η(t) = Σ a·cos(φ − ωt)
 	TArray<float> BCorner;          // (NX+1)·(NY+1)
 	TArray<float> W, HU, HV;        // NX·NY
 };
@@ -32,6 +37,7 @@ public:
 	void Download(TArray<float>& OutW, TArray<float>& OutHU, TArray<float>& OutHV, float* OutSimTime = nullptr) const;
 	/** 마지막 Step 의 GPU 시간 (타임스탬프, ms) */
 	float LastGpuMs() const { return GpuMs; }
+	int32 GetLastSubsteps() const { return LastSubsteps; }
 
 	int32 GetNX() const { return Params.NX; }
 	int32 GetNY() const { return Params.NY; }
@@ -43,4 +49,6 @@ private:
 	FState* State = nullptr;
 	FSandGridGpuInit Params;   // 배열은 Init 뒤 비운다
 	float GpuMs = 0.f;
+	float LastAMax = 0.f;      // 지난 Advance 의 최대 a/Δ (Download 때 받는다)
+	int32 LastSubsteps = 0;
 };

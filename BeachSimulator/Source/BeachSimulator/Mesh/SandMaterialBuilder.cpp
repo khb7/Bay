@@ -188,6 +188,47 @@ bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage)
 	OutMessage = FString::Printf(TEXT("%s → %s (%s) · PerturbNormalLQ 입력 %d 개"), *PackagePath, *File, bOk ? TEXT("저장") : TEXT("저장 실패"), Call->FunctionInputs.Num());
 	return bOk;
 }
+bool SandMaterial::BuildWater(const FString& PackagePath, FString& OutMessage)
+{
+	// 얕은 물: 반투명 · 표면 앞 셰이딩 (반사 · 하이라이트). 얕은 곳은 거의 투명, 깊을수록 청록 — 정점 색 R = saturate(h / 0.3m)
+	UPackage* Package = FPackageName::DoesPackageExist(PackagePath) ? LoadPackage(nullptr, *PackagePath, LOAD_None) : CreatePackage(*PackagePath);
+	if (!Package) { Package = CreatePackage(*PackagePath); }
+	Package->FullyLoad();
+	if (UObject* Old = StaticFindObject(UMaterial::StaticClass(), Package, *FPackageName::GetShortName(PackagePath)))
+	{
+		Old->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
+	}
+	UMaterial* M = NewObject<UMaterial>(Package, *FPackageName::GetShortName(PackagePath), RF_Public | RF_Standalone);
+	UMaterialEditorOnlyData* Ed = M->GetEditorOnlyData();
+	M->BlendMode = BLEND_Translucent;
+	M->TranslucencyLightingMode = TLM_SurfacePerPixelLighting;
+	UMaterialExpressionVertexColor* VC = AddExpr<UMaterialExpressionVertexColor>(M, -700, 0);
+	UMaterialExpressionConstant3Vector* Shallow = AddExpr<UMaterialExpressionConstant3Vector>(M, -500, -200);
+	Shallow->Constant = FLinearColor(0.20f, 0.26f, 0.22f);
+	UMaterialExpressionConstant3Vector* Deep = AddExpr<UMaterialExpressionConstant3Vector>(M, -500, -100);
+	Deep->Constant = FLinearColor(0.01f, 0.06f, 0.07f);
+	UMaterialExpressionLinearInterpolate* Col = AddExpr<UMaterialExpressionLinearInterpolate>(M, -300, -150);
+	Col->A.Connect(0, Shallow); Col->B.Connect(0, Deep); Col->Alpha.Connect(1, VC);
+	Ed->BaseColor.Connect(0, Col);
+	UMaterialExpressionConstant* OpLo = AddExpr<UMaterialExpressionConstant>(M, -500, 100); OpLo->R = 0.25f;
+	UMaterialExpressionConstant* OpHi = AddExpr<UMaterialExpressionConstant>(M, -500, 160); OpHi->R = 0.85f;
+	UMaterialExpressionLinearInterpolate* Op = AddExpr<UMaterialExpressionLinearInterpolate>(M, -300, 120);
+	Op->A.Connect(0, OpLo); Op->B.Connect(0, OpHi); Op->Alpha.Connect(1, VC);
+	Ed->Opacity.Connect(0, Op);
+	UMaterialExpressionConstant* Rough = AddExpr<UMaterialExpressionConstant>(M, -300, 250); Rough->R = 0.06f;
+	Ed->Roughness.Connect(0, Rough);
+	UMaterialExpressionConstant* Spec = AddExpr<UMaterialExpressionConstant>(M, -300, 320); Spec->R = 0.6f;
+	Ed->Specular.Connect(0, Spec);
+	M->PreEditChange(nullptr);
+	M->PostEditChange();
+	const FString File = FPackageName::LongPackageNameToFilename(PackagePath, FPackageName::GetAssetPackageExtension());
+	FSavePackageArgs Args;
+	Args.TopLevelFlags = RF_Public | RF_Standalone;
+	const bool bOk = UPackage::SavePackage(Package, M, *File, Args);
+	OutMessage = FString::Printf(TEXT("%s → %s (%s)"), *PackagePath, *File, bOk ? TEXT("저장") : TEXT("저장 실패"));
+	return bOk;
+}
 #else
 bool SandMaterial::Build(const FString&, FString& OutMessage) { OutMessage = TEXT("에디터 빌드에서만"); return false; }
+bool SandMaterial::BuildWater(const FString&, FString& OutMessage) { OutMessage = TEXT("에디터 빌드에서만"); return false; }
 #endif

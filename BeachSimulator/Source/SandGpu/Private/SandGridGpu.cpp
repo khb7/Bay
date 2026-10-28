@@ -24,6 +24,11 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER(uint32, bFixedDt)
 	SHADER_PARAMETER(float, FixedDt)
 	SHADER_PARAMETER(float, Manning)
+	SHADER_PARAMETER(uint32, bOpenEast)
+	SHADER_PARAMETER(float, SeaLevel)
+	SHADER_PARAMETER(float, BoundaryDepth)
+	SHADER_PARAMETER(uint32, NumWaves)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, Waves)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, BCorner)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, URO)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, U0RO)
@@ -65,7 +70,7 @@ GRID_SHADER(FSandGridUpdateCS, "UpdateCS")
 
 struct FSandGridGpu::FState
 {
-	TRefCountPtr<FRDGPooledBuffer> BCorner, U0, U1, Level, FX, FY, Drain, AMax, Time;
+	TRefCountPtr<FRDGPooledBuffer> BCorner, U0, U1, Level, FX, FY, Drain, AMax, Time, Waves;
 	FRHIGPUBufferReadback DlU{ TEXT("SandGrid.DlU") }, DlTime{ TEXT("SandGrid.DlTime") };
 	FRenderQueryRHIRef Ts[2];
 };
@@ -107,9 +112,11 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 	TArray<FVector4f> U; U.SetNum(N);
 	for (int32 k = 0; k < N; ++k) { U[k] = FVector4f(In.W[k], In.HU[k], In.HV[k], 0.f); }
 	TArray<float> BC = In.BCorner;
+	TArray<FVector4f> Wv = In.Waves;
+	if (Wv.Num() == 0) { Wv.Add(FVector4f(0, 0, 0, 0)); }
 	FState* S = State;
 	const int32 NX = In.NX, NY = In.NY;
-	ENQUEUE_RENDER_COMMAND(SandGridInit)([S, U = MoveTemp(U), BC = MoveTemp(BC), N, NX, NY](FRHICommandListImmediate& RHICmdList)
+	ENQUEUE_RENDER_COMMAND(SandGridInit)([S, U = MoveTemp(U), BC = MoveTemp(BC), Wv = MoveTemp(Wv), N, NX, NY](FRHICommandListImmediate& RHICmdList)
 	{
 		FRDGBuilder GraphBuilder(RHICmdList, RDG_EVENT_NAME("SandGridInit"));
 		S->BCorner = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.BCorner"), BC.GetData());
@@ -121,15 +128,23 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 		S->Drain = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.Drain"));
 		S->AMax = MakeBuffer(GraphBuilder, sizeof(uint32), 1, TEXT("SandGrid.AMax"));
 		S->Time = MakeBuffer(GraphBuilder, sizeof(float), 4, TEXT("SandGrid.Time"));
+		S->Waves = MakeBuffer(GraphBuilder, sizeof(FVector4f), Wv.Num(), TEXT("SandGrid.Waves"), Wv.GetData());
 		GraphBuilder.Execute();
 		if (!S->Ts[0].IsValid()) { for (FRenderQueryRHIRef& Q : S->Ts) { Q = RHICreateRenderQuery(RQT_AbsoluteTime); } }
 	});
 	FlushRenderingCommands();
-	Params.BCorner.Empty(); Params.W.Empty(); Params.HU.Empty(); Params.HV.Empty();
+	Params.BCorner.Empty(); Params.W.Empty(); Params.HU.Empty(); Params.HV.Empty();   // Waves 는 둔다 (NumWaves)
 }
 
 void FSandGridGpu::StepFixed(float Dt, int32 NumSteps) { Run(true, Dt, NumSteps); }
-void FSandGridGpu::Advance(float FrameTime, int32 MaxSub) { Run(false, FrameTime, MaxSub); }
+void FSandGridGpu::Advance(float FrameTime, int32 MaxSub)
+{
+	// 서브스텝 수 = 지난 Advance 의 최대 파속으로 CFL 에 맞춰 (+25% · +1). 모자라면 시뮬 시간이 프레임보다 조금 늦을 뿐 (GPU 가 Δt 를 CFL 로 자른다)
+	int32 K = MaxSub;
+	if (LastAMax > 0.f) { K = FMath::Clamp(FMath::CeilToInt(FrameTime * LastAMax / Params.Cfl * 1.25f) + 1, 1, MaxSub); }
+	LastSubsteps = K;
+	Run(false, FrameTime, K);
+}
 
 void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 {
@@ -150,10 +165,11 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 			FRDGBufferRef Tm = GraphBuilder.RegisterExternalBuffer(S->Time);
 			{
 				// 남은 시간 = 이번 프레임 (적응) — [0][1] 만 바꾸고 [2] 누적은 둔다
-				const float Init2[2] = { 0.f, bFixed ? 0.f : DtOrFrame };
-				FRDGBufferRef T2 = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(float), 2), TEXT("SandGrid.TimeInit"));
+				const float Init2[4] = { 0.f, bFixed ? 0.f : DtOrFrame, -1.f, 0.f };   // [2] 은 아래 복사에서 빼고 [3] 최대 파속은 0 으로
+				FRDGBufferRef T2 = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(float), 4), TEXT("SandGrid.TimeInit"));
 				GraphBuilder.QueueBufferUpload(T2, Init2, sizeof(Init2), ERDGInitialDataFlags::None);
-				AddCopyBufferPass(GraphBuilder, Tm, 0, T2, 0, sizeof(Init2));
+				AddCopyBufferPass(GraphBuilder, Tm, 0, T2, 0, 2 * sizeof(float));
+				AddCopyBufferPass(GraphBuilder, Tm, 3 * sizeof(float), T2, 3 * sizeof(float), sizeof(float));
 			}
 			GraphBuilder.AddPass(RDG_EVENT_NAME("SandGridTs0"), ERDGPassFlags::NeverCull, [Q = S->Ts[0].GetReference()](FRHICommandListImmediate& Cmd) { Cmd.EndRenderQuery(Q); });
 
@@ -161,6 +177,8 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 			B.NX = P.NX; B.NY = P.NY; B.Dx = P.Dx; B.Dy = P.Dy; B.Gravity = P.Gravity; B.Theta = P.Theta; B.Cfl = P.Cfl; B.HDry = P.HDry;
 			B.EpsDesing = P.EpsDesing; B.bWetDry = P.bWetDry ? 1u : 0u; B.bFixedDt = bFixed ? 1u : 0u; B.FixedDt = bFixed ? DtOrFrame : 0.f; B.Manning = P.Manning;
 			B.BCorner = GraphBuilder.CreateSRV(BC);
+			B.bOpenEast = P.bOpenEast ? 1u : 0u; B.SeaLevel = P.SeaLevel; B.BoundaryDepth = P.BoundaryDepth; B.NumWaves = P.Waves.Num();
+			B.Waves = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Waves));
 			const FIntVector GC(FMath::DivideAndRoundUp(P.NX, 8), FMath::DivideAndRoundUp(P.NY, 8), 1);
 			const FIntVector GX(FMath::DivideAndRoundUp(P.NX + 1, 8), FMath::DivideAndRoundUp(P.NY, 8), 1);
 			const FIntVector GY(FMath::DivideAndRoundUp(P.NX, 8), FMath::DivideAndRoundUp(P.NY + 1, 8), 1);
@@ -179,6 +197,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 					F.URO = GraphBuilder.CreateSRV(In);
 					F.LevelRO = GraphBuilder.CreateSRV(Lv);
 					F.AMaxRW = GraphBuilder.CreateUAV(AM);
+					F.TimeRO = GraphBuilder.CreateSRV(Tm);   // 유령 칸 입사파 시각
 					F.FaceXRW = GraphBuilder.CreateUAV(FX);
 					AddGridPass<FSandGridFaceXCS>(GraphBuilder, RDG_EVENT_NAME("SandGridFaceX"), ShaderMap, F, GX);
 					FSandGridParams FYp = F; FYp.FaceXRW = nullptr; FYp.FaceYRW = GraphBuilder.CreateUAV(FY);
@@ -253,4 +272,5 @@ void FSandGridGpu::Download(TArray<float>& OutW, TArray<float>& OutHU, TArray<fl
 	OutW.SetNum(N); OutHU.SetNum(N); OutHV.SetNum(N);
 	for (int32 k = 0; k < N; ++k) { OutW[k] = U[k].X; OutHU[k] = U[k].Y; OutHV[k] = U[k].Z; }
 	if (OutSimTime) { *OutSimTime = T[2]; }
+	const_cast<FSandGridGpu*>(this)->LastAMax = T[3];
 }

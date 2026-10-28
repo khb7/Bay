@@ -1808,6 +1808,13 @@ int32 USpikeSweepCommandlet::Main(const FString& Params)
 	{
 		return RunCreepTest(Params);
 	}
+	if (FParse::Param(*Params, TEXT("makewatermat")))
+	{
+		FString Msg;
+		const bool bOk = SandMaterial::BuildWater(SandMaterial::WaterPath(), Msg);
+		UE_LOG(LogSpikeSweep, Display, TEXT("물 재질: %s"), *Msg);
+		return bOk ? 0 : 1;
+	}
 	if (FParse::Param(*Params, TEXT("makesandmat")))
 	{
 		FString Msg;
