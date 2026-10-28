@@ -31,7 +31,8 @@ uint  bOpenEast;
 float SeaLevel;
 float BoundaryDepth;     // 경계 정지 수심 h₀ = SeaLevel − B_경계
 uint  NumWaves;
-StructuredBuffer<float4> Waves;   // (진폭 a, 각진동수 ω, 위상 φ, 0) — η_i(t) = Σ a·cos(φ − ω t)          // 바닥 마찰 n (s/m^⅓) — CPU FixDry 와 같은 암시적 꼴
+StructuredBuffer<float4> Waves;   // (진폭 a, 각진동수 ω, 위상 φ, 해안선 방향 파수 k_y) — η_i(y, t) = Σ a·cos(φ + k_y·y − ω t)
+uint  bPeriodicY;        // 해안선 방향(y) 주기 경계 — 비스듬한 파도가 옆 벽에서 튕기지 않게 (k_y 는 2π m / L_y 로 맞춘다)          // 바닥 마찰 n (s/m^⅓) — CPU FixDry 와 같은 암시적 꼴
 
 StructuredBuffer<float>    BCorner;
 StructuredBuffer<float4>   URO;      // 이 단계 입력 (1 단계: U0, 2 단계: U1)
@@ -74,6 +75,7 @@ float Desing(float h, float q)
 void Mirror(int i, int j, out uint oi, out uint oj, out float SgnU, out float SgnV)
 {
 	SgnU = 1.f; SgnV = 1.f;
+	if (bPeriodicY != 0u) { j = ((j % (int)NY) + (int)NY) % (int)NY; }
 	if (i < 0) { i = -1 - i; SgnU = -1.f; } else if (i >= (int)NX) { i = 2 * (int)NX - 1 - i; SgnU = -1.f; }
 	if (j < 0) { j = -1 - j; SgnV = -1.f; } else if (j >= (int)NY) { j = 2 * (int)NY - 1 - j; SgnV = -1.f; }
 	oi = (uint)clamp(i, 0, (int)NX - 1); oj = (uint)clamp(j, 0, (int)NY - 1);
@@ -121,10 +123,18 @@ void LevelCS(uint3 Tid : SV_DispatchThreadID)
 // 칸 c (축 방향 번호) 의 재구성. Axis 0: c = i, m = j. 반환: 경계 −½ / +½ 의 (w, q 진행, r 가로)
 struct FRec { float wm, wp, qm, qp, rm, rp, wbar, bm, bp; bool bPartial; };
 
-float IncidentEta(float t)
+// 입사파 (선형 얕은 물): η · 법선 속도 u_n (해안 쪽 −x 가 +) · 해안선 방향 속도 v. 성분마다 방향 θ: sinθ = k_y·c/ω
+float3 IncidentWave(float t, float y, float h0)
 {
-	float E = 0.f;
-	for (uint n = 0; n < NumWaves; ++n) { const float4 W = Waves[n]; E += W.x * cos(W.z - W.y * t); }
+	const float C = sqrt(Gravity * h0);
+	float3 E = 0;
+	for (uint n = 0; n < NumWaves; ++n)
+	{
+		const float4 W = Waves[n];
+		const float e = W.x * cos(W.z + W.w * y - W.y * t);
+		const float S = clamp(W.w * C / max(W.y, 1e-4f), -1.f, 1.f);
+		E += float3(e, e * sqrt(1.f - S * S), -e * S) * float3(1.f, C / h0, C / h0);
+	}
 	return E;
 }
 
@@ -138,11 +148,15 @@ void Fetch(uint Axis, int c, uint m, out float w, out float q, out float r, out 
 		const float4 Ui = URO[kIn];
 		const float Bb = BFaceX((int)NX - 1, Axis == 0 ? m : (uint)clamp(j, 0, (int)NY - 1));
 		const float hIn = max(0.f, Ui.x - Bb);
-		const float uIn = hIn > 0.f ? Desing(hIn, Ui.y) : 0.f, vIn = hIn > 0.f ? Desing(hIn, Ui.z) : 0.f;
-		const float Eta = IncidentEta(TimeRO[2]);
+		const float uIn = hIn > 0.f ? Desing(hIn, Ui.y) : 0.f;
+		float vIn;
 		const float h0 = max(BoundaryDepth, 1e-3f);
+		const int jj = Axis == 0 ? (int)m : j;
+		const float3 Inc = IncidentWave(TimeRO[2], (jj + 0.5f) * Dy, h0);
+		const float Eta = Inc.x;
 		const float Rp = uIn + 2.f * sqrt(Gravity * hIn);
-		const float Rm = -Eta * sqrt(Gravity / h0) - 2.f * sqrt(Gravity * max(0.f, h0 + Eta));
+		const float Rm = -Inc.y - 2.f * sqrt(Gravity * max(0.f, h0 + Eta));   // 들어오는 불변량 — 법선 성분만 (van Dongeren & Svendsen 1997)
+		vIn = Inc.z;   // 해안선 방향 속도는 들어오는 파가 실어 온다
 		const float Cg = max(0.f, 0.25f * (Rp - Rm));
 		const float hG = Cg * Cg / Gravity, uG = 0.5f * (Rp + Rm);
 		w = Bb + hG; L = w; bPart = false;

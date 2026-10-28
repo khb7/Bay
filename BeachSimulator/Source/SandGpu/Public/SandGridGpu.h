@@ -17,7 +17,8 @@ struct FSandGridGpuInit
 	bool  bOpenEast = false;
 	float SeaLevel = 0.f;
 	float BoundaryDepth = 0.f;      // 경계 정지 수심
-	TArray<FVector4f> Waves;        // (a, ω, φ, 0) 성분 — 입사 η(t) = Σ a·cos(φ − ωt)
+	TArray<FVector4f> Waves;        // (a, ω, φ, k_y) 성분 — 입사 η(y, t) = Σ a·cos(φ + k_y·y − ωt)
+	bool  bPeriodicY = false;       // 해안선 방향 주기 경계 (끄면 벽)
 	TArray<float> BCorner;          // (NX+1)·(NY+1)
 	TArray<float> W, HU, HV;        // NX·NY
 };

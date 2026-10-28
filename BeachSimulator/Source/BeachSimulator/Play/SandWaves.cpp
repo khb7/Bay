@@ -34,7 +34,9 @@ namespace
 	}
 
 	// 이봉 스펙트럼 (G-6c): 풍파 γ 3.3 + 너울 γ 20, 에너지 비율 SwellFrac. 32 성분 — 주파수를 칸 안에서 무작위로 (공약수가 없어 반복 주기가 사라진다)
-	TArray<FVector4f> MakeWaves(double Hs, double SwellFrac, double SwellTp, double WindTp, int32 Seed)
+	// 방향 분산 (G-6c): 너울 10~20° · 풍파 30~60° — 성분마다 그 주파수에서 너울/풍파 몫으로 섞은 폭 σ 의 정규분포에서 θ.
+	// 해안선 방향 파수 k_y = k·sinθ (경계 수심 얕은 물 k = ω/√(gh₀)) 를 주기 경계에 맞게 2π m / L_y 로 반올림
+	TArray<FVector4f> MakeWaves(double Hs, double SwellFrac, double SwellTp, double WindTp, int32 Seed, double H0, double Ly, double MeanDeg, double SwellSpreadDeg, double WindSpreadDeg)
 	{
 		const int32 N = 32;
 		const double F0 = 0.04, F1 = 0.40, Df = (F1 - F0) / N;
@@ -46,9 +48,17 @@ namespace
 		TArray<FVector4f> W;
 		for (int32 n = 0; n < N; ++n)
 		{
-			const double Sf = M0 * ((1.0 - SwellFrac) * Jonswap(F[n], WindTp, 3.3) / Mw + SwellFrac * Jonswap(F[n], SwellTp, 20.0) / Ms);
+			const double Sw = (1.0 - SwellFrac) * Jonswap(F[n], WindTp, 3.3) / Mw, Ss = SwellFrac * Jonswap(F[n], SwellTp, 20.0) / Ms;
+			const double Sf = M0 * (Sw + Ss);
 			const double A = FMath::Sqrt(2.0 * Sf * Df);
-			W.Add(FVector4f((float)A, (float)(UE_TWO_PI * F[n]), (float)(Rng.FRand() * UE_TWO_PI), 0.f));
+			const double Om = UE_TWO_PI * F[n];
+			const double Sig = FMath::Lerp(WindSpreadDeg, SwellSpreadDeg, Ss / FMath::Max(1e-12, Sw + Ss));
+			const double G1 = FMath::Sqrt(-2.0 * FMath::Loge(FMath::Max(1e-9, (double)Rng.FRand()))) * FMath::Cos(UE_TWO_PI * Rng.FRand());   // Box–Muller
+			const double Th = FMath::DegreesToRadians(FMath::Clamp(MeanDeg + Sig * G1, -70.0, 70.0));
+			const double K = Om / FMath::Sqrt(Gm * H0);
+			const double Dk = UE_TWO_PI / Ly;
+			const double Ky = FMath::RoundToDouble(K * FMath::Sin(Th) / Dk) * Dk;
+			W.Add(FVector4f((float)A, (float)Om, (float)(Rng.FRand() * UE_TWO_PI), (float)Ky));
 		}
 		return W;
 	}
@@ -74,7 +84,8 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 	{
 		const double x = i * Dx, y = j * Dx;
 		double B = x >= Xs ? -A * FMath::Pow(x - Xs, 2.0 / 3.0) : (Xs - x) * Slope;
-		B += 0.01 * FMath::Sin(1.3 * y + 0.4 * x) + 0.006 * FMath::Sin(3.1 * y - 1.7 * x);   // 1cm 남짓 굴곡 (완전 평평하면 밋밋)
+		const double Ky = UE_TWO_PI / (NY * Dx);   // 해안선 방향 주기 경계와 맞는 파수
+		B += 0.01 * FMath::Sin(2.0 * Ky * y + 0.4 * x) + 0.006 * FMath::Sin(6.0 * Ky * y - 1.7 * x);   // 1cm 남짓 굴곡 (완전 평평하면 밋밋)
 		BCorner[j * (NX + 1) + i] = (float)B;
 	}
 	H0 = -BCorner[NX];   // 경계 정지 수심 (j = 0 꼭짓점 근사)
@@ -89,7 +100,12 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 	FSandGridGpuInit G;
 	G.NX = NX; G.NY = NY; G.Dx = Dx; G.Dy = Dx; G.Manning = Manning;
 	G.bOpenEast = true; G.SeaLevel = 0.f; G.BoundaryDepth = H0;
-	G.Waves = MakeWaves(Hs, SwellFrac, SwellTp, WindTp, 1234);
+	double MeanDeg = 10.0, SwellSpread = 15.0, WindSpread = 40.0;
+	FParse::Value(Cmd, TEXT("wavedir="), MeanDeg);
+	FParse::Value(Cmd, TEXT("swellspread="), SwellSpread);
+	FParse::Value(Cmd, TEXT("windspread="), WindSpread);
+	G.bPeriodicY = true;
+	G.Waves = MakeWaves(Hs, SwellFrac, SwellTp, WindTp, 1234, H0, NY * Dx, MeanDeg, SwellSpread, WindSpread);
 	G.BCorner = BCorner;
 	BCellV.SetNum(NX * NY);
 	G.W.SetNum(NX * NY); G.HU.Init(0.f, NX * NY); G.HV.Init(0.f, NX * NY);
@@ -100,6 +116,11 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 		const double Bm = 0.25 * (Bc[0] + Bc[1] + Bc[2] + Bc[3]);
 		BCellV[j * NX + i] = (float)Bm;
 		G.W[j * NX + i] = (float)(Bm + FSandGridCpu::CellVolume(Bc, 0.0));   // 정지 수면 0 (이산 평형)
+	}
+	// 맵에 놓인 예전 입자 시험 액터는 끈다 (프레임마다 14ms — 이 화면과 무관)
+	for (TActorIterator<AActor> It(&World); It; ++It)
+	{
+		if (It->GetClass()->GetName().Contains(TEXT("SpikeActor"))) { It->SetActorTickEnabled(false); It->SetActorHiddenInGame(true); }
 	}
 	Grid = MakeUnique<FSandGridGpu>();
 	Grid->Init(G);

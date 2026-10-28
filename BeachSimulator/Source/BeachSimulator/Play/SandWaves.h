@@ -4,6 +4,7 @@
 //   스펙트럼 = 풍파 JONSWAP γ 3.3 + 너울 γ 20 (G-6c), 32 성분, 주파수를 칸 안에서 무작위 (반복 방지)
 //   가운데 끌기 둘러보기 · WASD QE 이동 · -sandwavesshot= (자동: 스크린샷 몇 장 후 종료)
 //   -swellfrac= (0.6) -swelltp= (12) -windtp= (5) -wavehs= (경계 포화값) -wavecells= (512) -manning= (0.025)
+//   -wavedir= (평균 방향 10°) -swellspread= (15°) -windspread= (40°) — 방향 분산 (G-6c), 해안선 방향은 주기 경계
 
 #pragma once
 
