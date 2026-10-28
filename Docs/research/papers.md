@@ -1841,6 +1841,14 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
 - 주의 △: "Limitations of empirical sediment transport formulas for shallow water and their consequences for swash zone modelling" ([arXiv 1608.06710](https://arxiv.org/pdf/1608.06710)) — u³ 경험식의 한계를 다룬다. 계수는 튜닝 대상으로 둔다.
 - (조사 에이전트 메모 △, 원문 미확인) 침투(infiltration)가 되돌림을 약하게 해 둔덕(berm)을 쌓는다 — Turner & Masselink 1998, Masselink & Li 2001 (F 절과 같은 이야기). 해변 잔물결 파장(cm~dm)은 격자 5cm 와 같은 크기라 격자에서 창발시키기 어렵다 → 렌더 세부로.
 
+### D-M3-5. 바다 쪽 경계 — 파도를 넣으면서 반사파는 내보낸다 (T3, 2026-10-29)
+- **리만 불변량 경계** — 얕은 물의 두 특성 R± = u ± 2√(gh) (속도 u ± √(gh)). 경계에서 **나가는 쪽은 안쪽에서 외삽, 들어오는 쪽은 입사파로 지정** → h = ((R⁺ − R⁻)/4)²/g, u = (R⁺ + R⁻)/2. 반사파는 나가는 특성으로 빠져나간다.
+  - van Dongeren & Svendsen (1997), "Absorbing-generating boundary condition for shallow-water models", *J. Waterway Port Coastal Ocean Eng.* 123(6) △ (서지 · 2차 요약): 2D 비선형 얕은 물, 입사 · 반사의 국소 중첩 가정, Sommerfeld 방사 조건보다 반사 오차가 훨씬 작다 (비스듬한 파도에서 특히).
+  - Incelli, Briganti & Dodd (2015), "Absorbing–generating seaward boundary conditions for fully-coupled hydro-morphodynamical solvers", *Coastal Eng.* △ (초록): 얕은 물 + Exner 결합에서 리만 방정식 기반 입사 생성 · 반사 흡수 — **우리 M3 와 같은 구성** (T4 침식이 들어가도 그대로).
+  - Boussinesq 쪽 비교 ([arXiv 2402.03859](https://arxiv.org/pdf/2402.03859)) △: 수위나 유량을 강제하는 것보다 **들어오는 리만 불변량을 강제하는 쪽이 오차가 한 자릿수 작다**.
+- 감쇠층 (Larsen & Dancy 1983 · Zhang et al. 2014 Coastal Eng. 84) △: 경계 밖에 띠를 두고 매 스텝 수면 · 유량을 거리별로 줄인다. 구현은 쉽지만 띠 칸 수만큼 비용, 큰 진폭 흡수가 약하다는 보고 (arXiv 2312.15251).
+- **결정**: 리만 불변량 경계 (선형 입사 u_i = η_i·√(g/h₀) 가정). 장주기파 · 큰 반사가 남으면 바깥 감쇠층을 덧댄다.
+
 ### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
 - Epic 의 얕은 물은 있다: `Engine/Plugins/FX/NiagaraFluids/Content/Modules/Grid2D/ShallowWater/` (`Grid2D_SW_Advect · UpdateDepthGrid · FilterOvershoot · ExtrapolateVelocities · MovingWindow_*` …) · `Plugins/Experimental/WaterAdvanced` 의 `ShallowWaterRiverActor.cpp:339` 가 `Grid2D_SW_River` 를 쓴다. 바닥은 **SceneCapture 깊이로 찍어 읽기만** (`:107`) — 단방향 시각 효과. 침식 · 모래 · 수분 채널 없음. 모듈 이름으로 보아 이류 + 넘침 거르기 계열 (uasset 그래프라 알고리즘 세부는 미확인).
 - Niagara GPU 틱은 정해진 세 시점에만 돈다: `ENiagaraGpuComputeTickStage { PreInitViews, PostInitViews, PostOpaqueRender }` (`Niagara/Public/NiagaraCommon.h:1924-1926`). 우리 입자 시뮬 RDG 패스 사이에 끼울 수 없다 → M4 의 **같은 프레임 양방향 결합**(격자 → 입자 하중 · 수분, 입자 → 장애물 · 파괴 환원)이 막히거나 1 프레임 늦는다. 외부 RDG 버퍼를 읽히려면 사용자 정의 DI 를 C++ 로 써야 한다.
