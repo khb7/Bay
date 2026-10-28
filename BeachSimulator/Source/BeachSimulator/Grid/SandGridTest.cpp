@@ -201,8 +201,11 @@ namespace
 	}
 }
 
+int32 RunSandGridGpuTest(const FString& Params);
+
 int32 RunSandGridTest(const FString& Params)
 {
+	if (FParse::Param(*Params, TEXT("gridgpu"))) { return RunSandGridGpuTest(Params); }
 	const double T0 = FPlatformTime::Seconds();
 	GOpt.bFix = !FParse::Param(*Params, TEXT("gridnofix"));
 	GOpt.bDesing = FParse::Param(*Params, TEXT("griddesing"));
@@ -220,5 +223,147 @@ int32 RunSandGridTest(const FString& Params)
 	Synolakis(0.0185, 0.05);
 	Synolakis(0.3, 0.05);
 	UE_LOG(LogSandGrid, Display, TEXT("격자 시험 끝 — %.1fs"), FPlatformTime::Seconds() - T0);
+	return 0;
+}
+
+// ------------------------------------------------------------------------------------------------
+// M3 T1 GPU 판 대조 — `-gridtest -gridgpu`
+#include "SandGridGpu.h"
+
+namespace
+{
+	// 2D 해변 (LakeBeach2D 와 같은 지형) + 바다 쪽 물 더미 → 물가로 밀려 올라갔다 내려간다
+	void BeachScene(FSandGridCpu& S, int32 NX, int32 NY, double Dx, bool bMound)
+	{
+		S.Init(NX, NY, Dx, Dx);
+		for (int32 j = 0; j <= S.NY; ++j)
+		for (int32 i = 0; i <= S.NX; ++i)
+		{
+			const double x = i * S.Dx, y = j * S.Dy;
+			S.BCorner[j * (S.NX + 1) + i] = 0.6 - 0.15 * x + 0.08 * FMath::Sin(2.1 * y) + 0.03 * FMath::Cos(3.7 * x + 1.3 * y);
+		}
+		const double L = 0.3, Lx = NX * Dx, Ly = NY * Dx;
+		for (int32 j = 0; j < S.NY; ++j)
+		for (int32 i = 0; i < S.NX; ++i)
+		{
+			const double Bc[4] = { S.BCorner[j * (S.NX + 1) + i], S.BCorner[j * (S.NX + 1) + i + 1], S.BCorner[(j + 1) * (S.NX + 1) + i], S.BCorner[(j + 1) * (S.NX + 1) + i + 1] };
+			double Lev = L;
+			if (bMound)
+			{
+				const double x = (i + 0.5) * Dx, y = (j + 0.5) * Dx;
+				Lev += 0.08 * FMath::Exp(-((x - 0.75 * Lx) * (x - 0.75 * Lx) + (y - 0.5 * Ly) * (y - 0.5 * Ly)) / (0.04 * Lx * Lx));
+			}
+			S.W[S.Idx(i, j)] = S.BCell(i, j) + FSandGridCpu::CellVolume(Bc, Lev);
+		}
+	}
+
+	FSandGridGpuInit ToGpu(const FSandGridCpu& S)
+	{
+		FSandGridGpuInit G;
+		G.NX = S.NX; G.NY = S.NY; G.Dx = (float)S.Dx; G.Dy = (float)S.Dy; G.HDry = (float)S.HDry; G.bWetDry = S.bWetDry;
+		for (double v : S.BCorner) { G.BCorner.Add((float)v); }
+		for (int32 k = 0; k < S.W.Num(); ++k) { G.W.Add((float)S.W[k]); G.HU.Add((float)S.HU[k]); G.HV.Add((float)S.HV[k]); }
+		return G;
+	}
+
+	void CompareDynamic()
+	{
+		FSandGridCpu C; Apply(C);
+		BeachScene(C, 80, 60, 0.05, true);
+		FSandGridGpu G; G.Init(ToGpu(C));
+		const double V0 = C.TotalVolume();
+		const double Dt = 0.002;
+		for (int32 Chunk = 1; Chunk <= 4; ++Chunk)
+		{
+			for (int32 n = 0; n < 250; ++n) { C.Step(Dt); }
+			G.StepFixed((float)Dt, 250);
+			TArray<float> W, HU, HV; G.Download(W, HU, HV);
+			double DW = 0, DQ = 0, QMax = 0, VG = 0;
+			for (int32 j = 0; j < C.NY; ++j) for (int32 i = 0; i < C.NX; ++i)
+			{
+				const int32 k = C.Idx(i, j);
+				DW = FMath::Max(DW, FMath::Abs(C.W[k] - W[k]));
+				DQ = FMath::Max(DQ, FMath::Max(FMath::Abs(C.HU[k] - HU[k]), FMath::Abs(C.HV[k] - HV[k])));
+				QMax = FMath::Max(QMax, FMath::Max(FMath::Abs(C.HU[k]), FMath::Abs(C.HV[k])));
+				VG += W[k] - C.BCell(i, j);
+			}
+			VG *= C.Dx * C.Dy;
+			UE_LOG(LogSandGrid, Display, TEXT("G① 동적 대조 %.1fs: 최대 |Δw| %.2e m · 최대 |Δq| %.2e (|q| 최대 %.2e) · 부피 변화 CPU %.1e / GPU %.1e"),
+				Chunk * 250 * Dt, DW, DQ, QMax, (C.TotalVolume() - V0) / V0, (VG - V0) / V0);
+		}
+	}
+
+	void GpuLake()
+	{
+		FSandGridCpu C; Apply(C);
+		BeachScene(C, 80, 60, 0.05, false);
+		FSandGridGpu G; G.Init(ToGpu(C));
+		for (int32 n = 0; n < 20; ++n) { G.Advance(1.f / 60.f, 64); }   // 몇 프레임 데우기
+		for (int32 n = 0; n < 600; ++n) { G.Advance(1.f / 60.f, 64); }
+		TArray<float> W, HU, HV; float T = 0; G.Download(W, HU, HV, &T);
+		double M = 0;
+		for (int32 j = 0; j < C.NY; ++j) for (int32 i = 0; i < C.NX; ++i)
+		{
+			const int32 k = C.Idx(i, j); const double h = W[k] - C.BCell(i, j);
+			if (h > 1e-3) { M = FMath::Max(M, FMath::Sqrt((double)HU[k] * HU[k] + (double)HV[k] * HV[k]) / h); }
+		}
+		UE_LOG(LogSandGrid, Display, TEXT("G② GPU 2D 해변 정지 수면 (float, 적응 Δt) %.1fs: 수심 1mm↑ 최대 속력 %.3e m/s"), T, M);
+	}
+
+	void GpuSynolakis(double Hd, double Dx)
+	{
+		const double Cot = 19.85, X0 = Cot, XL = -6.0, XR = 90.0;
+		FSandGridCpu S; Apply(S);
+		S.Init(FMath::RoundToInt((XR - XL) / Dx), 1, Dx, Dx);
+		auto Bat = [&](double x) { return x >= X0 ? -1.0 : -x / Cot; };
+		for (int32 j = 0; j <= 1; ++j) { for (int32 i = 0; i <= S.NX; ++i) { S.BCorner[j * (S.NX + 1) + i] = Bat(XL + i * Dx); } }
+		const double Gam = FMath::Sqrt(0.75 * Hd);
+		const double X1 = X0 + std::acosh(FMath::Sqrt(20.0)) / Gam;
+		for (int32 i = 0; i < S.NX; ++i)
+		{
+			const double x = XL + (i + 0.5) * Dx;
+			const double Sech = 1.0 / std::cosh(Gam * (x - X1));
+			const double Eta = Hd * Sech * Sech;
+			const double B = S.BCell(i, 0);
+			S.W[i] = FMath::Max(Eta, B);
+			const double h = S.W[i] - B;
+			S.HU[i] = h > 0.0 ? -h * Eta * FMath::Sqrt(S.G) : 0.0;
+		}
+		FSandGridGpu G; G.Init(ToGpu(S));
+		double Run = -1e9; float T = 0;
+		TArray<float> W, HU, HV;
+		while (T < 30.f)
+		{
+			G.Advance(1.f / 60.f, 256);
+			G.Download(W, HU, HV, &T);
+			for (int32 i = 0; i < S.NX; ++i) { const double h = W[i] - S.BCell(i, 0); if (h > 1e-4 && S.BCell(i, 0) >= 0.0) { Run = FMath::Max(Run, (double)W[i]); } }
+		}
+		const double Law = 2.831 * FMath::Sqrt(Cot) * FMath::Pow(Hd, 1.25);
+		UE_LOG(LogSandGrid, Display, TEXT("G③ GPU Synolakis H/d %.4f · Δx %.3f: R/d %.4f · 법칙 %.4f · 비 %.3f"), Hd, Dx, Run, Law, Run / Law);
+	}
+
+	void GpuCost(int32 Size)
+	{
+		FSandGridCpu C; Apply(C);   // 지형 · 초기값만 (CPU 로 풀지 않는다)
+		C.Init(Size, Size, 0.05, 0.05);
+		const double Lx = Size * 0.05;
+		for (int32 j = 0; j <= Size; ++j) for (int32 i = 0; i <= Size; ++i) { C.BCorner[j * (Size + 1) + i] = 1.0 - 2.0 * (i * 0.05) / Lx + 0.05 * FMath::Sin(0.7 * j * 0.05); }   // 2m 내려가는 해변
+		for (int32 j = 0; j < Size; ++j) for (int32 i = 0; i < Size; ++i) { C.W[C.Idx(i, j)] = FMath::Max(0.0, C.BCell(i, j)); }   // 수면 0 (물가 칸은 대충 — 비용만)
+		FSandGridGpu G; G.Init(ToGpu(C));
+		G.StepFixed(0.002f, 4);   // 셰이더 데우기
+		G.StepFixed(0.002f, 20);
+		UE_LOG(LogSandGrid, Display, TEXT("G④ GPU 비용 %d² (칸 5cm, %.0fm): 서브스텝 20 회 %.2f ms → 1 회 %.3f ms"), Size, Lx, G.LastGpuMs(), G.LastGpuMs() / 20.f);
+	}
+}
+
+int32 RunSandGridGpuTest(const FString& Params)
+{
+	GOpt = FOpt();
+	CompareDynamic();
+	GpuLake();
+	GpuSynolakis(0.0185, 0.05);
+	GpuSynolakis(0.3, 0.05);
+	GpuCost(512);
+	GpuCost(1024);
 	return 0;
 }

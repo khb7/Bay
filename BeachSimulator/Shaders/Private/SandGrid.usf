@@ -1,0 +1,263 @@
+// M3 T1 — 얕은 물 GPU 판 (m3-plan.md · m3-log #2). CPU 기준판 FSandGridCpu (BeachSimulator/Grid) 와 같은 식, float.
+// KP07 central-upwind + Bollermann 2013 원천 · 배수 시간 + 2D 물가 칸 수면 하나 (부피 역산).
+//
+// 한 서브스텝 = SSP-RK2 두 단계. 단계마다:
+//   LevelCS   칸 수면 L · 물가 칸 표시 (U 에서)
+//   FaceXCS / FaceYCS   경계마다 양쪽 칸을 재구성해 central-upwind 유량 (H1 · H2a · H2g · H3), 최대 파속 원자 최대
+//   DtCS      (1 단계만) Δt = min(CFL/a_max, 남은 시간) — CPU 가 기다리지 않는다
+//   DrainCS   칸 배수 시간 (Bollermann 4.7)
+//   UpdateCS  유량 차 + 원천 → 단계 갱신 (1: U1 = U0 + Δt·L(U0) · 2: U0 = ½(U0 + U1 + Δt·L(U1))) · 얕은 칸 운동량 0
+//
+// 상태 U = float4 (w, hu, hv, 0). 지형 = 꼭짓점 B (NX+1)·(NY+1). 경계 = 벽.
+
+#include "/Engine/Public/Platform.ush"
+
+uint  NX;
+uint  NY;
+float Dx;
+float Dy;
+float Gravity;
+float Theta;
+float Cfl;
+float HDry;
+float EpsDesing;
+uint  bWetDry;
+uint  Stage;            // 1 또는 2
+uint  bFixedDt;
+float FixedDt;
+
+StructuredBuffer<float>    BCorner;
+StructuredBuffer<float4>   URO;      // 이 단계 입력 (1 단계: U0, 2 단계: U1)
+StructuredBuffer<float4>   U0RO;     // 2 단계에서 U0
+RWStructuredBuffer<float4> UOutRW;   // 1 단계: U1, 2 단계: U0
+RWStructuredBuffer<float2> LevelRW;  // (L, 물가 1/0)
+StructuredBuffer<float2>   LevelRO;
+RWStructuredBuffer<float4> FaceXRW;  // (H1, H2a, H2g, H3) — x 경계, (NX+1)·NY
+RWStructuredBuffer<float4> FaceYRW;  //                     — y 경계, NX·(NY+1)
+StructuredBuffer<float4>   FaceXRO;
+StructuredBuffer<float4>   FaceYRO;
+RWStructuredBuffer<float>  DrainRW;
+StructuredBuffer<float>    DrainRO;
+RWStructuredBuffer<uint>   AMaxRW;   // [0] 최대 a/Δ 의 float 비트 (양수라 uint 순서 = float 순서)
+StructuredBuffer<uint>     AMaxRO;
+RWStructuredBuffer<float>  TimeRW;   // [0] 이번 Δt · [1] 남은 시간 · [2] 쓴 시간 합
+StructuredBuffer<float>    TimeRO;
+
+uint Idx(uint i, uint j) { return j * NX + i; }
+float Bc(uint ci, uint cj) { return BCorner[cj * (NX + 1) + ci]; }
+float BFaceX(int i, uint j) { uint c = (uint)clamp(i + 1, 0, (int)NX); return 0.5f * (Bc(c, j) + Bc(c, j + 1)); }   // 칸 i 의 오른쪽 경계
+float BFaceY(uint i, int j) { uint r = (uint)clamp(j + 1, 0, (int)NY); return 0.5f * (Bc(i, r) + Bc(i + 1, r)); }
+float BCell(uint i, uint j) { return 0.25f * (BFaceX((int)i, j) + BFaceX((int)i - 1, j) + BFaceY(i, (int)j) + BFaceY(i, (int)j - 1)); }
+
+float MinMod3(float a, float b, float c)
+{
+	if (a > 0.f && b > 0.f && c > 0.f) { return min(a, min(b, c)); }
+	if (a < 0.f && b < 0.f && c < 0.f) { return max(a, max(b, c)); }
+	return 0.f;
+}
+
+float Desing(float h, float q)
+{
+	// KP07 (2.17)
+	const float h2 = h * h, h4 = h2 * h2;
+	return 1.41421356f * h * q / sqrt(h4 + max(h4, EpsDesing));
+}
+
+// 거울 경계를 거친 칸. 유량 부호 반대는 SgnU/SgnV
+void Mirror(int i, int j, out uint oi, out uint oj, out float SgnU, out float SgnV)
+{
+	SgnU = 1.f; SgnV = 1.f;
+	if (i < 0) { i = -1 - i; SgnU = -1.f; } else if (i >= (int)NX) { i = 2 * (int)NX - 1 - i; SgnU = -1.f; }
+	if (j < 0) { j = -1 - j; SgnV = -1.f; } else if (j >= (int)NY) { j = 2 * (int)NY - 1 - j; SgnV = -1.f; }
+	oi = (uint)clamp(i, 0, (int)NX - 1); oj = (uint)clamp(j, 0, (int)NY - 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+// 물가 칸 수면 — 이선형 칸 위 max(0, L − B) 평균이 h̄ 가 되는 L (CPU CellLevel 과 같은 8×8 표본 · 이분법)
+float CellVolume(float b00, float b10, float b01, float b11, float L)
+{
+	float V = 0.f;
+	for (uint b = 0; b < 8; ++b)
+	for (uint a = 0; a < 8; ++a)
+	{
+		const float u = (a + 0.5f) / 8.f, v = (b + 0.5f) / 8.f;
+		V += max(0.f, L - ((1 - u) * (1 - v) * b00 + u * (1 - v) * b10 + (1 - u) * v * b01 + u * v * b11));
+	}
+	return V / 64.f;
+}
+
+[numthreads(8, 8, 1)]
+void LevelCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x, j = Tid.y;
+	if (i >= NX || j >= NY) { return; }
+	const float w = URO[Idx(i, j)].x;
+	float2 R = float2(w, 0.f);
+	if (bWetDry != 0u)
+	{
+		const float b00 = Bc(i, j), b10 = Bc(i + 1, j), b01 = Bc(i, j + 1), b11 = Bc(i + 1, j + 1);
+		const float Hi = max(max(b00, b10), max(b01, b11)), Lo = min(min(b00, b10), min(b01, b11));
+		const float Bm = BCell(i, j);
+		const float Hbar = w - Bm;
+		if (Hbar < Hi - Bm && Hi - Lo > 1e-7f)
+		{
+			float A = Lo, B = Hi;
+			const float Hb = max(0.f, Hbar);
+			for (uint n = 0; n < 24; ++n) { const float M = 0.5f * (A + B); if (CellVolume(b00, b10, b01, b11, M) < Hb) { A = M; } else { B = M; } }
+			R = float2(0.5f * (A + B), 1.f);
+		}
+	}
+	LevelRW[Idx(i, j)] = R;
+}
+
+// ---------------------------------------------------------------------------------------------
+// 칸 c (축 방향 번호) 의 재구성. Axis 0: c = i, m = j. 반환: 경계 −½ / +½ 의 (w, q 진행, r 가로)
+struct FRec { float wm, wp, qm, qp, rm, rp, wbar, bm, bp; bool bPartial; };
+
+void Fetch(uint Axis, int c, uint m, out float w, out float q, out float r, out float L, out bool bPart, out float bm, out float bp)
+{
+	int i = Axis == 0 ? c : (int)m, j = Axis == 0 ? (int)m : c;
+	uint oi, oj; float Su, Sv;
+	Mirror(i, j, oi, oj, Su, Sv);
+	const float4 U = URO[Idx(oi, oj)];
+	const float2 Lv = LevelRO[Idx(oi, oj)];
+	w = U.x; L = Lv.x; bPart = Lv.y > 0.5f;
+	const float qu = U.y * Su, qv = U.z * Sv;
+	q = Axis == 0 ? qu : qv; r = Axis == 0 ? qv : qu;
+	// 이 칸의 진행 방향 두 경계 지형 (거울 칸이 아니라 원래 번호 기준 — CPU FaceB 의 clamp 와 같다)
+	if (Axis == 0) { bm = BFaceX(clamp(c - 1, -1, (int)NX - 1), m); bp = BFaceX(clamp(c, -1, (int)NX - 1), m); }
+	else           { bm = BFaceY(m, clamp(c - 1, -1, (int)NY - 1)); bp = BFaceY(m, clamp(c, -1, (int)NY - 1)); }
+}
+
+FRec Reconstruct(uint Axis, int c, uint m)
+{
+	float w0, q0, r0, l0, w1, q1, r1, l1, w2, q2, r2, l2, bm, bp, d0, d1;
+	bool p0, p1, p2;
+	Fetch(Axis, c - 1, m, w0, q0, r0, l0, p0, d0, d1);
+	Fetch(Axis, c + 1, m, w2, q2, r2, l2, p2, d0, d1);
+	Fetch(Axis, c, m, w1, q1, r1, l1, p1, bm, bp);
+	const float sw = MinMod3(Theta * (l1 - l0), 0.5f * (l2 - l0), Theta * (l2 - l1));   // 기울기는 수면 L 로 (Bollermann Remark 3.1)
+	const float sq = MinMod3(Theta * (q1 - q0), 0.5f * (q2 - q0), Theta * (q2 - q1));
+	const float sr = MinMod3(Theta * (r1 - r0), 0.5f * (r2 - r0), Theta * (r2 - r1));
+	FRec R;
+	R.wm = w1 - 0.5f * sw; R.wp = w1 + 0.5f * sw;
+	R.qm = q1 - 0.5f * sq; R.qp = q1 + 0.5f * sq;
+	R.rm = r1 - 0.5f * sr; R.rp = r1 + 0.5f * sr;
+	R.wbar = w1; R.bm = bm; R.bp = bp; R.bPartial = p1;
+	if (p1) { R.wm = max(l1, bm); R.wp = max(l1, bp); }   // 물가 칸: 평평한 수면 L
+	else
+	{
+		if (R.wp < bp) { R.wp = bp; R.wm = 2.f * w1 - bp; }   // KP07 (2.15)/(2.16)
+		else if (R.wm < bm) { R.wm = bm; R.wp = 2.f * w1 - bm; }
+	}
+	return R;
+}
+
+float4 FaceFlux(uint Axis, int c, uint m, float D)   // 경계 c+½
+{
+	const FRec L = Reconstruct(Axis, c, m);
+	const FRec R = Reconstruct(Axis, c + 1, m);
+	const float Bf = L.bp;
+	const float hL = max(0.f, L.wp - Bf), hR = max(0.f, R.wm - Bf);
+	const float uL = hL > 0.f ? Desing(hL, L.qp) : 0.f, vL = hL > 0.f ? Desing(hL, L.rp) : 0.f;
+	const float uR = hR > 0.f ? Desing(hR, R.qm) : 0.f, vR = hR > 0.f ? Desing(hR, R.rm) : 0.f;
+	const float qL = hL * uL, qR = hR * uR, rL = hL * vL, rR = hR * vR;
+	const float cL = sqrt(Gravity * hL), cR = sqrt(Gravity * hR);
+	const float ap = max(max(uL + cL, uR + cR), 0.f), am = min(min(uL - cL, uR - cR), 0.f);
+	uint D0;
+	InterlockedMax(AMaxRW[0], asuint(max(ap, -am) / D), D0);
+	float4 F = 0;
+	if (ap - am > 1e-12f)
+	{
+		const float Inv = 1.f / (ap - am), Dif = ap * am * Inv;
+		F.x = (ap * qL - am * qR) * Inv + Dif * (hR - hL);
+		F.y = (ap * qL * uL - am * qR * uR) * Inv;
+		F.z = (ap * 0.5f * Gravity * hL * hL - am * 0.5f * Gravity * hR * hR) * Inv + Dif * (qR - qL);
+		F.w = (ap * rL * uL - am * rR * uR) * Inv + Dif * (rR - rL);
+	}
+	return F;
+}
+
+[numthreads(8, 8, 1)]
+void FaceXCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint f = Tid.x, j = Tid.y;   // f = 0..NX: 칸 f−1 의 오른쪽 경계
+	if (f > NX || j >= NY) { return; }
+	FaceXRW[j * (NX + 1) + f] = FaceFlux(0, (int)f - 1, j, Dx);
+}
+
+[numthreads(8, 8, 1)]
+void FaceYCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x, f = Tid.y;
+	if (i >= NX || f > NY) { return; }
+	FaceYRW[f * NX + i] = FaceFlux(1, (int)f - 1, i, Dy);
+}
+
+[numthreads(1, 1, 1)]
+void DtCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const float A = asfloat(AMaxRO[0]);
+	float Dt = bFixedDt != 0u ? FixedDt : (A > 0.f ? Cfl / A : 1e-3f);
+	const float Rem = TimeRW[1];
+	if (bFixedDt == 0u) { Dt = min(Dt, max(Rem, 0.f)); }
+	TimeRW[0] = Dt;
+	TimeRW[1] = Rem - Dt;
+	TimeRW[2] = TimeRW[2] + Dt;
+}
+
+[numthreads(8, 8, 1)]
+void DrainCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x, j = Tid.y;
+	if (i >= NX || j >= NY) { return; }
+	const float Dt = TimeRO[0];
+	float Dr = Dt;
+	if (bWetDry != 0u)
+	{
+		const float Out = max(0.f, FaceXRO[j * (NX + 1) + i + 1].x) / Dx + max(0.f, -FaceXRO[j * (NX + 1) + i].x) / Dx
+		                + max(0.f, FaceYRO[(j + 1) * NX + i].x) / Dy + max(0.f, -FaceYRO[j * NX + i].x) / Dy;
+		const float h = URO[Idx(i, j)].x - BCell(i, j);
+		if (Out > 0.f) { Dr = min(Dt, max(0.f, h) / Out); }
+	}
+	DrainRW[Idx(i, j)] = Dr;
+}
+
+float Scale(float H1, int kLeft, int kRight, float Dt)
+{
+	const int Up = H1 >= 0.f ? kLeft : kRight;
+	return (Up >= 0 && Dt > 0.f) ? DrainRO[Up] / Dt : 1.f;
+}
+
+[numthreads(8, 8, 1)]
+void UpdateCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x, j = Tid.y;
+	if (i >= NX || j >= NY) { return; }
+	const uint k = Idx(i, j);
+	const float Dt = TimeRO[0];
+	const float4 XL = FaceXRO[j * (NX + 1) + i], XR = FaceXRO[j * (NX + 1) + i + 1];
+	const float4 YL = FaceYRO[j * NX + i], YR = FaceYRO[(j + 1) * NX + i];
+	const float sXL = Scale(XL.x, i > 0 ? (int)k - 1 : -1, (int)k, Dt), sXR = Scale(XR.x, (int)k, i + 1 < NX ? (int)k + 1 : -1, Dt);
+	const float sYL = Scale(YL.x, j > 0 ? (int)(k - NX) : -1, (int)k, Dt), sYR = Scale(YR.x, (int)k, j + 1 < NY ? (int)(k + NX) : -1, Dt);
+	float3 L;
+	L.x = -((sXR * XR.x - sXL * XL.x) / Dx + (sYR * YR.x - sYL * YL.x) / Dy);
+	L.y = -((sXR * XR.y - sXL * XL.y + XR.z - XL.z) / Dx + (sYR * YR.w - sYL * YL.w) / Dy);
+	L.z = -((sYR * YR.y - sYL * YL.y + YR.z - YL.z) / Dy + (sXR * XR.w - sXL * XL.w) / Dx);
+	// 원천 — 잠긴 칸 −g·h̄·ΔB/Δ (Bollermann 2.7), 물가 칸 g/2·(h_E² − h_W²)/Δ (m3-log #2)
+	[unroll] for (uint Axis = 0; Axis < 2; ++Axis)
+	{
+		const FRec R = Reconstruct(Axis, Axis == 0 ? (int)i : (int)j, Axis == 0 ? j : i);
+		const float D = Axis == 0 ? Dx : Dy;
+		const float Hbar = R.wbar - 0.5f * (R.bm + R.bp);
+		const float hE = R.wp - R.bp, hW = R.wm - R.bm;
+		const float Src = R.bPartial ? 0.5f * Gravity * (hE * hE - hW * hW) / D : -Gravity * Hbar * (R.bp - R.bm) / D;
+		if (Axis == 0) { L.y += Src; } else { L.z += Src; }
+	}
+	const float4 U = URO[k];
+	float4 O;
+	if (Stage == 1) { O = float4(U.xyz + Dt * L, 0.f); }
+	else            { const float4 A = U0RO[k]; O = float4(0.5f * (A.xyz + U.xyz + Dt * L), 0.f); }
+	if (O.x - BCell(i, j) < HDry) { O.y = 0.f; O.z = 0.f; }
+	UOutRW[k] = O;
+}
