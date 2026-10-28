@@ -197,9 +197,10 @@ FScenePicker (깊이 버퍼 픽킹)
 ## M3 — 격자 시뮬 (M1·M2와 병렬 가능)
 
 ### 만들 것
+> 2026-10-28 바뀜 (사용자 승인, 근거 papers D-M3 · 계획 [m3-plan.md](m3-plan.md)): Niagara → **자체 RDG**, 가상 파이프 → **KP07 얕은 물**, 운반 능력 침식 → **Exner + q ∝ u³**, 잔물결 창발 → **렌더 세부**.
 ```
-Niagara Grid2D + Simulation Stages
-패스: 파도 주입 → 가상 파이프 → d/v 갱신 → 침식·퇴적 → 이류 → 열침식
+자체 RDG 컴퓨트 (SandGpu 와 같은 FRDGBuilder — M4 같은 프레임 결합)
+패스: 파도 주입 → KP07 재구성 · 경계 유량 → SSP-RK 갱신 → Exner(q = A·u³) · 뜬 모래 이류 → 열침식
 이봉 스펙트럼 (성분 32개, jitter 필수)
 평면 메시 + WPO 지형 · 물 렌더링
 ```
@@ -213,7 +214,8 @@ Niagara Grid2D + Simulation Stages
 | 세트 | 이봉 스펙트럼에서 파군이 저절로 나오는가 |
 | 침식 | 눈에 보이는 속도로 지형이 변하는가 (`Kc`/`Ks`/`Kd` 과장 정도 결정) |
 | 열침식 | 경사가 안식각으로 완화되는가 |
-| **ripple** | `exposureGain` 항으로 잔물결이 창발하는가 ← **검증 필요 항목** |
+| ~~ripple~~ | ~~`exposureGain` 창발~~ → 렌더 세부로 (파장 ≈ 격자 칸, papers D-M3-3) |
+| **처오름** | Synolakis 고립파 R/d 가 법칙 ±10% (비쇄파) · 쇄파도 NaN 없이 (papers D-M3-2) |
 | **rill** | backwash 채널화가 나오는가 ← **검증 필요 항목** |
 | 성능 | 1024² 9패스가 예산에 드는가 |
 

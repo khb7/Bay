@@ -12,7 +12,7 @@
 | 침식 | 운반 능력 `C = Kc·sinα·\|v\|²(1+exposure)` | **Exner + 바닥 운반 `q = A·u³`** + 뜬 모래 `s` 이류 (침강 지연) + 열침식 | D-M3-3: Kelly & Dodd 2010 · Pritchard & Hogg 2005 |
 | 잔물결 | `exposureGain` 으로 창발 | **렌더 세부로** (격자에서 안 함) | D-M3-3: 파장이 격자 칸 크기와 같다 |
 
-→ **사용자 확인 필요**: 위 네 가지는 milestones 문서를 바꾼다. 동의하면 milestones · system-design 을 고친다.
+→ **사용자 승인 (2026-10-28)** — milestones · system-design 반영.
 
 ## 상태 (칸마다)
 

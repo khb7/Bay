@@ -262,6 +262,8 @@ RT_C (RGBA32F)   v.x  v.y  φ(공극률)   debris(부유물)
 
 ### 패스 순서 (스텝당 9개)
 
+> ⚠ 2026-10-28: 2 · 3 (가상 파이프) 은 **KP07 central-upwind 얕은 물**(재구성 → 경계 유량 → SSP-RK, 젖음/마름은 Bollermann 2013)로, 4 (운반 능력) 는 **Exner + q = A·u³ + 뜬 모래 침강 지연**으로 바뀐다. 구현은 Niagara 가 아니라 자체 RDG. 근거 papers D-M3, 계획 m3-plan.md. 아래 RT 채널도 (b, h, hu, hv, s) 구조 버퍼로.
+
 ```
 0. 도구 스탬프 소비      브러시를 b, W, φ에 적용
 1. 파도 주입             경계 셀 수면 = 이봉 스펙트럼 합 + tide + setup
