@@ -12,6 +12,7 @@ struct FSandGridGpuInit
 	float Gravity = 9.81f, Theta = 1.3f, Cfl = 0.25f, HDry = 1e-4f;
 	float EpsDesing = 0.f;          // 0 이면 max(Dx, Dy)⁴
 	bool  bWetDry = true;
+	float Manning = 0.f;            // 바닥 마찰 n. 실험 유리 수조 0.01 (m3-log #4), 모래 0.02~0.03
 	TArray<float> BCorner;          // (NX+1)·(NY+1)
 	TArray<float> W, HU, HV;        // NX·NY
 };

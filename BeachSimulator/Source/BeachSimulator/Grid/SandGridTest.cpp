@@ -4,6 +4,8 @@
 //   ③ Synolakis 고립파 처오름 (1:19.85, H/d 0.0185 · 0.3): R/d 를 2.831·√cot β·(H/d)^1.25 와 비교
 
 #include "SandGridCpu.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 
 #include <cmath>
 
@@ -201,11 +203,85 @@ namespace
 	}
 }
 
+namespace
+{
+	// T2 — 쇄파 H/d 0.3 실험 수면 (Synolakis 1986/87, NOAA NCTR 벤치마크) 과 시간별 대조. 자료: Docs/research/data/synolakis_h03.csv
+	void SynolakisBreakingVsLab(const FString& CsvPath, double Dx)
+	{
+		TArray<FString> Lines;
+		if (!FFileHelper::LoadFileToStringArray(Lines, *CsvPath)) { UE_LOG(LogSandGrid, Error, TEXT("실험 자료를 못 읽음: %s"), *CsvPath); return; }
+		struct FPt { double t, x, eta; };
+		TArray<FPt> Lab;
+		for (const FString& L : Lines)
+		{
+			if (L.StartsWith(TEXT("#")) || L.IsEmpty()) { continue; }
+			TArray<FString> C; L.ParseIntoArray(C, TEXT(","));
+			if (C.Num() == 3) { Lab.Add({ FCString::Atod(*C[0]), FCString::Atod(*C[1]), FCString::Atod(*C[2]) }); }
+		}
+		const double Hd = 0.3, Cot = 19.85, X0 = Cot, XL = -12.0, XR = 90.0;
+		FSandGridCpu S; Apply(S);
+		S.Init(FMath::RoundToInt((XR - XL) / Dx), 1, Dx, Dx);
+		auto Bat = [&](double x) { return x >= X0 ? -1.0 : -x / Cot; };
+		for (int32 j = 0; j <= 1; ++j) { for (int32 i = 0; i <= S.NX; ++i) { S.BCorner[j * (S.NX + 1) + i] = Bat(XL + i * Dx); } }
+		const double Gam = FMath::Sqrt(0.75 * Hd);
+		const double X1 = X0 + std::acosh(FMath::Sqrt(20.0)) / Gam;   // NOAA 벤치마크와 같은 시작 (Xs = X0 + arccosh√20 / γ)
+		for (int32 i = 0; i < S.NX; ++i)
+		{
+			const double x = XL + (i + 0.5) * Dx;
+			const double Sech = 1.0 / std::cosh(Gam * (x - X1));
+			const double Eta = Hd * Sech * Sech;
+			const double B = S.BCell(i, 0);
+			S.W[i] = FMath::Max(Eta, B);
+			const double h = S.W[i] - B;
+			S.HU[i] = h > 0.0 ? -h * Eta * FMath::Sqrt(S.G) : 0.0;
+		}
+		const double Times[4] = { 15.0, 20.0, 25.0, 30.0 };
+		double T = 0.0, Run = -1e9;
+		for (double Tn : Times)
+		{
+			const double Target = Tn / FMath::Sqrt(S.G);   // 무차원 t·√(g/d), d = 1
+			while (T < Target - 1e-9)
+			{
+				double Dt = -1.0;
+				Dt = S.Step(FMath::Min(0.002, Target - T));   // CFL 보다 작게 (Δx 0.05 · a ~4 → 0.003)
+				T += Dt;
+				for (int32 i = 0; i < S.NX; ++i) { if (S.H(i, 0) > 1e-4 && S.BCell(i, 0) >= 0.0) { Run = FMath::Max(Run, S.W[i]); } }
+			}
+			double Err = 0.0; int32 Cnt = 0; double LabShore = 1e9, SimShore = 1e9;
+			for (const FPt& P : Lab)
+			{
+				if (FMath::Abs(P.t - Tn) > 1e-6) { continue; }
+				const double f = (P.x - XL) / Dx - 0.5;
+				const int32 i0 = FMath::Clamp(FMath::FloorToInt(f), 0, S.NX - 2);
+				const double a = FMath::Clamp(f - i0, 0.0, 1.0);
+				const double Eta = (1 - a) * S.W[i0] + a * S.W[i0 + 1];
+				Err += FMath::Abs(Eta - P.eta); ++Cnt;
+				if (P.x < 0.0) { LabShore = FMath::Min(LabShore, P.x); }
+			}
+			for (int32 i = 0; i < S.NX; ++i) { if (S.H(i, 0) > 1e-3) { SimShore = FMath::Min(SimShore, XL + (i + 0.5) * Dx); break; } }
+			UE_LOG(LogSandGrid, Display, TEXT("T2 쇄파 대조 t=%.0f: 실험 %d 점 평균 |Δη| %.4f d (= H 의 %.1f%%) · 젖은 앞 끝 계산 %.2f / 실험 %.2f d"),
+				Tn, Cnt, Err / FMath::Max(1, Cnt), 100.0 * Err / FMath::Max(1, Cnt) / Hd, SimShore, LabShore);
+		}
+		UE_LOG(LogSandGrid, Display, TEXT("T2 쇄파 t ≤ 30 최대 처오름 R/d %.4f"), Run);
+	}
+}
+
 int32 RunSandGridGpuTest(const FString& Params);
 
 int32 RunSandGridTest(const FString& Params)
 {
 	if (FParse::Param(*Params, TEXT("gridgpu"))) { return RunSandGridGpuTest(Params); }
+	if (FParse::Param(*Params, TEXT("gridlab")))
+	{
+		FString Csv = FPaths::Combine(FPaths::ProjectDir(), TEXT("../Docs/research/data/synolakis_h03.csv"));
+		FParse::Value(*Params, TEXT("griddata="), Csv);
+		GOpt = FOpt();
+		FParse::Value(*Params, TEXT("gridmanning="), GOpt.N);   // 실험 유리 수조 n = 0.01 (arXiv 2210.01499 · 1902.03021)
+		UE_LOG(LogSandGrid, Display, TEXT("T2 Manning n %.3f"), GOpt.N);
+		SynolakisBreakingVsLab(Csv, 0.05);
+		SynolakisBreakingVsLab(Csv, 0.025);
+		return 0;
+	}
 	const double T0 = FPlatformTime::Seconds();
 	GOpt.bFix = !FParse::Param(*Params, TEXT("gridnofix"));
 	GOpt.bDesing = FParse::Param(*Params, TEXT("griddesing"));
@@ -260,7 +336,7 @@ namespace
 	FSandGridGpuInit ToGpu(const FSandGridCpu& S)
 	{
 		FSandGridGpuInit G;
-		G.NX = S.NX; G.NY = S.NY; G.Dx = (float)S.Dx; G.Dy = (float)S.Dy; G.HDry = (float)S.HDry; G.bWetDry = S.bWetDry;
+		G.NX = S.NX; G.NY = S.NY; G.Dx = (float)S.Dx; G.Dy = (float)S.Dy; G.HDry = (float)S.HDry; G.bWetDry = S.bWetDry; G.Manning = (float)S.Manning;
 		for (double v : S.BCorner) { G.BCorner.Add((float)v); }
 		for (int32 k = 0; k < S.W.Num(); ++k) { G.W.Add((float)S.W[k]); G.HU.Add((float)S.HU[k]); G.HV.Add((float)S.HV[k]); }
 		return G;
@@ -359,6 +435,7 @@ namespace
 int32 RunSandGridGpuTest(const FString& Params)
 {
 	GOpt = FOpt();
+	FParse::Value(*Params, TEXT("gridmanning="), GOpt.N);
 	CompareDynamic();
 	GpuLake();
 	GpuSynolakis(0.0185, 0.05);

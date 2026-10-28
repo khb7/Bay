@@ -25,6 +25,7 @@ uint  bWetDry;
 uint  Stage;            // 1 또는 2
 uint  bFixedDt;
 float FixedDt;
+float Manning;          // 바닥 마찰 n (s/m^⅓) — CPU FixDry 와 같은 암시적 꼴
 
 StructuredBuffer<float>    BCorner;
 StructuredBuffer<float4>   URO;      // 이 단계 입력 (1 단계: U0, 2 단계: U1)
@@ -258,6 +259,13 @@ void UpdateCS(uint3 Tid : SV_DispatchThreadID)
 	float4 O;
 	if (Stage == 1) { O = float4(U.xyz + Dt * L, 0.f); }
 	else            { const float4 A = U0RO[k]; O = float4(0.5f * (A.xyz + U.xyz + Dt * L), 0.f); }
-	if (O.x - BCell(i, j) < HDry) { O.y = 0.f; O.z = 0.f; }
+	const float h = O.x - BCell(i, j);
+	if (h < HDry) { O.y = 0.f; O.z = 0.f; }
+	else if (Manning > 0.f)
+	{
+		const float Uv = sqrt(O.y * O.y + O.z * O.z) / h;
+		const float Dn = 1.f + Dt * Gravity * Manning * Manning * Uv / pow(h, 4.f / 3.f);
+		O.y /= Dn; O.z /= Dn;
+	}
 	UOutRW[k] = O;
 }

@@ -23,6 +23,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER(uint32, Stage)
 	SHADER_PARAMETER(uint32, bFixedDt)
 	SHADER_PARAMETER(float, FixedDt)
+	SHADER_PARAMETER(float, Manning)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, BCorner)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, URO)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, U0RO)
@@ -158,7 +159,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 
 			FSandGridParams B;
 			B.NX = P.NX; B.NY = P.NY; B.Dx = P.Dx; B.Dy = P.Dy; B.Gravity = P.Gravity; B.Theta = P.Theta; B.Cfl = P.Cfl; B.HDry = P.HDry;
-			B.EpsDesing = P.EpsDesing; B.bWetDry = P.bWetDry ? 1u : 0u; B.bFixedDt = bFixed ? 1u : 0u; B.FixedDt = bFixed ? DtOrFrame : 0.f;
+			B.EpsDesing = P.EpsDesing; B.bWetDry = P.bWetDry ? 1u : 0u; B.bFixedDt = bFixed ? 1u : 0u; B.FixedDt = bFixed ? DtOrFrame : 0.f; B.Manning = P.Manning;
 			B.BCorner = GraphBuilder.CreateSRV(BC);
 			const FIntVector GC(FMath::DivideAndRoundUp(P.NX, 8), FMath::DivideAndRoundUp(P.NY, 8), 1);
 			const FIntVector GX(FMath::DivideAndRoundUp(P.NX + 1, 8), FMath::DivideAndRoundUp(P.NY, 8), 1);
