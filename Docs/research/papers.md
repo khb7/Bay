@@ -1890,6 +1890,29 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
 - 다른 길 (참고): 비정수압 1 층 (Stelling & Zijlema 2003 → SWASH; Escalante et al. GPU) — 얕은 물의 약 2 배 비용, 타원형 압력 풀이 (2차 자료 △).
 - **결정 (A 안)**: Celeris 방식 — 지금의 KP07 위에 MS92 분산 항 + 행/열 삼중대각 (cyclic reduction). 우리 코드 대부분을 그대로 쓴다. 쇄파 처리 · 바깥 경계 입사 (불규칙 + 묶인 IG) 는 다음 조사.
 
+### D-M3-10. ★★ 바깥 경계 입사 — 묶인 IG · 흡수 · 경계 수심 (c4 조사, 2026-10-29)
+- **묶인 장주기파 (2 차, Hasselmann 1962 · Herbers et al. 1994)** — XBeach 문서 [Numerical implementation, "Description second order waves"](https://xbeach.readthedocs.io/en/latest/numerical_implementation.html) ✓:
+  - 성분 쌍 (ω₁, k⃗₁), (ω₂, k⃗₂) → 차 주파수 ω₃ = ω₁ − ω₂, k₃ = |k⃗₁ − k⃗₂| = √(k₁² + k₂² − 2k₁k₂cosΔθ), 방향 θ₃ = atan((k₂sinθ₂ − k₁sinθ₁)/(k₂cosθ₂ − k₁cosθ₁)).
+  - 상호작용 계수 D(ω₁, ω₂, Δθ) = −g·k₁k₂cosΔθ/(2ω₁ω₂) + (ω₁+ω₂)²/(2g) + {(ω₁+ω₂)[(ω₁ω₂)²/g² − k₁k₂cosΔθ] − ½(ω₁k₂²/cosh(k₂d) + ω₂k₁²/cosh(k₁d))} · g(ω₁+ω₂)/{[g·k₃·tanh(k₃d) − (ω₁+ω₂)²](ω₁+ω₂)}. 차 주파수는 **D(ω₁, −ω₂, Δθ+π)**. E₃ = ∫ D²·E₁E₂, A₃ = √(2E₃df)·sgn(D), η₃ = A₃cos(k⃗₃·x⃗ − ω₃t + φ₃) — 결정론적 성분 합에선 **η₃ = D·a₁a₂·cos(Δφ + Δk⃗·x⃗ − Δω·t)**.
+  - △ 문서의 cosh 가 1 승 (Herbers 원식은 cosh² 로 기억) — **얕은 물 극한에서 Longuet-Higgins & Stewart (1962) 평형 해와 수치로 맞춰 확정**한다.
+  - 경계 유속: 묶인 파는 군속도로 간다 → u₃ = η₃·ω₃/(k₃h) (연속식). (XBeach 문서는 식 없음 △)
+- **경계 수심 — Deltares (2020), "Boundary condition guidelines for XBeach simulations"** ([Rijkswaterstaat BOI](https://open.rijkswaterstaat.nl/publish/pages/183980/boi_zw_deltares_2020_boundary_condition_guidelines_for_xbeach_simulations.pdf)) ✓:
+  - 묶인 파 이론은 평형(평평한 바닥) 가정 → 얕은 경계에선 IG 를 **과대** (50% 넘게). 규칙: 경계 수심에서 **Hm0/d < 0.3 그리고 n = c_g/c < 0.9** → 98% 경우 IG 오차 < 10%.
+  - **방향 분산이 있으면 얕은 경계에서도 과대는 몇 % 뿐** (profile 모드 대비). 우리 장면은 방향 분산 15°/40° 있음.
+  - 지형 자료가 없으면 경계 쪽에 **인공 급경사 1/10** (n < 0.9 & Hm0/d > 0.3, 또는 n > 0.9 & Hm0/d < 0.3 구간), 1/50 (n > 0.9 & Hm0/d > 0.3) 로 영역을 줄여도 된다. 경계 IG 에 감소 계수를 곱하는 건 해결이 안 됐다.
+  - 우리 숫자 (H₀ 1 m, T_p 12 s): Hm0/d < 0.3 → d ≥ 3.3 m. n < 0.9 → kd ≳ 0.6 → d ≈ 11~13 m (너울 12 s 가 길어서). Dean 단면 (A 0.1) 으로 3.3 m 까지 **약 190 m**, 그 뒤 1/10 로 11 m 까지 +80 m.
+- **흡수 · 생성 방식** — Vasarmidis, Stratigaki, Suzuki, Zijlema & Troch (2021), *Ocean Eng.* 219, 108303 ✓ (원문):
+  - 약반사 경계 (SWASH · 우리 리만 불변량과 같은 족): 반사 계수 R = (c·cosθ − c₀)/(c·cosθ + c₀), c₀ = √(gd). kd 와 입사각이 커질수록 커진다 (kd 4.5 에서 37%). **얕은 경계 (kd < 0.6) 에선 몇 %** — 우리 수심이면 리만 경계로 충분.
+  - 내부 생성 (Wei, Kirby & Sinha 1999 원천 함수: 연속식에 가우스 모양 질량 원천 f = g(x)·D·cos(ωt − k_y y), D = 2Ce cosθ/(ωI)… + 뒤에 감쇠층) 은 분산 · 비스듬한 파도 반사를 없앤다. 감쇠층 두께는 경우마다 조정 (보통 2~3 파장).
+  - 입사 유속은 분산 위상속도로: u = η·c/h (c = ω/k), 얕은 물 √(gh) 대신.
+- **방향 분산 · IG 에너지**: 1D (방향 무시) 로 묶인 IG 를 구하면 방향 적분 2D 보다 약 3 배 크다 (Lange et al. 2024, JGR Oceans △ 초록). IG 는 짧은 파보다 방향이 훨씬 넓다 (|k⃗₂ − k⃗₁| 이 작아서, Herbers et al. 1995 · Bertin et al. 2018 리뷰 ✓).
+- **경사 위 묶인 파**: 평형 아님 → 파군보다 늦어지며 성장 (h^−¼ ~ h^−5/2 사이), 완만 영역은 정규화 경사 β_b < 0.3 (Battjes et al. 2004 · Bertin et al. 2018 ✓). → 경계는 깊게, 그 사이 변형은 **모델이 풀게** 하는 것이 정석.
+- **결론 (c4 설계에 쓸 것)**:
+  1. 경계 수심 ≥ 3.3 m (Hm0/d < 0.3), 방향 분산이 있으니 n < 0.9 는 완화 (Deltares). 영역은 해안에서 약 190 m (Dean) — **지금 5 cm · 512 칸 (26 m) 으로는 안 된다**.
+  2. 경계 = 지금 리만 불변량 + 입사 η = 선형 성분 + 묶인 IG (쌍 합), u = 분산 위상속도 / 묶인 파 u₃ = η₃ω₃/(k₃h).
+  3. 분산 항은 열린 경계 쪽 몇 칸에서 줄인다 (경계 셀은 얕은 물 · 리만 경계와 맞게), 주기 y 는 삼중대각을 순환형 (Sherman–Morrison) 으로.
+  4. 영역 크기 해결 → 사용자 결정 (m3-plan c4).
+
 ### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
 - Epic 의 얕은 물은 있다: `Engine/Plugins/FX/NiagaraFluids/Content/Modules/Grid2D/ShallowWater/` (`Grid2D_SW_Advect · UpdateDepthGrid · FilterOvershoot · ExtrapolateVelocities · MovingWindow_*` …) · `Plugins/Experimental/WaterAdvanced` 의 `ShallowWaterRiverActor.cpp:339` 가 `Grid2D_SW_River` 를 쓴다. 바닥은 **SceneCapture 깊이로 찍어 읽기만** (`:107`) — 단방향 시각 효과. 침식 · 모래 · 수분 채널 없음. 모듈 이름으로 보아 이류 + 넘침 거르기 계열 (uasset 그래프라 알고리즘 세부는 미확인).
 - Niagara GPU 틱은 정해진 세 시점에만 돈다: `ENiagaraGpuComputeTickStage { PreInitViews, PostInitViews, PostOpaqueRender }` (`Niagara/Public/NiagaraCommon.h:1924-1926`). 우리 입자 시뮬 RDG 패스 사이에 끼울 수 없다 → M4 의 **같은 프레임 양방향 결합**(격자 → 입자 하중 · 수분, 입자 → 장애물 · 파괴 환원)이 막히거나 1 프레임 늦는다. 외부 RDG 버퍼를 읽히려면 사용자 정의 DI 를 C++ 로 써야 한다.
