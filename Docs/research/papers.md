@@ -1913,6 +1913,13 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
   3. 분산 항은 열린 경계 쪽 몇 칸에서 줄인다 (경계 셀은 얕은 물 · 리만 경계와 맞게), 주기 y 는 삼중대각을 순환형 (Sherman–Morrison) 으로.
   4. 영역 크기 해결 → 사용자 결정 (m3-plan c4).
 
+### D-M3-11. ★ setup 과대 원인 후보 (c5 뒤 조사, 2026-10-30)
+- **측정 문턱 (Holland, Raubenheimer, Guza & Holman 1995, JGR 100, doi 10.1029/94JC02664 △ 초록)**: 전선 · 비디오 비교 — 문턱이 낮을수록 (센서가 바닥에 가까울수록) setup · 연직 swash 가 **커지고**, 비디오가 가장 크다 (긴 처오름 혀). Holman & Guza (1984, CE 8): 문턱 몇 cm 차로 swash 분산 25% 차, setup 은 거의 같음. → 우리 2 cm 문턱은 비디오 (Stockdon) 보다 **낮게** 잴 방향 — 과대를 설명하지 못한다. 단, 침투가 없어 물러난 뒤 얇은 막이 남는 건 실제 해변과 다른 물리 (m3-log #7).
+- **바닥 마찰 (Apotsos, Raubenheimer, Elgar, Guza & Smith 2007, JGR △)**: 바닥 응력을 빼면 관측 setup 을 모든 수심에서 **과소** 예측, 물가에서 가장 크게 → 마찰은 setup 을 **키운다**. roller 효과는 작다. → Manning 0.025 가 과하면 과대의 원인일 수 있다.
+- **roller (Lashley et al. 2018 △)**: 비정수압 XBeach 는 roller 가 없어 setup **과소** → 우리 과대와 반대 방향, 원인 아님.
+- **Stockdon 의 β 의존**: setup 0.35β√(H₀L₀) 의 β 는 전안 (foreshore) 경사 — 실제 해변에선 쇄파대 경사와 같이 움직인다. 우리 시험은 **물 위 경사만 바꾸고 쇄파대 (Dean) 는 그대로** → 계산 setup 이 경사에 거의 무관 (0.45~0.49 m) 한 건 이 설계 때문이고, "완만할수록 과대" 는 일부가 시험 설계의 산물. 경사와 무관한 관측식 Guza & Thornton (1981, JGR, 소산 해변) setup ≈ 0.17·H₀ 과 견주면 기본 0.48 은 2.8 배 — 과대는 남는다. NHESS 2023 (Gomes da Silva 등 △): Guza–Thornton 은 setup 을 과소, Holman & Sallenger (1985) ξ 식이 낫다.
+- **결론 (진단 계획)**: (1) 처오름 문턱 민감도 (0.5 / 2 / 5 cm) · 고정점 평균 수위 단면 (Bowen 쇄파대 setup 기울기와 비교) — 측정 문제인지 물리 문제인지 가른다. (2) Manning 0.01 로 마찰 영향. (3) 침투 (M5) 는 조사만 — 들어가면 막이 사라진다.
+
 ### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
 - Epic 의 얕은 물은 있다: `Engine/Plugins/FX/NiagaraFluids/Content/Modules/Grid2D/ShallowWater/` (`Grid2D_SW_Advect · UpdateDepthGrid · FilterOvershoot · ExtrapolateVelocities · MovingWindow_*` …) · `Plugins/Experimental/WaterAdvanced` 의 `ShallowWaterRiverActor.cpp:339` 가 `Grid2D_SW_River` 를 쓴다. 바닥은 **SceneCapture 깊이로 찍어 읽기만** (`:107`) — 단방향 시각 효과. 침식 · 모래 · 수분 채널 없음. 모듈 이름으로 보아 이류 + 넘침 거르기 계열 (uasset 그래프라 알고리즘 세부는 미확인).
 - Niagara GPU 틱은 정해진 세 시점에만 돈다: `ENiagaraGpuComputeTickStage { PreInitViews, PostInitViews, PostOpaqueRender }` (`Niagara/Public/NiagaraCommon.h:1924-1926`). 우리 입자 시뮬 RDG 패스 사이에 끼울 수 없다 → M4 의 **같은 프레임 양방향 결합**(격자 → 입자 하중 · 수분, 입자 → 장애물 · 파괴 환원)이 막히거나 1 프레임 늦는다. 외부 RDG 버퍼를 읽히려면 사용자 정의 DI 를 C++ 로 써야 한다.

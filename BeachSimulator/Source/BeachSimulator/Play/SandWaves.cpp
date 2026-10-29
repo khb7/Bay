@@ -397,7 +397,8 @@ int32 RunWaveMeasure(const FString& Params)
 		Csv += FString::Printf(TEXT("# nest y %.3f x_b %.2f h_b %.3f x_ob %.2f\n"), (Jo + 0.5f) * Sc.GO.Dy, (IoB + 0.5f) * Sc.GO.Dx, Sc.GO.BoundaryDepth, NXo * Sc.GO.Dx);
 		for (const FVector4f& Wv : Sc.GO.Waves) { Csv += FString::Printf(TEXT("# wave %.6f %.6f %.6f %.6f\n"), Wv.X, Wv.Y, Wv.Z, Wv.W); }
 	}
-	Csv += Sc.bNest ? TEXT("t,R0,R1,R2,R3,eta_b,u_b,A2,eta_nest,eta_ob\n") : TEXT("t,R0,R1,R2,R3,eta_b,u_b,A2\n");
+	Csv += Sc.bNest ? TEXT("t,R0,R1,R2,R3,eta_b,u_b,A2,Rlo,Rhi,eta_nest,eta_ob\n") : TEXT("t,R0,R1,R2,R3,eta_b,u_b,A2,Rlo,Rhi\n");
+	TArray<double> ProfW, ProfN; ProfW.Init(0.0, NX); ProfN.Init(0.0, NX); double ProfT = 0.0;
 	TArray<float> W, HU, HV, Wo, HUo, HVo;
 	// 물가 판정 수심 (기본 2cm) — 침투가 없어 되돌림 뒤 얇은 막이 남는다 (m3-log #7). Stockdon 은 비디오로 본 물가
 	float RunH = 0.02f; FParse::Value(*Params, TEXT("runh="), RunH);
@@ -410,24 +411,31 @@ int32 RunWaveMeasure(const FString& Params)
 		Grid.Download(W, HU, HV, &T);   // 동기 — 측정용
 		if (T + 1e-4f < NextRec) { continue; }
 		NextRec += 0.1f;
-		float R[4];
-		for (int32 r = 0; r < 4; ++r)
+		// 바다 쪽에서 땅 쪽으로: 처음 3 칸 연속 마른 곳 바로 앞의 젖은 칸 수면 (뒤에 남은 웅덩이는 무시)
+		auto Runup = [&](int32 j, float H)
 		{
-			// 바다 쪽에서 땅 쪽으로: 처음 3 칸 연속 마른 곳 바로 앞의 젖은 칸 수면 (뒤에 남은 웅덩이는 무시)
-			const int32 j = Rows[r];
 			int32 Last = NX - 1, Dry = 0;
 			for (int32 i = NX - 1; i >= 0; --i)
 			{
 				const int32 k = j * NX + i;
-				if (W[k] - Sc.BCellV[k] > RunH) { Last = i; Dry = 0; } else if (++Dry >= 3) { break; }
+				if (W[k] - Sc.BCellV[k] > H) { Last = i; Dry = 0; } else if (++Dry >= 3) { break; }
 			}
-			R[r] = W[j * NX + Last];
+			return W[j * NX + Last];
+		};
+		float R[4], RLo = 0.f, RHi = 0.f;
+		for (int32 r = 0; r < 4; ++r) { R[r] = Runup(Rows[r], RunH); RLo += 0.25f * Runup(Rows[r], 0.005f); RHi += 0.25f * Runup(Rows[r], 0.05f); }   // 문턱 민감도 (papers D-M3-11)
+		if (T > 120.f)
+		{
+			// 평균 수위 단면 (y 평균, 젖은 시간만) — 쇄파대 setup 기울기 (D-M3-11)
+			for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i < NX; ++i) { const int32 k = j * NX + i; if (W[k] - Sc.BCellV[k] > 0.001f) { ProfW[i] += W[k]; ProfN[i] += 1.0; } }
+			ProfT += NY;
 		}
 		const int32 kb = Jb * NX + Ib;
 		const float Hb = FMath::Max(1e-4f, W[kb] - Sc.BCellV[kb]);
 		double Re = 0, Im = 0;
 		for (const FVector4f& Wv : (Sc.bNest ? Sc.GO.Waves : Sc.G.Waves)) { const double Ph = Wv.Z + Wv.W * (Jb + 0.5) * Sc.Dx - Wv.Y * T; Re += Wv.X * FMath::Cos(Ph); Im += Wv.X * FMath::Sin(Ph); }
 		Csv += FString::Printf(TEXT("%.2f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f"), T, R[0], R[1], R[2], R[3], W[kb], HU[kb] / Hb, Re * Re + Im * Im);
+		Csv += FString::Printf(TEXT(",%.4f,%.4f"), RLo, RHi);
 		if (Sc.bNest)
 		{
 			Outer.Download(Wo, HUo, HVo);
@@ -438,6 +446,11 @@ int32 RunWaveMeasure(const FString& Params)
 		if (FMath::FloorToInt(T / 100.f) != FMath::FloorToInt((T - 0.1f) / 100.f)) { UE_LOG(LogSandWaves, Display, TEXT("T3b %.0fs / %.0fs (벽시계 %.0fs)"), T, Secs, FPlatformTime::Seconds() - T0); }
 	}
 	FFileHelper::SaveStringToFile(Csv, *Path, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	{
+		FString Pf = TEXT("x,B,eta_mean,wet_frac\n");
+		for (int32 i = 0; i < NX; ++i) { Pf += FString::Printf(TEXT("%.3f,%.4f,%.4f,%.4f\n"), (i + 0.5f) * Sc.Dx, Sc.BCellV[Jb * NX + i], ProfN[i] > 0 ? ProfW[i] / ProfN[i] : 0.0, ProfT > 0 ? ProfN[i] / ProfT : 0.0); }
+		FFileHelper::SaveStringToFile(Pf, *Path.Replace(TEXT(".csv"), TEXT("_prof.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	}
 	UE_LOG(LogSandWaves, Display, TEXT("T3b 측정 끝 → %s (벽시계 %.0fs)"), *Path, FPlatformTime::Seconds() - T0);
 	return 0;
 }
