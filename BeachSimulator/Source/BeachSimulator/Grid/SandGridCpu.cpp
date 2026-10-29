@@ -265,6 +265,7 @@ namespace { const double BMS = 1.0 / 15.0; }
 double FSandGridCpu::Dst(int32 i, int32 j) const
 {
 	i = FMath::Clamp(i, 0, NX - 1); j = FMath::Clamp(j, 0, NY - 1);
+	if (Brk.Num() == NX * NY && Brk[Idx(i, j)]) { return 0.0; }   // 쇄파 칸 — 얕은 물로 (Tonelli & Petti 2009)
 	return FMath::Max(0.0, SeaLevel - BCell(i, j));
 }
 
@@ -361,7 +362,18 @@ void FSandGridCpu::Dispersion(const TArray<double>& Wi, const TArray<double>& P,
 double FSandGridCpu::StepBoussinesq(double Dt)
 {
 	const int32 N = NX * NY;
-	if (UU.Num() != N) { ToU(HU, HV, UU, VV); FsPrev.Empty(); }
+	// 쇄파 판정 (Tonelli & Petti 2009 · FUNWAVE-TVD SWE_ETA_DEP): 수면 높이 / 전수심 > 0.8 인 칸은 분산 항을 끄고 얕은 물 (충격 포착이 bore 소산)
+	Brk.Init(0, N);
+	if (BreakRatio > 0.0)
+	{
+		for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i < NX; ++i)
+		{
+			const int32 k = Idx(i, j); const double h = W[k] - BCell(i, j);
+			if (h > HDry && FMath::Abs(W[k] - SeaLevel) / h > BreakRatio) { Brk[k] = 1; }
+		}
+	}
+	ToU(HU, HV, UU, VV);   // 쇄파 칸이 바뀌면 U ↔ P 관계도 바뀐다 — 이번 스텝 판정으로 다시
+	if (FsPrev.Num() != N) { FsPrev.Empty(); }
 	TArray<double> DXn, DYn, Fs, Gs;
 	Dispersion(W, HU, HV, DXn, DYn, Fs, Gs);
 	TArray<double> FsT, GsT; FsT.Init(0.0, N); GsT.Init(0.0, N);

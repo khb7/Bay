@@ -24,6 +24,7 @@ public:
 	double Manning = 0.0;        // 바닥 마찰 n (s/m^⅓). 모래 0.02~0.03
 	bool   bDispersive = false;   // T3c — Madsen & Sørensen 1992 Boussinesq 분산 (Celeris 방식, papers D-M3-9)
 	double SeaLevel = 0.0;        // 정지 수면 (분산 항의 d = SeaLevel − B)
+	double BreakRatio = 0.8;      // 쇄파 전환 |η|/h (Tonelli & Petti 2009 · FUNWAVE-TVD). 0 이면 끔
 	bool   bDesingCells = false;  // 칸 평균에도 (2.17) — 섬은 안정되지만 처오름 혀를 ε^¼ (= Δx) 아래에서 감속시킨다 (m3-log #1)
 
 	TArray<double> BCorner;      // (NX+1)·(NY+1)
@@ -55,6 +56,7 @@ private:
 	void SolveP(const TArray<double>& U, const TArray<double>& V, TArray<double>& OutP, TArray<double>& OutQ) const;
 	void Dispersion(const TArray<double>& Wi, const TArray<double>& P, const TArray<double>& Q, TArray<double>& OutDx, TArray<double>& OutDy, TArray<double>& OutFs, TArray<double>& OutGs) const;
 	double StepBoussinesq(double Dt);
-	TArray<double> UU, VV, FsPrev, GsPrev;   // Boussinesq 예보 변수 · 지난 F* G*
+	TArray<double> UU, VV, FsPrev, GsPrev;
+	TArray<uint8> Brk;                       // 이번 스텝 쇄파 칸   // Boussinesq 예보 변수 · 지난 F* G*
 	double DtPrev = 0.0;
 };

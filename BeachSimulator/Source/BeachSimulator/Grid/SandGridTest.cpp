@@ -13,8 +13,9 @@ DEFINE_LOG_CATEGORY_STATIC(LogSandGrid, Log, All);
 
 namespace
 {
+	double GBreak = 0.8;
 	struct FOpt { bool bFix = true, bDesing = false; double HDry = 1e-4, Eps = 0.0, N = 0.0; bool bWetDry = true, bDisp = false; } GOpt;
-	void Apply(FSandGridCpu& S) { S.bFixDry = GOpt.bFix; S.bDesingCells = GOpt.bDesing; S.HDry = GOpt.HDry; S.Eps = GOpt.Eps; S.Manning = GOpt.N; S.bWetDry = GOpt.bWetDry; S.bDispersive = GOpt.bDisp; }
+	void Apply(FSandGridCpu& S) { S.bFixDry = GOpt.bFix; S.bDesingCells = GOpt.bDesing; S.HDry = GOpt.HDry; S.Eps = GOpt.Eps; S.Manning = GOpt.N; S.bWetDry = GOpt.bWetDry; S.bDispersive = GOpt.bDisp; S.BreakRatio = GBreak; }
 
 	void LakeAtRest(bool bIsland)
 	{
@@ -311,6 +312,7 @@ int32 RunSandGridTest(const FString& Params)
 		GOpt = FOpt();
 		FParse::Value(*Params, TEXT("gridmanning="), GOpt.N);   // 실험 유리 수조 n = 0.01 (arXiv 2210.01499 · 1902.03021)
 		GOpt.bDisp = FParse::Param(*Params, TEXT("gridbous"));   // T3c — Boussinesq 분산
+		FParse::Value(*Params, TEXT("gridbrk="), GBreak);
 		UE_LOG(LogSandGrid, Display, TEXT("T2 Manning n %.3f"), GOpt.N);
 		SynolakisBreakingVsLab(Csv, 0.05);
 		SynolakisBreakingVsLab(Csv, 0.025);
