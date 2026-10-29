@@ -1880,6 +1880,16 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
 - **위상** — Janssen, Battjes & van Dongeren (2003), "Long waves induced by short-wave groups over a sloping bottom", *JGR* 108 ✓ (초록): 묶인 장주기파는 **파군 포락선보다 늦게** 오고, 그 지연은 **얕을수록 커진다** (경사가 만드는 위상 이동 — 1 차 선형 모형이 관측과 맞음). 물가에서 풀려나 반사되어 자유파로 나간다.
 - **스펙트럼 포화** — Ruessink et al. (1998) (D-M3-7): ξ ≲ 0.27 에서 높은 IG 주파수 포화. 우리 기본 해변 (ξ ≈ 1) 은 해당 없음 → 기준 8 은 완만한 프리셋에서만.
 
+### D-M3-9. ★★ A 안의 분산 — Celeris (KP07 + Boussinesq) (2026-10-29)
+- **Tavakkol & Lynett (2017), "Celeris: A GPU-accelerated open source software with a Boussinesq-type wave solver for real-time, interactive simulation and visualization", *Computer Physics Communications* 217, 117–127** ✓ (원문 [arXiv 1611.05984](https://arxiv.org/abs/1611.05984)) — GPL (코드는 베끼지 않고 방법만):
+  - 방정식: **Madsen & Sørensen (1992) 확장 Boussinesq** (Coast. Eng. 18, 183–204) — 개선된 선형 분산.
+  - 이류 · 바닥 경사 항 = **KP07** (우리와 같은 central-upwind, minmod, 단정밀도로 충분), 나머지 분산 항 = 중앙 차분. 시간 = 3 차 Adams–Bashforth 예측 (+ 선택 4 차 Adams–Moulton 보정).
+  - 분산 항 때문에 행 · 열마다 **삼중대각 연립** → GPU 에서 **cyclic reduction** (Zhang, Cohen & Owens 2010, "Fast tridiagonal solvers on the GPU", PPoPP).
+  - **쇄파 모델 없음** — minmod 제한자의 수치 소산이 쇄파 소산을 흉내 낸다; 처오름(얕은 곳)은 자동으로 비선형 얕은 물로 바뀐다. 경계 = 사인파 생성 · 감쇠층 · 벽 (불규칙 방향 파는 다음 판).
+  - 검증: Synolakis 처오름 (0.005 < H/d < 0.5, 쇄파 · 비쇄파) · Whalin 반원 천퇴 (분산 · 고조파) · Briggs 원뿔 섬. 234×201 격자를 Quadro K600 에서 15 s (Fuhrman & Madsen 은 CPU 3.3 시간).
+- 다른 길 (참고): 비정수압 1 층 (Stelling & Zijlema 2003 → SWASH; Escalante et al. GPU) — 얕은 물의 약 2 배 비용, 타원형 압력 풀이 (2차 자료 △).
+- **결정 (A 안)**: Celeris 방식 — 지금의 KP07 위에 MS92 분산 항 + 행/열 삼중대각 (cyclic reduction). 우리 코드 대부분을 그대로 쓴다. 쇄파 처리 · 바깥 경계 입사 (불규칙 + 묶인 IG) 는 다음 조사.
+
 ### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
 - Epic 의 얕은 물은 있다: `Engine/Plugins/FX/NiagaraFluids/Content/Modules/Grid2D/ShallowWater/` (`Grid2D_SW_Advect · UpdateDepthGrid · FilterOvershoot · ExtrapolateVelocities · MovingWindow_*` …) · `Plugins/Experimental/WaterAdvanced` 의 `ShallowWaterRiverActor.cpp:339` 가 `Grid2D_SW_River` 를 쓴다. 바닥은 **SceneCapture 깊이로 찍어 읽기만** (`:107`) — 단방향 시각 효과. 침식 · 모래 · 수분 채널 없음. 모듈 이름으로 보아 이류 + 넘침 거르기 계열 (uasset 그래프라 알고리즘 세부는 미확인).
 - Niagara GPU 틱은 정해진 세 시점에만 돈다: `ENiagaraGpuComputeTickStage { PreInitViews, PostInitViews, PostOpaqueRender }` (`Niagara/Public/NiagaraCommon.h:1924-1926`). 우리 입자 시뮬 RDG 패스 사이에 끼울 수 없다 → M4 의 **같은 프레임 양방향 결합**(격자 → 입자 하중 · 수분, 입자 → 장애물 · 파괴 환원)이 막히거나 1 프레임 늦는다. 외부 RDG 버퍼를 읽히려면 사용자 정의 DI 를 C++ 로 써야 한다.
