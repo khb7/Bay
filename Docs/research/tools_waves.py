@@ -60,8 +60,9 @@ def r2_from_maxima(x):
 
 def analyze(path):
     meta = header(path)
-    raw = np.loadtxt(path, delimiter=',', skiprows=3, encoding='utf-8')   # 줄 1·2 = '#' 머리, 줄 3 = 열 이름
-    cols = ['t', 'R0', 'R1', 'R2', 'R3', 'eta_b', 'u_b', 'A2']
+    with open(path, encoding='utf-8') as f:
+        cols = next(l for l in f if l.startswith('t,')).strip().split(',')   # '#' 머리 (-nest 는 성분 표까지) 뒤 열 이름
+    raw = np.loadtxt(path, delimiter=',', comments=['#', 't,'], encoding='utf-8')
     d = {c: raw[:, i] for i, c in enumerate(cols)}
     t = d['t']
     keep = t > SPIN
