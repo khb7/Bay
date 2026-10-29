@@ -47,6 +47,19 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, AMaxRO)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, TimeRW)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, TimeRO)
+	SHADER_PARAMETER(uint32, bDispersive)
+	SHADER_PARAMETER(float, BreakRatio)
+	SHADER_PARAMETER(uint32, DispMode)
+	SHADER_PARAMETER(uint32, LineAxis)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, DstRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, DstRO)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float2>, UVRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float2>, UVRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float2>, FsPrevRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float2>, FsTRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float2>, FsTRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float2>, DispRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float2>, DispRO)
 END_SHADER_PARAMETER_STRUCT()
 
 #define GRID_SHADER(ClassName, EntryPoint) \
@@ -69,10 +82,16 @@ GRID_SHADER(FSandGridFaceYCS,  "FaceYCS")
 GRID_SHADER(FSandGridDtCS,     "DtCS")
 GRID_SHADER(FSandGridDrainCS,  "DrainCS")
 GRID_SHADER(FSandGridUpdateCS, "UpdateCS")
+GRID_SHADER(FSandGridBreakCS,  "BreakCS")
+GRID_SHADER(FSandGridToUCS,    "ToUCS")
+GRID_SHADER(FSandGridDispCS,   "DispCS")
+GRID_SHADER(FSandGridSolveCS,  "SolveCS")
+GRID_SHADER(FSandGridFixCS,    "FixCS")
 
 struct FSandGridGpu::FState
 {
 	TRefCountPtr<FRDGPooledBuffer> BCorner, U0, U1, Level, FX, FY, Drain, AMax, Time, Waves;
+	TRefCountPtr<FRDGPooledBuffer> Dst, UV0, UV1, FsPrev, FsT, Disp;   // T3c 분산
 	FRHIGPUBufferReadback DlU{ TEXT("SandGrid.DlU") }, DlTime{ TEXT("SandGrid.DlTime") };
 	FRenderQueryRHIRef Ts[2];
 };
@@ -110,6 +129,7 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 {
 	Params = In;
 	if (Params.EpsDesing <= 0.f) { Params.EpsDesing = FMath::Pow(FMath::Max(In.Dx, In.Dy), 4.f); }
+	if (Params.bDispersive && (In.NX > 1024 || In.NY > 1024)) { UE_LOG(LogTemp, Warning, TEXT("SandGrid: 분산은 줄 길이 1024 까지 (SolveCS 그룹 하나) — 끔")); Params.bDispersive = false; }
 	const int32 N = In.NX * In.NY;
 	TArray<FVector4f> U; U.SetNum(N);
 	for (int32 k = 0; k < N; ++k) { U[k] = FVector4f(In.W[k], In.HU[k], In.HV[k], 0.f); }
@@ -129,7 +149,13 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 		S->FY = MakeBuffer(GraphBuilder, sizeof(FVector4f), NX * (NY + 1), TEXT("SandGrid.FaceY"));
 		S->Drain = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.Drain"));
 		S->AMax = MakeBuffer(GraphBuilder, sizeof(uint32), 1, TEXT("SandGrid.AMax"));
-		S->Time = MakeBuffer(GraphBuilder, sizeof(float), 4, TEXT("SandGrid.Time"));
+		S->Time = MakeBuffer(GraphBuilder, sizeof(float), 5, TEXT("SandGrid.Time"));
+		S->Dst = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.Dst"));
+		S->UV0 = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.UV0"));
+		S->UV1 = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.UV1"));
+		S->FsPrev = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.FsPrev"));
+		S->FsT = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.FsT"));
+		S->Disp = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.Disp"));
 		S->Waves = MakeBuffer(GraphBuilder, sizeof(FVector4f), Wv.Num(), TEXT("SandGrid.Waves"), Wv.GetData());
 		GraphBuilder.Execute();
 		if (!S->Ts[0].IsValid()) { for (FRenderQueryRHIRef& Q : S->Ts) { Q = RHICreateRenderQuery(RQT_AbsoluteTime); } }
@@ -181,15 +207,47 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 			B.BCorner = GraphBuilder.CreateSRV(BC);
 			B.bOpenEast = P.bOpenEast ? 1u : 0u; B.SeaLevel = P.SeaLevel; B.BoundaryDepth = P.BoundaryDepth; B.NumWaves = P.Waves.Num(); B.bPeriodicY = P.bPeriodicY ? 1u : 0u; B.IgGain = P.IgGain;
 			B.Waves = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Waves));
+			B.bDispersive = P.bDispersive ? 1u : 0u; B.BreakRatio = P.BreakRatio;
+			FRDGBufferRef Ds = GraphBuilder.RegisterExternalBuffer(S->Dst);
+			FRDGBufferRef UV0 = GraphBuilder.RegisterExternalBuffer(S->UV0), UV1 = GraphBuilder.RegisterExternalBuffer(S->UV1);
+			FRDGBufferRef FsP = GraphBuilder.RegisterExternalBuffer(S->FsPrev), FsT = GraphBuilder.RegisterExternalBuffer(S->FsT);
+			FRDGBufferRef Dp = GraphBuilder.RegisterExternalBuffer(S->Disp);
+			// 분산 패스 (CPU StepBoussinesq 순서). In = (w, P, Q) 상태
+			auto AddDisp = [&](FRDGBufferRef In, uint32 Mode)
+			{
+				FSandGridParams X = B; X.DispMode = Mode;
+				X.URO = GraphBuilder.CreateSRV(In); X.DstRO = GraphBuilder.CreateSRV(Ds); X.DispRW = GraphBuilder.CreateUAV(Dp);
+				X.TimeRO = GraphBuilder.CreateSRV(Tm); X.FsPrevRW = GraphBuilder.CreateUAV(FsP); X.FsTRW = GraphBuilder.CreateUAV(FsT);
+				AddGridPass<FSandGridDispCS>(GraphBuilder, RDG_EVENT_NAME("SandGridDisp"), ShaderMap, X, FIntVector(FMath::DivideAndRoundUp(P.NX, 8), FMath::DivideAndRoundUp(P.NY, 8), 1));
+			};
+			auto AddSolve = [&](FRDGBufferRef UV, FRDGBufferRef Target)   // UV → Target.yz (행 · 열 삼중대각)
+			{
+				for (uint32 Ax = 0; Ax < 2; ++Ax)
+				{
+					FSandGridParams X = B; X.LineAxis = Ax;
+					X.DstRO = GraphBuilder.CreateSRV(Ds); X.UVRO = GraphBuilder.CreateSRV(UV); X.UOutRW = GraphBuilder.CreateUAV(Target);
+					AddGridPass<FSandGridSolveCS>(GraphBuilder, RDG_EVENT_NAME("SandGridSolve"), ShaderMap, X, FIntVector(Ax == 0 ? P.NY : P.NX, 1, 1));
+				}
+			};
 			const FIntVector GC(FMath::DivideAndRoundUp(P.NX, 8), FMath::DivideAndRoundUp(P.NY, 8), 1);
 			const FIntVector GX(FMath::DivideAndRoundUp(P.NX + 1, 8), FMath::DivideAndRoundUp(P.NY, 8), 1);
 			const FIntVector GY(FMath::DivideAndRoundUp(P.NX, 8), FMath::DivideAndRoundUp(P.NY + 1, 8), 1);
 			for (int32 n = 0; n < NumSub; ++n)
 			{
+				if (P.bDispersive)
+				{
+					// 쇄파 판정 → d · U = P − … (ToU) · 분산 항 + F*_t (지난 Δt 로 외삽). 1 단계 P, Q 는 U0 의 것 그대로 (CPU 는 SolveP(ToU(P)) = P)
+					FSandGridParams X = B; X.URO = GraphBuilder.CreateSRV(U0); X.DstRW = GraphBuilder.CreateUAV(Ds);
+					AddGridPass<FSandGridBreakCS>(GraphBuilder, RDG_EVENT_NAME("SandGridBreak"), ShaderMap, X, GC);
+					FSandGridParams Y = B; Y.URO = GraphBuilder.CreateSRV(U0); Y.DstRO = GraphBuilder.CreateSRV(Ds); Y.UVRW = GraphBuilder.CreateUAV(UV0);
+					AddGridPass<FSandGridToUCS>(GraphBuilder, RDG_EVENT_NAME("SandGridToU"), ShaderMap, Y, GC);
+					AddDisp(U0, 1);
+				}
 				for (uint32 Stage = 1; Stage <= 2; ++Stage)
 				{
 					FRDGBufferRef In = Stage == 1 ? U0 : U1;
 					FRDGBufferRef Out = Stage == 1 ? U1 : U0;
+					if (P.bDispersive && Stage == 2) { AddSolve(UV1, U1); AddDisp(U1, 2); }
 					FSandGridParams L = B; L.Stage = Stage;
 					L.URO = GraphBuilder.CreateSRV(In);
 					L.LevelRW = GraphBuilder.CreateUAV(Lv);
@@ -222,6 +280,9 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 					Up.FaceXRO = GraphBuilder.CreateSRV(FX); Up.FaceYRO = GraphBuilder.CreateSRV(FY);
 					Up.DrainRO = GraphBuilder.CreateSRV(Dr);
 					Up.TimeRO = GraphBuilder.CreateSRV(Tm);
+					// 분산 버퍼 — 얕은 물만일 때도 묶는다 (셰이더가 분기 안에서 참조)
+					Up.DispRO = GraphBuilder.CreateSRV(Dp); Up.FsTRO = GraphBuilder.CreateSRV(FsT);
+					Up.UVRO = GraphBuilder.CreateSRV(Stage == 1 ? UV0 : UV1); Up.UVRW = GraphBuilder.CreateUAV(Stage == 1 ? UV1 : UV0);
 					if (Stage == 2)
 					{
 						// 2 단계: U0 = ½(U0 + U1 + Δt·L(U1)) — U0 를 읽으며 쓴다 → 임시에 쓰고 복사
@@ -229,6 +290,12 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 						Up.UOutRW = GraphBuilder.CreateUAV(Tmp);
 						AddGridPass<FSandGridUpdateCS>(GraphBuilder, RDG_EVENT_NAME("SandGridUpdate2"), ShaderMap, Up, GC);
 						AddCopyBufferPass(GraphBuilder, U0, Tmp);
+						if (P.bDispersive)
+						{
+							AddSolve(UV0, U0);
+							FSandGridParams X = B; X.TimeRO = GraphBuilder.CreateSRV(Tm); X.UOutRW = GraphBuilder.CreateUAV(U0);
+							AddGridPass<FSandGridFixCS>(GraphBuilder, RDG_EVENT_NAME("SandGridFix"), ShaderMap, X, GC);
+						}
 					}
 					else
 					{

@@ -52,7 +52,21 @@ StructuredBuffer<float>    DrainRO;
 RWStructuredBuffer<uint>   AMaxRW;   // [0] 최대 a/Δ 의 float 비트 (양수라 uint 순서 = float 순서)
 StructuredBuffer<uint>     AMaxRO;
 RWStructuredBuffer<float>  TimeRW;   // [0] 이번 Δt · [1] 남은 시간 · [2] 쓴 시간 합
-StructuredBuffer<float>    TimeRO;
+StructuredBuffer<float>    TimeRO;   // [4] 지난 서브스텝 Δt (분산 F* 시간 외삽)
+// T3c Boussinesq 분산 (CPU StepBoussinesq 와 같은 식, papers D-M3-9). 상태 U.yz = P, Q (유량), 시간 적분은 UV = (U, V) 로
+uint  bDispersive;
+float BreakRatio;
+uint  DispMode;          // DispCS — 1: 서브스텝 처음 (F*_t 외삽 · F* 저장도) · 2: 2 단계 입력
+uint  LineAxis;          // SolveCS — 0: 행 (P ← U) · 1: 열 (Q ← V)
+RWStructuredBuffer<float>  DstRW;     // 정지 수심 d (쇄파 칸 0)
+StructuredBuffer<float>    DstRO;
+StructuredBuffer<float2>   UVRO;
+RWStructuredBuffer<float2> UVRW;
+RWStructuredBuffer<float2> FsPrevRW;  // 지난 서브스텝 F*, G*
+RWStructuredBuffer<float2> FsTRW;     // F*_t, G*_t
+StructuredBuffer<float2>   FsTRO;
+RWStructuredBuffer<float2> DispRW;    // η 분산 항 (x, y)
+StructuredBuffer<float2>   DispRO;
 
 uint Idx(uint i, uint j) { return j * NX + i; }
 float Bc(uint ci, uint cj) { return BCorner[cj * (NX + 1) + ci]; }
@@ -260,7 +274,8 @@ void DtCS(uint3 Tid : SV_DispatchThreadID)
 	TimeRW[0] = Dt;
 	TimeRW[1] = Rem - Dt;
 	TimeRW[2] = TimeRW[2] + Dt;
-	TimeRW[3] = max(TimeRW[3], A);   // 이번 Advance 의 최대 a/Δ — CPU 가 다음 프레임 서브스텝 수를 정한다
+	TimeRW[3] = max(TimeRW[3], A);
+	TimeRW[4] = Dt;   // 이번 Advance 의 최대 a/Δ — CPU 가 다음 프레임 서브스텝 수를 정한다
 }
 
 [numthreads(8, 8, 1)]
@@ -313,8 +328,169 @@ void UpdateCS(uint3 Tid : SV_DispatchThreadID)
 	}
 	const float4 U = URO[k];
 	float4 O;
+	if (bDispersive != 0u)
+	{
+		// U · V 를 적분 (1 단계: UVRO = UV0 → UVRW = UV1 · 2 단계: UVRO = UV1, UVRW = UV0 제자리). P, Q 는 뒤 SolveCS 가, 마른 칸 · 마찰은 FixCS 가
+		const float2 Dd = L.yz + DispRO[k] + FsTRO[k];
+		if (Stage == 1) { O = float4(U.x + Dt * L.x, 0.f, 0.f, 0.f); UVRW[k] = UVRO[k] + Dt * Dd; }
+		else            { O = float4(0.5f * (U0RO[k].x + U.x + Dt * L.x), 0.f, 0.f, 0.f); UVRW[k] = 0.5f * (UVRW[k] + UVRO[k] + Dt * Dd); }
+		UOutRW[k] = O;
+		return;
+	}
 	if (Stage == 1) { O = float4(U.xyz + Dt * L, 0.f); }
 	else            { const float4 A = U0RO[k]; O = float4(0.5f * (A.xyz + U.xyz + Dt * L), 0.f); }
+	const float h = O.x - BCell(i, j);
+	if (h < HDry) { O.y = 0.f; O.z = 0.f; }
+	else if (Manning > 0.f)
+	{
+		const float Uv = sqrt(O.y * O.y + O.z * O.z) / h;
+		const float Dn = 1.f + Dt * Gravity * Manning * Manning * Uv / pow(h, 4.f / 3.f);
+		O.y /= Dn; O.z /= Dn;
+	}
+	UOutRW[k] = O;
+}
+
+// ---------------------------------------------------------------------------------------------
+// T3c — Madsen & Sørensen (1992) Boussinesq (Celeris 방식). CPU FSandGridCpu::Dst · ToU · SolveP · Dispersion 과 같은 식
+static const float BMS = 1.f / 15.f;
+
+float DstAt(int i, int j) { return DstRO[Idx((uint)clamp(i, 0, (int)NX - 1), (uint)clamp(j, 0, (int)NY - 1))]; }
+
+[numthreads(8, 8, 1)]
+void BreakCS(uint3 Tid : SV_DispatchThreadID)
+{
+	// 쇄파 판정 (Tonelli & Petti 2009): |η|/h > BreakRatio → d = 0 (얕은 물로)
+	const uint i = Tid.x, j = Tid.y;
+	if (i >= NX || j >= NY) { return; }
+	const float w = URO[Idx(i, j)].x, Bm = BCell(i, j), h = w - Bm;
+	const bool bBrk = BreakRatio > 0.f && h > HDry && abs(w - SeaLevel) / h > BreakRatio;
+	DstRW[Idx(i, j)] = bBrk ? 0.f : max(0.f, SeaLevel - Bm);
+}
+
+float2 PQWall(int i, int j, uint Axis)   // 벽 거울 (수직 유량 부호 반대) — CPU ToU 의 At
+{
+	float S = 1.f;
+	if (Axis == 0) { if (i < 0) { i = -1 - i; S = -1.f; } else if (i >= (int)NX) { i = 2 * (int)NX - 1 - i; S = -1.f; } }
+	else           { if (j < 0) { j = -1 - j; S = -1.f; } else if (j >= (int)NY) { j = 2 * (int)NY - 1 - j; S = -1.f; } }
+	return S * URO[Idx((uint)clamp(i, 0, (int)NX - 1), (uint)clamp(j, 0, (int)NY - 1))].yz;
+}
+
+[numthreads(8, 8, 1)]
+void ToUCS(uint3 Tid : SV_DispatchThreadID)
+{
+	// U = P − (B+⅓)d²P_xx − ⅓·d·d_x·P_x (V 는 y 꼴)
+	const uint i = Tid.x, j = Tid.y;
+	if (i >= NX || j >= NY) { return; }
+	const int ii = (int)i, jj = (int)j;
+	const float d = DstAt(ii, jj), dx = (DstAt(ii + 1, jj) - DstAt(ii - 1, jj)) / (2 * Dx), dy = (DstAt(ii, jj + 1) - DstAt(ii, jj - 1)) / (2 * Dy);
+	const float b = (BMS + 1.f / 3.f) * d * d;
+	const float2 C = URO[Idx(i, j)].yz;
+	const float Pe = PQWall(ii + 1, jj, 0).x, Pw = PQWall(ii - 1, jj, 0).x, Qn = PQWall(ii, jj + 1, 1).y, Qs = PQWall(ii, jj - 1, 1).y;
+	UVRW[Idx(i, j)] = float2(C.x - b * (Pe - 2 * C.x + Pw) / (Dx * Dx) - d * dx / 3.f * (Pe - Pw) / (2 * Dx),
+	                         C.y - b * (Qn - 2 * C.y + Qs) / (Dy * Dy) - d * dy / 3.f * (Qn - Qs) / (2 * Dy));
+}
+
+float EtaAt(int i, int j) { return URO[Idx((uint)clamp(i, 0, (int)NX - 1), (uint)clamp(j, 0, (int)NY - 1))].x - SeaLevel; }
+float HAt(int i, int j) { const uint a = (uint)clamp(i, 0, (int)NX - 1), b = (uint)clamp(j, 0, (int)NY - 1); return URO[Idx(a, b)].x - BCell(a, b); }
+float2 PQAt(int i, int j) { return URO[Idx((uint)clamp(i, 0, (int)NX - 1), (uint)clamp(j, 0, (int)NY - 1))].yz; }
+
+[numthreads(8, 8, 1)]
+void DispCS(uint3 Tid : SV_DispatchThreadID)
+{
+	// η 분산 항 + F*, G*. 이웃 ±2 칸이 다 젖은 곳에서만 (물가는 얕은 물로)
+	const uint i = Tid.x, j = Tid.y;
+	if (i >= NX || j >= NY) { return; }
+	const uint k = Idx(i, j);
+	const int ii = (int)i, jj = (int)j;
+	float2 Ds = 0, Fs = 0;
+	const float d = DstAt(ii, jj);
+	bool bWet = d > 0.f;
+	for (int o = -2; o <= 2; ++o) { bWet = bWet && HAt(ii + o, jj) > HDry && HAt(ii, jj + o) > HDry; }
+	if (bWet)
+	{
+		const float dx = (DstAt(ii + 1, jj) - DstAt(ii - 1, jj)) / (2 * Dx), dy = (DstAt(ii, jj + 1) - DstAt(ii, jj - 1)) / (2 * Dy);
+		const float E = EtaAt(ii, jj);
+		const float Ee = EtaAt(ii + 1, jj), Ew = EtaAt(ii - 1, jj), En = EtaAt(ii, jj + 1), Es = EtaAt(ii, jj - 1);
+		const float Ene = EtaAt(ii + 1, jj + 1), Enw = EtaAt(ii - 1, jj + 1), Ese = EtaAt(ii + 1, jj - 1), Esw = EtaAt(ii - 1, jj - 1);
+		const float Exx = (Ee - 2 * E + Ew) / (Dx * Dx), Eyy = (En - 2 * E + Es) / (Dy * Dy);
+		const float Exy = (Ene - Enw - Ese + Esw) / (4 * Dx * Dy);
+		const float Exxx = (EtaAt(ii + 2, jj) - 2 * Ee + 2 * Ew - EtaAt(ii - 2, jj)) / (2 * Dx * Dx * Dx);
+		const float Eyyy = (EtaAt(ii, jj + 2) - 2 * En + 2 * Es - EtaAt(ii, jj - 2)) / (2 * Dy * Dy * Dy);
+		const float Exyy = ((Ene - 2 * Ee + Ese) - (Enw - 2 * Ew + Esw)) / (2 * Dx * Dy * Dy);
+		const float Exxy = ((Ene - 2 * En + Enw) - (Ese - 2 * Es + Esw)) / (2 * Dx * Dx * Dy);
+		const float g = Gravity;
+		Ds.x = BMS * g * d * d * d * (Exxx + Exyy) + BMS * g * d * d * (dx * (2 * Exx + Eyy) + dy * Exy);
+		Ds.y = BMS * g * d * d * d * (Eyyy + Exxy) + BMS * g * d * d * (dy * (2 * Eyy + Exx) + dx * Exy);
+		const float2 Cne = PQAt(ii + 1, jj + 1), Cnw = PQAt(ii - 1, jj + 1), Cse = PQAt(ii + 1, jj - 1), Csw = PQAt(ii - 1, jj - 1);
+		const float2 Cxy = (Cne - Cnw - Cse + Csw) / (4 * Dx * Dy);
+		const float2 Cx = (PQAt(ii + 1, jj) - PQAt(ii - 1, jj)) / (2 * Dx), Cy = (PQAt(ii, jj + 1) - PQAt(ii, jj - 1)) / (2 * Dy);
+		Fs.x = (BMS + 1.f / 3.f) * d * d * Cxy.y + d * dx / 6.f * Cy.y + d * dy / 6.f * Cx.y;
+		Fs.y = (BMS + 1.f / 3.f) * d * d * Cxy.x + d * dy / 6.f * Cx.x + d * dx / 6.f * Cy.x;
+	}
+	DispRW[k] = Ds;
+	if (DispMode == 1u)
+	{
+		const float DtP = TimeRO[4];
+		FsTRW[k] = DtP > 0.f ? (Fs - FsPrevRW[k]) / DtP : float2(0.f, 0.f);
+		FsPrevRW[k] = Fs;
+	}
+}
+
+// 삼중대각 — 행 · 열 하나를 그룹 하나가 병렬 순환 축소 (PCR, Zhang et al. 2010) 로. 줄 길이 ≤ 1024, 벽 경계 (바깥 칸 = −안쪽)
+#define LINE_MAX 1024
+groupshared float SA[LINE_MAX], SB[LINE_MAX], SC[LINE_MAX], SD[LINE_MAX];
+
+[numthreads(LINE_MAX, 1, 1)]
+void SolveCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
+{
+	const uint Line = Gid.x, t = Gtid.x;
+	const uint N = LineAxis == 0 ? NX : NY;
+	float a = 0.f, b = 1.f, c = 0.f, r = 0.f;
+	if (t < N)
+	{
+		const int i = LineAxis == 0 ? (int)t : (int)Line, j = LineAxis == 0 ? (int)Line : (int)t;
+		const float D = LineAxis == 0 ? Dx : Dy;
+		const float d = DstAt(i, j);
+		const float dd = LineAxis == 0 ? (DstAt(i + 1, j) - DstAt(i - 1, j)) / (2 * D) : (DstAt(i, j + 1) - DstAt(i, j - 1)) / (2 * D);
+		const float bb = (BMS + 1.f / 3.f) * d * d / (D * D), aa = d * dd / 3.f / (2 * D);
+		a = -bb + aa; b = 1 + 2 * bb; c = -bb - aa;
+		if (t == 0) { b -= a; a = 0.f; }
+		if (t == N - 1) { b -= c; c = 0.f; }
+		const float2 UV = UVRO[Idx((uint)i, (uint)j)];
+		r = LineAxis == 0 ? UV.x : UV.y;
+	}
+	SA[t] = a; SB[t] = b; SC[t] = c; SD[t] = r;
+	GroupMemoryBarrierWithGroupSync();
+	for (uint s = 1; s < LINE_MAX; s <<= 1)
+	{
+		float am = 0.f, bm = 1.f, cm = 0.f, dm = 0.f, ap = 0.f, bp = 1.f, cp = 0.f, dp = 0.f;
+		if (t >= s) { am = SA[t - s]; bm = SB[t - s]; cm = SC[t - s]; dm = SD[t - s]; }
+		if (t + s < LINE_MAX) { ap = SA[t + s]; bp = SB[t + s]; cp = SC[t + s]; dp = SD[t + s]; }
+		const float k1 = a / bm, k2 = c / bp;
+		const float na = -am * k1, nc = -cp * k2, nb = b - cm * k1 - ap * k2, nd = r - dm * k1 - dp * k2;
+		a = na; b = nb; c = nc; r = nd;
+		GroupMemoryBarrierWithGroupSync();
+		SA[t] = a; SB[t] = b; SC[t] = c; SD[t] = r;
+		GroupMemoryBarrierWithGroupSync();
+	}
+	if (t < N)
+	{
+		const uint k = LineAxis == 0 ? Idx(t, Line) : Idx(Line, t);
+		float4 O = UOutRW[k];
+		if (LineAxis == 0) { O.y = r / b; } else { O.z = r / b; }
+		UOutRW[k] = O;
+	}
+}
+
+[numthreads(8, 8, 1)]
+void FixCS(uint3 Tid : SV_DispatchThreadID)
+{
+	// 서브스텝 끝 (분산): 얕은 칸 운동량 0 · Manning 암시적 — CPU FixDry 와 같다
+	const uint i = Tid.x, j = Tid.y;
+	if (i >= NX || j >= NY) { return; }
+	const uint k = Idx(i, j);
+	const float Dt = TimeRO[0];
+	float4 O = UOutRW[k];
 	const float h = O.x - BCell(i, j);
 	if (h < HDry) { O.y = 0.f; O.z = 0.f; }
 	else if (Manning > 0.f)

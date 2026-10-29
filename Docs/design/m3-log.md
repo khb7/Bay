@@ -166,3 +166,13 @@
 - 쇄파 전 (t=15) 은 Boussinesq 가 낫고, 처오름 구간은 얕은 물 단독 (2~3%) 보다 4~5% — 쇄파 전환 뒤 소산은 여전히 조금 모자라고 격자가 고울수록 앞 끝이 더 간다. t=20 오차는 어떤 설정이든 11% — 쇄파 시점 근처 구조적 차이.
 - 판단: 이 시험(H/d 0.3 고립파, 강한 쇄파)에서 오차 4~5% 는 받아들일 수준으로 두고 진행 (기본 BreakRatio 0.8 · Manning 0.01 실험 / 게임 모래 0.025). 남는 개선 후보 — Kennedy et al. (2000) 와점성 쇄파, 전환 칸 주변 이웃까지 넓히기 — 는 c5 (영역 확장) 결과를 보고.
 - 다음: c3 GPU 판 (삼중대각 cyclic reduction) → c4 바깥 경계 입사 (불규칙 + 2 차 묶인 IG) → c5 영역 확장 · T3b 기준. 그 뒤 **최적화 (사용자 요청)**.
+
+## 실행 #10 — T3c c3 GPU 분산 (2026-10-29)
+- `SandGrid.usf` 에 BreakCS (쇄파 판정 → d) · ToUCS · DispCS (η 분산 항 + F* 외삽) · SolveCS (행 · 열 삼중대각, **PCR** — Zhang et al. 2010, 그룹 하나 = 줄 하나, groupshared 1024) · FixCS. `FSandGridGpuInit::bDispersive / BreakRatio`.
+- 서브스텝 순서 = CPU `StepBoussinesq`: 쇄파 판정 → ToU → 분산 (F*_t 는 지난 Δt, Time[4]) → 1 단계 (P, Q 는 U0 그대로) → SolveP(UV1) → 2 단계 → SolveP(UV0) → 마른 칸 · Manning.
+- 제한: 줄 길이 ≤ 1024. 삼중대각 · ToU 경계는 벽 — 열린 동쪽 · 주기 y 근처 처리는 c4.
+- `-gridtest -gridgpu -gridbous -AllowCommandletRendering`:
+  - CPU ↔ GPU 동적 대조 (2D 해변 + 물 더미, 분산): 최대 |Δw| 2~9e-6 m, |Δq| 1e-5 미만 — float 수준. 부피 변화 GPU 6e-8.
+  - GPU 정상파 주기 / Airy: kd 0.5 / 1 / 2 / 3 → 0.997 / 0.997 / 0.993 / 0.978 (CPU 0.998 / 0.998 / 0.994 / 0.978).
+  - 비용 (서브스텝 1 회): 512² 얕은 물 1.58 → 분산 3.42 ms · 1024² 3.05 → 4.96 ms. 512² 에서 SolveCS 가 1024 스레드 그룹 절반을 놀린다 — 최적화 때.
+- 다음: c4 바깥 경계 입사 (조사 먼저).

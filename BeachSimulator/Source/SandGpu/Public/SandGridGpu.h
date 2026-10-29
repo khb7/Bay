@@ -20,6 +20,8 @@ struct FSandGridGpuInit
 	TArray<FVector4f> Waves;        // (a, ω, φ, k_y) 성분 — 입사 η(y, t) = Σ a·cos(φ + k_y·y − ωt)
 	bool  bPeriodicY = false;       // 해안선 방향 주기 경계 (끄면 벽)
 	float IgGain = 0.f;             // T3b 장주기파: η_IG = IgGain·(A² − Σa²), A = 성분 포락선. 0 이면 끔
+	bool  bDispersive = false;      // T3c Madsen & Sørensen 1992 Boussinesq (Celeris 방식). 줄 길이 ≤ 1024, 경계는 벽으로 (열린 · 주기 경계 근처 처리는 c4)
+	float BreakRatio = 0.8f;        // 쇄파 전환 |η|/h (Tonelli & Petti 2009). 0 이면 끔
 	TArray<float> BCorner;          // (NX+1)·(NY+1)
 	TArray<float> W, HU, HV;        // NX·NY
 };

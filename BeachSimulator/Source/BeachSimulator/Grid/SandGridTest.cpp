@@ -373,14 +373,16 @@ namespace
 	{
 		FSandGridGpuInit G;
 		G.NX = S.NX; G.NY = S.NY; G.Dx = (float)S.Dx; G.Dy = (float)S.Dy; G.HDry = (float)S.HDry; G.bWetDry = S.bWetDry; G.Manning = (float)S.Manning;
+		G.SeaLevel = (float)S.SeaLevel; G.bDispersive = S.bDispersive; G.BreakRatio = (float)S.BreakRatio;
 		for (double v : S.BCorner) { G.BCorner.Add((float)v); }
 		for (int32 k = 0; k < S.W.Num(); ++k) { G.W.Add((float)S.W[k]); G.HU.Add((float)S.HU[k]); G.HV.Add((float)S.HV[k]); }
 		return G;
 	}
 
-	void CompareDynamic()
+	void CompareDynamic(bool bDisp = false)
 	{
 		FSandGridCpu C; Apply(C);
+		C.bDispersive = bDisp; C.SeaLevel = 0.3;   // 정지 수면 = BeachScene 의 L
 		BeachScene(C, 80, 60, 0.05, true);
 		FSandGridGpu G; G.Init(ToGpu(C));
 		const double V0 = C.TotalVolume();
@@ -400,8 +402,8 @@ namespace
 				VG += W[k] - C.BCell(i, j);
 			}
 			VG *= C.Dx * C.Dy;
-			UE_LOG(LogSandGrid, Display, TEXT("G① 동적 대조 %.1fs: 최대 |Δw| %.2e m · 최대 |Δq| %.2e (|q| 최대 %.2e) · 부피 변화 CPU %.1e / GPU %.1e"),
-				Chunk * 250 * Dt, DW, DQ, QMax, (C.TotalVolume() - V0) / V0, (VG - V0) / V0);
+			UE_LOG(LogSandGrid, Display, TEXT("G①%s 동적 대조 %.1fs: 최대 |Δw| %.2e m · 최대 |Δq| %.2e (|q| 최대 %.2e) · 부피 변화 CPU %.1e / GPU %.1e"),
+				bDisp ? TEXT(" (분산)") : TEXT(""), Chunk * 250 * Dt, DW, DQ, QMax, (C.TotalVolume() - V0) / V0, (VG - V0) / V0);
 		}
 	}
 
@@ -454,9 +456,35 @@ namespace
 		UE_LOG(LogSandGrid, Display, TEXT("G③ GPU Synolakis H/d %.4f · Δx %.3f: R/d %.4f · 법칙 %.4f · 비 %.3f"), Hd, Dx, Run, Law, Run / Law);
 	}
 
-	void GpuCost(int32 Size)
+	// c3 — GPU 분산 관계 (CPU StandingWave 와 같은 상자, float)
+	void GpuStandingWave(double Kd)
+	{
+		const double d = 1.0, k = Kd / d, Lam = UE_TWO_PI / k, Dx = Lam / 40.0;
+		FSandGridCpu S; Apply(S); S.bDispersive = true; S.SeaLevel = 0.0; S.bWetDry = true;
+		const int32 NX = 80;
+		S.Init(NX, 1, Dx, Dx);
+		for (int32 j = 0; j <= 1; ++j) { for (int32 i = 0; i <= NX; ++i) { S.BCorner[j * (NX + 1) + i] = -d; } }
+		for (int32 i = 0; i < NX; ++i) { S.W[i] = 0.002 * FMath::Cos(k * (i + 0.5) * Dx); }
+		const double Om = FMath::Sqrt(9.81 * k * FMath::Tanh(Kd)), Tth = UE_TWO_PI / Om, Dt = Tth / 400.0;
+		FSandGridGpu G; G.Init(ToGpu(S));
+		double T = 0, Prev = S.W[0], Tz0 = -1, Tz1 = -1; int32 Nz = 0;
+		TArray<float> W, HU, HV;
+		while (T < 6.5 * Tth)
+		{
+			G.StepFixed((float)Dt, 4); T += 4 * Dt;   // 4 스텝마다 읽어 영점 교차 (주기 400 스텝 — 1% 분해)
+			G.Download(W, HU, HV);
+			const double E = W[0];
+			if ((Prev > 0) != (E > 0)) { if (Nz == 0) { Tz0 = T; } Tz1 = T; ++Nz; }
+			Prev = E;
+		}
+		const double Tsim = Nz > 1 ? 2.0 * (Tz1 - Tz0) / (Nz - 1) : 0.0;
+		UE_LOG(LogSandGrid, Display, TEXT("c3 GPU 정상파 kd %.1f Boussinesq: 주기 %.4f s · Airy %.4f (비 %.3f)"), Kd, Tsim, Tth, Tsim / Tth);
+	}
+
+	void GpuCost(int32 Size, bool bDisp = false)
 	{
 		FSandGridCpu C; Apply(C);   // 지형 · 초기값만 (CPU 로 풀지 않는다)
+		C.bDispersive = bDisp; C.SeaLevel = 0.0;
 		C.Init(Size, Size, 0.05, 0.05);
 		const double Lx = Size * 0.05;
 		for (int32 j = 0; j <= Size; ++j) for (int32 i = 0; i <= Size; ++i) { C.BCorner[j * (Size + 1) + i] = 1.0 - 2.0 * (i * 0.05) / Lx + 0.05 * FMath::Sin(0.7 * j * 0.05); }   // 2m 내려가는 해변
@@ -464,7 +492,7 @@ namespace
 		FSandGridGpu G; G.Init(ToGpu(C));
 		G.StepFixed(0.002f, 4);   // 셰이더 데우기
 		G.StepFixed(0.002f, 20);
-		UE_LOG(LogSandGrid, Display, TEXT("G④ GPU 비용 %d² (칸 5cm, %.0fm): 서브스텝 20 회 %.2f ms → 1 회 %.3f ms"), Size, Lx, G.LastGpuMs(), G.LastGpuMs() / 20.f);
+		UE_LOG(LogSandGrid, Display, TEXT("G④%s GPU 비용 %d² (칸 5cm, %.0fm): 서브스텝 20 회 %.2f ms → 1 회 %.3f ms"), bDisp ? TEXT(" (분산)") : TEXT(""), Size, Lx, G.LastGpuMs(), G.LastGpuMs() / 20.f);
 	}
 }
 
@@ -472,6 +500,13 @@ int32 RunSandGridGpuTest(const FString& Params)
 {
 	GOpt = FOpt();
 	FParse::Value(*Params, TEXT("gridmanning="), GOpt.N);
+	if (FParse::Param(*Params, TEXT("gridbous")))
+	{
+		CompareDynamic(true);
+		for (double Kd : { 0.5, 1.0, 2.0, 3.0 }) { GpuStandingWave(Kd); }
+		GpuCost(512, false); GpuCost(512, true); GpuCost(1024, false); GpuCost(1024, true);
+		return 0;
+	}
 	CompareDynamic();
 	GpuLake();
 	GpuSynolakis(0.0185, 0.05);
