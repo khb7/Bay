@@ -254,8 +254,148 @@ void FSandGridCpu::FixDry(TArray<double>& Wi, TArray<double>& HUi, TArray<double
 	}
 }
 
+// ------------------------------------------------------------------------------------------------
+// T3c — Madsen & Sørensen (1992) 확장 Boussinesq 분산 (Celeris, papers D-M3-9). Wei & Kirby 재배치:
+//   U = P − (B+⅓)d²P_xx − ⅓·d·d_x·P_x  (행마다 삼중대각으로 P 를 되찾는다), V 는 y 방향 같은 꼴
+//   U_t = [KP07 우변] + B·g·d³(η_xxx+η_xyy) + B·g·d²·d_x(2η_xx+η_yy) + B·g·d²·d_y·η_xy + F*_t
+//   F* = (B+⅓)d²Q_xy + ⅙·d·d_x·Q_y + ⅙·d·d_y·Q_x (G* 는 대칭) — 지난 스텝 값과의 차로 시간 외삽
+// d = 정지 수심 (SeaLevel − B, 땅은 0 → 얕은 물로 저절로)
+namespace { const double BMS = 1.0 / 15.0; }
+
+double FSandGridCpu::Dst(int32 i, int32 j) const
+{
+	i = FMath::Clamp(i, 0, NX - 1); j = FMath::Clamp(j, 0, NY - 1);
+	return FMath::Max(0.0, SeaLevel - BCell(i, j));
+}
+
+void FSandGridCpu::ToU(const TArray<double>& P, const TArray<double>& Q, TArray<double>& OutU, TArray<double>& OutV) const
+{
+	OutU.SetNum(NX * NY); OutV.SetNum(NX * NY);
+	auto At = [&](const TArray<double>& A, int32 i, int32 j, bool bX)   // 벽 거울 (수직 유량 부호 반대)
+	{
+		double S = 1.0;
+		if (bX) { if (i < 0) { i = -1 - i; S = -1; } else if (i >= NX) { i = 2 * NX - 1 - i; S = -1; } }
+		else    { if (j < 0) { j = -1 - j; S = -1; } else if (j >= NY) { j = 2 * NY - 1 - j; S = -1; } }
+		return S * A[Idx(FMath::Clamp(i, 0, NX - 1), FMath::Clamp(j, 0, NY - 1))];
+	};
+	for (int32 j = 0; j < NY; ++j)
+	for (int32 i = 0; i < NX; ++i)
+	{
+		const double d = Dst(i, j), dx = (Dst(i + 1, j) - Dst(i - 1, j)) / (2 * Dx), dy = (Dst(i, j + 1) - Dst(i, j - 1)) / (2 * Dy);
+		const double b = (BMS + 1.0 / 3.0) * d * d;
+		const int32 k = Idx(i, j);
+		OutU[k] = P[k] - b * (At(P, i + 1, j, true) - 2 * P[k] + At(P, i - 1, j, true)) / (Dx * Dx) - d * dx / 3.0 * (At(P, i + 1, j, true) - At(P, i - 1, j, true)) / (2 * Dx);
+		OutV[k] = Q[k] - b * (At(Q, i, j + 1, false) - 2 * Q[k] + At(Q, i, j - 1, false)) / (Dy * Dy) - d * dy / 3.0 * (At(Q, i, j + 1, false) - At(Q, i, j - 1, false)) / (2 * Dy);
+	}
+}
+
+void FSandGridCpu::SolveP(const TArray<double>& U, const TArray<double>& V, TArray<double>& OutP, TArray<double>& OutQ) const
+{
+	// 행 (x) · 열 (y) 마다 삼중대각 — Thomas (CPU 기준판. GPU 는 cyclic reduction, Zhang et al. 2010)
+	OutP.SetNum(NX * NY); OutQ.SetNum(NX * NY);
+	auto Line = [&](int32 N, auto&& Coef, auto&& Rhs, auto&& Store)
+	{
+		TArray<double> A, Bd, C, R; A.SetNum(N); Bd.SetNum(N); C.SetNum(N); R.SetNum(N);
+		for (int32 n = 0; n < N; ++n) { Coef(n, A[n], Bd[n], C[n]); R[n] = Rhs(n); }
+		Bd[0] -= A[0]; A[0] = 0; Bd[N - 1] -= C[N - 1]; C[N - 1] = 0;   // 벽: 바깥 칸 = −안쪽
+		for (int32 n = 1; n < N; ++n) { const double m = A[n] / Bd[n - 1]; Bd[n] -= m * C[n - 1]; R[n] -= m * R[n - 1]; }
+		R[N - 1] /= Bd[N - 1];
+		for (int32 n = N - 2; n >= 0; --n) { R[n] = (R[n] - C[n] * R[n + 1]) / Bd[n]; }
+		for (int32 n = 0; n < N; ++n) { Store(n, R[n]); }
+	};
+	for (int32 j = 0; j < NY; ++j)
+	{
+		Line(NX, [&](int32 i, double& a, double& b, double& c)
+		{
+			const double d = Dst(i, j), dx = (Dst(i + 1, j) - Dst(i - 1, j)) / (2 * Dx);
+			const double bb = (BMS + 1.0 / 3.0) * d * d / (Dx * Dx), aa = d * dx / 3.0 / (2 * Dx);
+			a = -bb + aa; b = 1 + 2 * bb; c = -bb - aa;
+		}, [&](int32 i) { return U[Idx(i, j)]; }, [&](int32 i, double v) { OutP[Idx(i, j)] = v; });
+	}
+	for (int32 i = 0; i < NX; ++i)
+	{
+		Line(NY, [&](int32 j, double& a, double& b, double& c)
+		{
+			const double d = Dst(i, j), dy = (Dst(i, j + 1) - Dst(i, j - 1)) / (2 * Dy);
+			const double bb = (BMS + 1.0 / 3.0) * d * d / (Dy * Dy), aa = d * dy / 3.0 / (2 * Dy);
+			a = -bb + aa; b = 1 + 2 * bb; c = -bb - aa;
+		}, [&](int32 j) { return V[Idx(i, j)]; }, [&](int32 j, double v) { OutQ[Idx(i, j)] = v; });
+	}
+}
+
+void FSandGridCpu::Dispersion(const TArray<double>& Wi, const TArray<double>& P, const TArray<double>& Q, TArray<double>& OutDx, TArray<double>& OutDy, TArray<double>& OutFs, TArray<double>& OutGs) const
+{
+	// η 항 (우변) 과 F* · G* (시간 외삽용). 이웃 ±2 칸이 다 젖은 곳에서만 (물가는 얕은 물로)
+	OutDx.Init(0.0, NX * NY); OutDy.Init(0.0, NX * NY); OutFs.Init(0.0, NX * NY); OutGs.Init(0.0, NX * NY);
+	auto Eta = [&](int32 i, int32 j) { i = FMath::Clamp(i, 0, NX - 1); j = FMath::Clamp(j, 0, NY - 1); return Wi[Idx(i, j)] - SeaLevel; };
+	auto Fl = [&](const TArray<double>& A, int32 i, int32 j) { return A[Idx(FMath::Clamp(i, 0, NX - 1), FMath::Clamp(j, 0, NY - 1))]; };
+	auto Hh = [&](int32 i, int32 j) { i = FMath::Clamp(i, 0, NX - 1); j = FMath::Clamp(j, 0, NY - 1); return Wi[Idx(i, j)] - BCell(i, j); };
+	for (int32 j = 0; j < NY; ++j)
+	for (int32 i = 0; i < NX; ++i)
+	{
+		const double d = Dst(i, j);
+		if (d <= 0.0) { continue; }
+		bool bWet = true;
+		for (int32 o = -2; o <= 2 && bWet; ++o) { bWet &= Hh(i + o, j) > HDry && Hh(i, j + o) > HDry; }
+		if (!bWet) { continue; }
+		const double dx = (Dst(i + 1, j) - Dst(i - 1, j)) / (2 * Dx), dy = (Dst(i, j + 1) - Dst(i, j - 1)) / (2 * Dy);
+		const double Exx = (Eta(i + 1, j) - 2 * Eta(i, j) + Eta(i - 1, j)) / (Dx * Dx);
+		const double Eyy = (Eta(i, j + 1) - 2 * Eta(i, j) + Eta(i, j - 1)) / (Dy * Dy);
+		const double Exy = (Eta(i + 1, j + 1) - Eta(i - 1, j + 1) - Eta(i + 1, j - 1) + Eta(i - 1, j - 1)) / (4 * Dx * Dy);
+		const double Exxx = (Eta(i + 2, j) - 2 * Eta(i + 1, j) + 2 * Eta(i - 1, j) - Eta(i - 2, j)) / (2 * Dx * Dx * Dx);
+		const double Eyyy = (Eta(i, j + 2) - 2 * Eta(i, j + 1) + 2 * Eta(i, j - 1) - Eta(i, j - 2)) / (2 * Dy * Dy * Dy);
+		const double Exyy = ((Eta(i + 1, j + 1) - 2 * Eta(i + 1, j) + Eta(i + 1, j - 1)) - (Eta(i - 1, j + 1) - 2 * Eta(i - 1, j) + Eta(i - 1, j - 1))) / (2 * Dx * Dy * Dy);
+		const double Exxy = ((Eta(i + 1, j + 1) - 2 * Eta(i, j + 1) + Eta(i - 1, j + 1)) - (Eta(i + 1, j - 1) - 2 * Eta(i, j - 1) + Eta(i - 1, j - 1))) / (2 * Dx * Dx * Dy);
+		const int32 k = Idx(i, j);
+		OutDx[k] = BMS * G * d * d * d * (Exxx + Exyy) + BMS * G * d * d * (dx * (2 * Exx + Eyy) + dy * Exy);
+		OutDy[k] = BMS * G * d * d * d * (Eyyy + Exxy) + BMS * G * d * d * (dy * (2 * Eyy + Exx) + dx * Exy);
+		const double Qxy = (Fl(Q, i + 1, j + 1) - Fl(Q, i - 1, j + 1) - Fl(Q, i + 1, j - 1) + Fl(Q, i - 1, j - 1)) / (4 * Dx * Dy);
+		const double Pxy = (Fl(P, i + 1, j + 1) - Fl(P, i - 1, j + 1) - Fl(P, i + 1, j - 1) + Fl(P, i - 1, j - 1)) / (4 * Dx * Dy);
+		const double Qx = (Fl(Q, i + 1, j) - Fl(Q, i - 1, j)) / (2 * Dx), Qy = (Fl(Q, i, j + 1) - Fl(Q, i, j - 1)) / (2 * Dy);
+		const double Px = (Fl(P, i + 1, j) - Fl(P, i - 1, j)) / (2 * Dx), Py = (Fl(P, i, j + 1) - Fl(P, i, j - 1)) / (2 * Dy);
+		OutFs[k] = (BMS + 1.0 / 3.0) * d * d * Qxy + d * dx / 6.0 * Qy + d * dy / 6.0 * Qx;
+		OutGs[k] = (BMS + 1.0 / 3.0) * d * d * Pxy + d * dy / 6.0 * Px + d * dx / 6.0 * Py;
+	}
+}
+
+double FSandGridCpu::StepBoussinesq(double Dt)
+{
+	const int32 N = NX * NY;
+	if (UU.Num() != N) { ToU(HU, HV, UU, VV); FsPrev.Empty(); }
+	TArray<double> DXn, DYn, Fs, Gs;
+	Dispersion(W, HU, HV, DXn, DYn, Fs, Gs);
+	TArray<double> FsT, GsT; FsT.Init(0.0, N); GsT.Init(0.0, N);
+	if (FsPrev.Num() == N && DtPrev > 0.0) { for (int32 k = 0; k < N; ++k) { FsT[k] = (Fs[k] - FsPrev[k]) / DtPrev; GsT[k] = (Gs[k] - GsPrev[k]) / DtPrev; } }
+	FsPrev = Fs; GsPrev = Gs;
+	auto Stage = [&](const TArray<double>& Wi, const TArray<double>& Ui, const TArray<double>& Vi, TArray<double>& dW, TArray<double>& dU, TArray<double>& dV, double& InDt)
+	{
+		TArray<double> P, Q, Dxs, Dys, F2, G2;
+		SolveP(Ui, Vi, P, Q);
+		ComputeRhs(Wi, P, Q, dW, dU, dV, InDt);
+		Dispersion(Wi, P, Q, Dxs, Dys, F2, G2);
+		for (int32 k = 0; k < N; ++k) { dU[k] += Dxs[k] + FsT[k]; dV[k] += Dys[k] + GsT[k]; }
+	};
+	TArray<double> dW, dU, dV;
+	Stage(W, UU, VV, dW, dU, dV, Dt);
+	TArray<double> W1 = W, U1 = UU, V1 = VV;
+	for (int32 k = 0; k < N; ++k) { W1[k] += Dt * dW[k]; U1[k] += Dt * dU[k]; V1[k] += Dt * dV[k]; }
+	Stage(W1, U1, V1, dW, dU, dV, Dt);
+	for (int32 k = 0; k < N; ++k)
+	{
+		W[k]  = 0.5 * (W[k]  + W1[k] + Dt * dW[k]);
+		UU[k] = 0.5 * (UU[k] + U1[k] + Dt * dU[k]);
+		VV[k] = 0.5 * (VV[k] + V1[k] + Dt * dV[k]);
+	}
+	SolveP(UU, VV, HU, HV);
+	FrictionDt = Dt; FixDry(W, HU, HV); FrictionDt = 0.0;
+	ToU(HU, HV, UU, VV);   // 마른 칸 · 마찰로 바뀐 P 와 맞춘다
+	DtPrev = Dt;
+	return Dt;
+}
+
 double FSandGridCpu::Step(double Dt)
 {
+	if (bDispersive) { return StepBoussinesq(Dt); }
 	TArray<double> dW, dHU, dHV;
 	ComputeRhs(W, HU, HV, dW, dHU, dHV, Dt);   // Dt ≤ 0 이면 CFL 로 정해 돌려준다 — 두 단계가 같은 Δt (배수 시간도 이 Δt 기준)
 	const int32 N = NX * NY;

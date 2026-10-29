@@ -13,8 +13,8 @@ DEFINE_LOG_CATEGORY_STATIC(LogSandGrid, Log, All);
 
 namespace
 {
-	struct FOpt { bool bFix = true, bDesing = false; double HDry = 1e-4, Eps = 0.0, N = 0.0; bool bWetDry = true; } GOpt;
-	void Apply(FSandGridCpu& S) { S.bFixDry = GOpt.bFix; S.bDesingCells = GOpt.bDesing; S.HDry = GOpt.HDry; S.Eps = GOpt.Eps; S.Manning = GOpt.N; S.bWetDry = GOpt.bWetDry; }
+	struct FOpt { bool bFix = true, bDesing = false; double HDry = 1e-4, Eps = 0.0, N = 0.0; bool bWetDry = true, bDisp = false; } GOpt;
+	void Apply(FSandGridCpu& S) { S.bFixDry = GOpt.bFix; S.bDesingCells = GOpt.bDesing; S.HDry = GOpt.HDry; S.Eps = GOpt.Eps; S.Manning = GOpt.N; S.bWetDry = GOpt.bWetDry; S.bDispersive = GOpt.bDisp; }
 
 	void LakeAtRest(bool bIsland)
 	{
@@ -266,17 +266,51 @@ namespace
 	}
 }
 
+namespace
+{
+	// T3c 분산 관계 — 벽 상자 안 정상파 η = a·cos(kx) (상자 = 2 파장), 경계 칸 수면의 영점 교차로 주기 → ω 를 Airy √(gk·tanh kd) 와 비교
+	void StandingWave(double Kd, bool bDisp)
+	{
+		const double d = 1.0, k = Kd / d, Lam = UE_TWO_PI / k, Dx = Lam / 40.0;
+		FSandGridCpu S; Apply(S); S.bDispersive = bDisp; S.SeaLevel = 0.0; S.bWetDry = true;
+		const int32 NX = 80;
+		S.Init(NX, 1, Dx, Dx);
+		for (int32 j = 0; j <= 1; ++j) { for (int32 i = 0; i <= NX; ++i) { S.BCorner[j * (NX + 1) + i] = -d; } }
+		for (int32 i = 0; i < NX; ++i) { S.W[i] = 0.002 * FMath::Cos(k * (i + 0.5) * Dx); }
+		const double Om = FMath::Sqrt(9.81 * k * FMath::Tanh(Kd)), Tth = UE_TWO_PI / Om;
+		double T = 0, Prev = S.W[0] , Tz0 = -1, Tz1 = -1; int32 Nz = 0;
+		while (T < 6.5 * Tth)
+		{
+			T += S.Step(Tth / 400.0);
+			const double E = S.W[0];
+			if ((Prev > 0) != (E > 0)) { const double Tc = T - S.Dx * 0 ; if (Nz == 0) { Tz0 = Tc; } Tz1 = Tc; ++Nz; }
+			Prev = E;
+		}
+		const double Tsim = Nz > 1 ? 2.0 * (Tz1 - Tz0) / (Nz - 1) : 0.0;
+		const double Tnlsw = UE_TWO_PI / (k * FMath::Sqrt(9.81 * d));
+		UE_LOG(LogSandGrid, Display, TEXT("c1 정상파 kd %.1f %s: 주기 %.4f s · Airy %.4f (비 %.3f) · 얕은 물 이론 %.4f"),
+			Kd, bDisp ? TEXT("Boussinesq") : TEXT("얕은 물"), Tsim, Tth, Tsim / Tth, Tnlsw);
+	}
+}
+
 int32 RunSandGridGpuTest(const FString& Params);
 
 int32 RunSandGridTest(const FString& Params)
 {
 	if (FParse::Param(*Params, TEXT("gridgpu"))) { return RunSandGridGpuTest(Params); }
+	if (FParse::Param(*Params, TEXT("griddisp")))
+	{
+		GOpt = FOpt();
+		for (double Kd : { 0.5, 1.0, 2.0, 3.0 }) { StandingWave(Kd, false); StandingWave(Kd, true); }
+		return 0;
+	}
 	if (FParse::Param(*Params, TEXT("gridlab")))
 	{
 		FString Csv = FPaths::Combine(FPaths::ProjectDir(), TEXT("../Docs/research/data/synolakis_h03.csv"));
 		FParse::Value(*Params, TEXT("griddata="), Csv);
 		GOpt = FOpt();
 		FParse::Value(*Params, TEXT("gridmanning="), GOpt.N);   // 실험 유리 수조 n = 0.01 (arXiv 2210.01499 · 1902.03021)
+		GOpt.bDisp = FParse::Param(*Params, TEXT("gridbous"));   // T3c — Boussinesq 분산
 		UE_LOG(LogSandGrid, Display, TEXT("T2 Manning n %.3f"), GOpt.N);
 		SynolakisBreakingVsLab(Csv, 0.05);
 		SynolakisBreakingVsLab(Csv, 0.025);
