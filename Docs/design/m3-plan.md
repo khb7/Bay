@@ -78,7 +78,7 @@ B 안 측정 (m3-log #7): R2% Stockdon 의 30% — 경계가 쇄파대 안이라
 |---|---|---|
 | c1 | CPU 기준판에 MS92 분산 항 + 행/열 삼중대각 (Celeris 방식) | 선형 분산 관계 (작은 진폭 파 속도 vs ω² = gk·tanh kh) · Synolakis 쇄파 **전** 구간 수면 오차 (지금 11~12%) 가 준다 |
 | c2 | 쇄파 처리 조사 → 구현 (Celeris 는 minmod 소산 + 얕은 곳 얕은 물 전환. FUNWAVE-TVD · Tonelli & Petti 의 H/h 문턱 전환과 비교) | Synolakis H/d 0.3 수면 (NOAA) · 처오름 |
-| c3 ✓ | GPU 판 (PCR) · CPU 대조 | |Δw| 9e-6 · 512² 3.4 ms/서브스텝 (#10) |\|Δw\| float 수준 · 비용 |
+| c3 ✓ | GPU 판 (PCR) · CPU 대조 | |Δw| 9e-6 · 512² 3.4 ms/서브스텝 (#10) |
 | c4 | 바깥 경계 입사 조사 → 구현 (불규칙 방향 파 + 2 차 묶인 IG — SWASH Rijnsdorp 2014 · XBeach) + 흡수 | 경계 반사 · 묶인 IG 크기 |
 | c5 | 영역 확장 (쇄파점 밖, 경계 수심 ~1.5–2m) → T3b 기준 1~8 다시 | Stockdon · 반사 · 위상 |
 
