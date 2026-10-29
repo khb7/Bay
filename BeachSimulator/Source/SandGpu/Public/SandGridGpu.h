@@ -22,6 +22,10 @@ struct FSandGridGpuInit
 	float IgGain = 0.f;             // T3b 장주기파: η_IG = IgGain·(A² − Σa²), A = 성분 포락선. 0 이면 끔
 	bool  bDispersive = false;      // T3c Madsen & Sørensen 1992 Boussinesq (Celeris 방식). 줄 길이 ≤ 1024, 경계는 벽으로 (열린 · 주기 경계 근처 처리는 c4)
 	float BreakRatio = 0.8f;        // 쇄파 전환 |η|/h (Tonelli & Petti 2009). 0 이면 끔
+	int32 DispTaper = 8;            // T3c c4 열린 경계 쪽 분산 줄이는 칸 수 (d → 0)
+	bool  bBoundIg = false;         // T3c c4 경계에 묶인 장주기파 (성분 쌍, LHS 1962 방향 일반화 — m3-plan c4)
+	class FSandGridGpu* NestOuter = nullptr;   // T3c c4 한 방향 nesting: 동쪽 입사를 이 바깥 격자에서 (바깥을 같은 프레임에 먼저 Advance). y 길이는 같게
+	float NestX = 0.f;              // 바깥 격자 좌표에서 이 격자 동쪽 경계 x (m)
 	TArray<float> BCorner;          // (NX+1)·(NY+1)
 	TArray<float> W, HU, HV;        // NX·NY
 };

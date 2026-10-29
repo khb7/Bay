@@ -5,6 +5,7 @@
 //   가운데 끌기 둘러보기 · WASD QE 이동 · -sandwavesshot= (자동: 스크린샷 몇 장 후 종료)
 //   -swellfrac= (0.6) -swelltp= (12) -windtp= (5) -wavehs= (경계 포화값) -wavecells= (512) -manning= (0.025)
 //   -waveh0= (먼바다 H0 1m) -igcoef= (경계 IG 유의파고 / H0, 0.25) -igoff -beachslope= (15 → 1:15) -waveseed=
+//   -nest (바깥 25cm 격자 → 안쪽 경계, m3-plan c4) -nestdepth= (3.3) -nestdx= (0.25)
 //   -wavedir= (평균 방향 10°) -swellspread= (15°) -windspread= (40°) — 방향 분산 (G-6c), 해안선 방향은 주기 경계
 
 #pragma once
@@ -19,6 +20,8 @@
 struct FWaveScene
 {
 	FSandGridGpuInit G;
+	FSandGridGpuInit GO;            // -nest 바깥 격자 (m3-plan c4)
+	bool bNest = false;
 	TArray<float> BCorner, BCellV;
 	int32 NX = 0, NY = 0;
 	float Dx = 0.05f, H0 = 0.f, Hs = 0.f;
@@ -43,6 +46,7 @@ private:
 	void UpdateWaterMesh();
 
 	TUniquePtr<class FSandGridGpu> Grid;
+	TUniquePtr<class FSandGridGpu> GridOuter;   // -nest
 	UPROPERTY()
 	TObjectPtr<class UProceduralMeshComponent> Mesh = nullptr;
 	UPROPERTY()

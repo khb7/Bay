@@ -34,7 +34,17 @@ uint  NumWaves;
 // T3b 장주기파 (B 안, m3-plan · papers D-M3-7/8): 쇄파점에서 풀려난 묶인 장주기파를 자유파로 입사.
 // η_IG = IgGain · (A² − Σa²) — A = 짧은 파 포락선 (성분 복소 합), IgGain = Longuet-Higgins & Stewart (1962) 평형 식을 쇄파 수심에서 (CPU 가 계산)
 float IgGain;
-StructuredBuffer<float4> Waves;   // (진폭 a, 각진동수 ω, 위상 φ, 해안선 방향 파수 k_y) — η_i(y, t) = Σ a·cos(φ + k_y·y − ω t)
+StructuredBuffer<float4> Waves;   // 성분마다 두 칸: (진폭 a, 각진동수 ω, 위상 φ, 해안선 방향 파수 k_y) · (u_n/η, v/η, 0, 0) — η_i(y, t) = Σ a·cos(φ + k_y·y − ω t)
+uint  NumIg;             // T3c c4 묶인 장주기파 쌍 (Waves 의 NumWaves 뒤) — LHS 1962 방향 일반화 (m3-plan c4), CPU 가 계산
+// T3c c4 한 방향 nesting — 동쪽 입사를 바깥 격자 경계 위치 값으로 (두 스냅샷 (η, u_n, v, t) 를 y · 시간 선형 보간)
+uint  bNest;
+uint  NestNY;
+float NestDy;
+float NestX;             // NestCS (바깥 격자에서): 안쪽 경계 x (m)
+uint  DispTaper;         // 열린 경계 쪽 분산 줄이는 칸 수 (d → 0)
+StructuredBuffer<float4>   NestARO;
+StructuredBuffer<float4>   NestBRO;
+RWStructuredBuffer<float4> NestOutRW;
 uint  bPeriodicY;        // 해안선 방향(y) 주기 경계 — 비스듬한 파도가 옆 벽에서 튕기지 않게 (k_y 는 2π m / L_y 로 맞춘다)          // 바닥 마찰 n (s/m^⅓) — CPU FixDry 와 같은 암시적 꼴
 
 StructuredBuffer<float>    BCorner;
@@ -69,6 +79,7 @@ RWStructuredBuffer<float2> DispRW;    // η 분산 항 (x, y)
 StructuredBuffer<float2>   DispRO;
 
 uint Idx(uint i, uint j) { return j * NX + i; }
+int WJ(int j) { return bPeriodicY != 0u ? ((j % (int)NY) + (int)NY) % (int)NY : clamp(j, 0, (int)NY - 1); }   // 분산 스텐실 y (주기면 감싼다)
 float Bc(uint ci, uint cj) { return BCorner[cj * (NX + 1) + ci]; }
 float BFaceX(int i, uint j) { uint c = (uint)clamp(i + 1, 0, (int)NX); return 0.5f * (Bc(c, j) + Bc(c, j + 1)); }   // 칸 i 의 오른쪽 경계
 float BFaceY(uint i, int j) { uint r = (uint)clamp(j + 1, 0, (int)NY); return 0.5f * (Bc(i, r) + Bc(i + 1, r)); }
@@ -143,22 +154,30 @@ struct FRec { float wm, wp, qm, qp, rm, rp, wbar, bm, bp; bool bPartial; };
 // 입사파 (선형 얕은 물): η · 법선 속도 u_n (해안 쪽 −x 가 +) · 해안선 방향 속도 v. 성분마다 방향 θ: sinθ = k_y·c/ω
 float3 IncidentWave(float t, float y, float h0)
 {
-	const float C = sqrt(Gravity * h0);
+	// 성분마다 u_n · v 계수는 CPU (선형 위상속도 — 분산이면 ω/k · 묶인 IG 는 연속식 ΩK/(hK²)). v 는 진행 +y 면 양수
 	float3 E = 0;
 	float Re = 0.f, Im = 0.f, A2m = 0.f;
-	for (uint n = 0; n < NumWaves; ++n)
+	for (uint n = 0; n < NumWaves + NumIg; ++n)
 	{
-		const float4 W = Waves[n];
+		const float4 W = Waves[2 * n], F = Waves[2 * n + 1];
 		const float Ph = W.z + W.w * y - W.y * t;
 		const float e = W.x * cos(Ph);
-		const float S = clamp(W.w * C / max(W.y, 1e-4f), -1.f, 1.f);
-		E += float3(e, e * sqrt(1.f - S * S), -e * S) * float3(1.f, C / h0, C / h0);
-		Re += W.x * cos(Ph); Im += W.x * sin(Ph); A2m += W.x * W.x;
+		E += float3(e, e * F.x, e * F.y);
+		if (n < NumWaves) { Re += W.x * cos(Ph); Im += W.x * sin(Ph); A2m += W.x * W.x; }
 	}
-	// 장주기파 — 평균 0 (A² 의 평균 = Σa²) 이라 물이 쌓이지 않는다. 해안 쪽 법선 속도 = η·√(g/h₀)
+	// T3b 장주기파 (B 안) — 평균 0 (A² 의 평균 = Σa²) 이라 물이 쌓이지 않는다. 해안 쪽 법선 속도 = η·√(g/h₀)
 	const float Eig = IgGain * (Re * Re + Im * Im - A2m);
-	E += float3(Eig, Eig * C / h0, 0.f);
+	E += float3(Eig, Eig * sqrt(Gravity / h0), 0.f);
 	return E;
+}
+
+float3 NestWave(float t, float y)
+{
+	const float yo = y / NestDy - 0.5f, j0f = floor(yo), f = yo - j0f;
+	const uint j0 = (uint)((((int)j0f) % (int)NestNY + (int)NestNY) % (int)NestNY), j1 = (j0 + 1u) % NestNY;
+	const float4 A = lerp(NestARO[j0], NestARO[j1], f), B = lerp(NestBRO[j0], NestBRO[j1], f);
+	const float s = saturate((t - NestARO[0].w) / max(NestBRO[0].w - NestARO[0].w, 1e-6f));
+	return lerp(A, B, s).xyz;
 }
 
 void Fetch(uint Axis, int c, uint m, out float w, out float q, out float r, out float L, out bool bPart, out float bm, out float bp)
@@ -175,7 +194,7 @@ void Fetch(uint Axis, int c, uint m, out float w, out float q, out float r, out 
 		float vIn;
 		const float h0 = max(BoundaryDepth, 1e-3f);
 		const int jj = Axis == 0 ? (int)m : j;
-		const float3 Inc = IncidentWave(TimeRO[2], (jj + 0.5f) * Dy, h0);
+		const float3 Inc = bNest != 0u ? NestWave(TimeRO[2], (jj + 0.5f) * Dy) : IncidentWave(TimeRO[2], (jj + 0.5f) * Dy, h0);
 		const float Eta = Inc.x;
 		const float Rp = uIn + 2.f * sqrt(Gravity * hIn);
 		const float Rm = -Inc.y - 2.f * sqrt(Gravity * max(0.f, h0 + Eta));   // 들어오는 불변량 — 법선 성분만 (van Dongeren & Svendsen 1997)
@@ -354,7 +373,7 @@ void UpdateCS(uint3 Tid : SV_DispatchThreadID)
 // T3c — Madsen & Sørensen (1992) Boussinesq (Celeris 방식). CPU FSandGridCpu::Dst · ToU · SolveP · Dispersion 과 같은 식
 static const float BMS = 1.f / 15.f;
 
-float DstAt(int i, int j) { return DstRO[Idx((uint)clamp(i, 0, (int)NX - 1), (uint)clamp(j, 0, (int)NY - 1))]; }
+float DstAt(int i, int j) { return DstRO[Idx((uint)clamp(i, 0, (int)NX - 1), (uint)WJ(j))]; }
 
 [numthreads(8, 8, 1)]
 void BreakCS(uint3 Tid : SV_DispatchThreadID)
@@ -364,13 +383,16 @@ void BreakCS(uint3 Tid : SV_DispatchThreadID)
 	if (i >= NX || j >= NY) { return; }
 	const float w = URO[Idx(i, j)].x, Bm = BCell(i, j), h = w - Bm;
 	const bool bBrk = BreakRatio > 0.f && h > HDry && abs(w - SeaLevel) / h > BreakRatio;
-	DstRW[Idx(i, j)] = bBrk ? 0.f : max(0.f, SeaLevel - Bm);
+	// 열린 경계 쪽 DispTaper 칸에서 d → 0 (경계 칸은 얕은 물 — 리만 경계와 맞게, m3-plan c4)
+	const float Tp = bOpenEast != 0u && DispTaper > 0u ? saturate((float)(NX - 1u - i) / (float)DispTaper) : 1.f;
+	DstRW[Idx(i, j)] = bBrk ? 0.f : Tp * max(0.f, SeaLevel - Bm);
 }
 
 float2 PQWall(int i, int j, uint Axis)   // 벽 거울 (수직 유량 부호 반대) — CPU ToU 의 At
 {
 	float S = 1.f;
 	if (Axis == 0) { if (i < 0) { i = -1 - i; S = -1.f; } else if (i >= (int)NX) { i = 2 * (int)NX - 1 - i; S = -1.f; } }
+	else if (bPeriodicY != 0u) { j = WJ(j); }
 	else           { if (j < 0) { j = -1 - j; S = -1.f; } else if (j >= (int)NY) { j = 2 * (int)NY - 1 - j; S = -1.f; } }
 	return S * URO[Idx((uint)clamp(i, 0, (int)NX - 1), (uint)clamp(j, 0, (int)NY - 1))].yz;
 }
@@ -390,9 +412,9 @@ void ToUCS(uint3 Tid : SV_DispatchThreadID)
 	                         C.y - b * (Qn - 2 * C.y + Qs) / (Dy * Dy) - d * dy / 3.f * (Qn - Qs) / (2 * Dy));
 }
 
-float EtaAt(int i, int j) { return URO[Idx((uint)clamp(i, 0, (int)NX - 1), (uint)clamp(j, 0, (int)NY - 1))].x - SeaLevel; }
-float HAt(int i, int j) { const uint a = (uint)clamp(i, 0, (int)NX - 1), b = (uint)clamp(j, 0, (int)NY - 1); return URO[Idx(a, b)].x - BCell(a, b); }
-float2 PQAt(int i, int j) { return URO[Idx((uint)clamp(i, 0, (int)NX - 1), (uint)clamp(j, 0, (int)NY - 1))].yz; }
+float EtaAt(int i, int j) { return URO[Idx((uint)clamp(i, 0, (int)NX - 1), (uint)WJ(j))].x - SeaLevel; }
+float HAt(int i, int j) { const uint a = (uint)clamp(i, 0, (int)NX - 1), b = (uint)WJ(j); return URO[Idx(a, b)].x - BCell(a, b); }
+float2 PQAt(int i, int j) { return URO[Idx((uint)clamp(i, 0, (int)NX - 1), (uint)WJ(j))].yz; }
 
 [numthreads(8, 8, 1)]
 void DispCS(uint3 Tid : SV_DispatchThreadID)
@@ -438,14 +460,15 @@ void DispCS(uint3 Tid : SV_DispatchThreadID)
 
 // 삼중대각 — 행 · 열 하나를 그룹 하나가 병렬 순환 축소 (PCR, Zhang et al. 2010) 로. 줄 길이 ≤ 1024, 벽 경계 (바깥 칸 = −안쪽)
 #define LINE_MAX 1024
-groupshared float SA[LINE_MAX], SB[LINE_MAX], SC[LINE_MAX], SD[LINE_MAX];
+groupshared float SA[LINE_MAX], SB[LINE_MAX], SC[LINE_MAX], SD[LINE_MAX], SE[LINE_MAX];   // SE = Sherman–Morrison 두 번째 우변
 
 [numthreads(LINE_MAX, 1, 1)]
 void SolveCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
 {
 	const uint Line = Gid.x, t = Gtid.x;
 	const uint N = LineAxis == 0 ? NX : NY;
-	float a = 0.f, b = 1.f, c = 0.f, r = 0.f;
+	const bool bCyc = LineAxis == 1 && bPeriodicY != 0u;   // 주기 y — 순환 삼중대각을 Sherman–Morrison 으로 (보정 행렬 + 우변 두 개)
+	float a = 0.f, b = 1.f, c = 0.f, r = 0.f, e = 0.f;
 	if (t < N)
 	{
 		const int i = LineAxis == 0 ? (int)t : (int)Line, j = LineAxis == 0 ? (int)Line : (int)t;
@@ -454,30 +477,50 @@ void SolveCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
 		const float dd = LineAxis == 0 ? (DstAt(i + 1, j) - DstAt(i - 1, j)) / (2 * D) : (DstAt(i, j + 1) - DstAt(i, j - 1)) / (2 * D);
 		const float bb = (BMS + 1.f / 3.f) * d * d / (D * D), aa = d * dd / 3.f / (2 * D);
 		a = -bb + aa; b = 1 + 2 * bb; c = -bb - aa;
-		if (t == 0) { b -= a; a = 0.f; }
-		if (t == N - 1) { b -= c; c = 0.f; }
+		if (!bCyc && t == 0) { b -= a; a = 0.f; }
+		if (!bCyc && t == N - 1) { b -= c; c = 0.f; }
 		const float2 UV = UVRO[Idx((uint)i, (uint)j)];
 		r = LineAxis == 0 ? UV.x : UV.y;
 	}
-	SA[t] = a; SB[t] = b; SC[t] = c; SD[t] = r;
+	SA[t] = a; SB[t] = b; SC[t] = c;
+	GroupMemoryBarrierWithGroupSync();
+	const float A0 = SA[0], CN = SC[N - 1], Gm = -SB[0] - 1.f;   // γ (0 이 아니게 −b₀ − 1, b₀ ≥ 1)
+	if (bCyc)
+	{
+		// A = A' + u vᵀ, u = (γ, 0…, c_{N−1}), v = (1, 0…, a₀/γ)
+		if (t == 0) { b -= Gm; a = 0.f; e = Gm; }
+		if (t == N - 1) { b -= A0 * CN / Gm; c = 0.f; e = CN; }
+	}
+	GroupMemoryBarrierWithGroupSync();
+	SA[t] = a; SB[t] = b; SC[t] = c; SD[t] = r; SE[t] = e;
 	GroupMemoryBarrierWithGroupSync();
 	for (uint s = 1; s < LINE_MAX; s <<= 1)
 	{
-		float am = 0.f, bm = 1.f, cm = 0.f, dm = 0.f, ap = 0.f, bp = 1.f, cp = 0.f, dp = 0.f;
-		if (t >= s) { am = SA[t - s]; bm = SB[t - s]; cm = SC[t - s]; dm = SD[t - s]; }
-		if (t + s < LINE_MAX) { ap = SA[t + s]; bp = SB[t + s]; cp = SC[t + s]; dp = SD[t + s]; }
+		float am = 0.f, bm = 1.f, cm = 0.f, dm = 0.f, em = 0.f, ap = 0.f, bp = 1.f, cp = 0.f, dp = 0.f, ep = 0.f;
+		if (t >= s) { am = SA[t - s]; bm = SB[t - s]; cm = SC[t - s]; dm = SD[t - s]; em = SE[t - s]; }
+		if (t + s < LINE_MAX) { ap = SA[t + s]; bp = SB[t + s]; cp = SC[t + s]; dp = SD[t + s]; ep = SE[t + s]; }
 		const float k1 = a / bm, k2 = c / bp;
-		const float na = -am * k1, nc = -cp * k2, nb = b - cm * k1 - ap * k2, nd = r - dm * k1 - dp * k2;
-		a = na; b = nb; c = nc; r = nd;
+		const float na = -am * k1, nc = -cp * k2, nb = b - cm * k1 - ap * k2, nd = r - dm * k1 - dp * k2, ne = e - em * k1 - ep * k2;
+		a = na; b = nb; c = nc; r = nd; e = ne;
 		GroupMemoryBarrierWithGroupSync();
-		SA[t] = a; SB[t] = b; SC[t] = c; SD[t] = r;
+		SA[t] = a; SB[t] = b; SC[t] = c; SD[t] = r; SE[t] = e;
 		GroupMemoryBarrierWithGroupSync();
+	}
+	float x = r / b;
+	if (bCyc)
+	{
+		const float z = e / b;
+		GroupMemoryBarrierWithGroupSync();
+		SD[t] = x; SE[t] = z;
+		GroupMemoryBarrierWithGroupSync();
+		const float Fac = (SD[0] + A0 / Gm * SD[N - 1]) / (1.f + SE[0] + A0 / Gm * SE[N - 1]);
+		x -= Fac * z;
 	}
 	if (t < N)
 	{
 		const uint k = LineAxis == 0 ? Idx(t, Line) : Idx(Line, t);
 		float4 O = UOutRW[k];
-		if (LineAxis == 0) { O.y = r / b; } else { O.z = r / b; }
+		if (LineAxis == 0) { O.y = x; } else { O.z = x; }
 		UOutRW[k] = O;
 	}
 }
@@ -500,4 +543,23 @@ void FixCS(uint3 Tid : SV_DispatchThreadID)
 		O.y /= Dn; O.z /= Dn;
 	}
 	UOutRW[k] = O;
+}
+
+[numthreads(64, 1, 1)]
+void NestCS(uint3 Tid : SV_DispatchThreadID)
+{
+	// (바깥 격자) 안쪽 경계 x = NestX 에서 (η, 해안 쪽 u_n = −u, v, 시각) — x 선형 보간
+	const uint j = Tid.x;
+	if (j >= NY) { return; }
+	const float xo = clamp(NestX / Dx - 0.5f, 0.f, (float)NX - 1.001f);
+	const uint i0 = (uint)floor(xo); const float f = xo - i0;
+	float3 V[2];
+	for (uint q = 0; q < 2; ++q)
+	{
+		const uint i = i0 + q;
+		const float4 U = URO[Idx(i, j)];
+		const float h = U.x - BCell(i, j);
+		V[q] = h > HDry ? float3(U.x - SeaLevel, -U.y / h, U.z / h) : float3(U.x - SeaLevel, 0.f, 0.f);
+	}
+	NestOutRW[j] = float4(lerp(V[0], V[1], f), TimeRO[2]);
 }

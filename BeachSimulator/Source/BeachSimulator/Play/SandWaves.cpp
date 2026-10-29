@@ -38,7 +38,7 @@ namespace
 	// 이봉 스펙트럼 (G-6c): 풍파 γ 3.3 + 너울 γ 20, 에너지 비율 SwellFrac. 32 성분 — 주파수를 칸 안에서 무작위로 (공약수가 없어 반복 주기가 사라진다)
 	// 방향 분산 (G-6c): 너울 10~20° · 풍파 30~60° — 성분마다 그 주파수에서 너울/풍파 몫으로 섞은 폭 σ 의 정규분포에서 θ.
 	// 해안선 방향 파수 k_y = k·sinθ (경계 수심 얕은 물 k = ω/√(gh₀)) 를 주기 경계에 맞게 2π m / L_y 로 반올림
-	TArray<FVector4f> MakeWaves(double Hs, double SwellFrac, double SwellTp, double WindTp, int32 Seed, double H0, double Ly, double MeanDeg, double SwellSpreadDeg, double WindSpreadDeg)
+	TArray<FVector4f> MakeWaves(double Hs, double SwellFrac, double SwellTp, double WindTp, int32 Seed, double H0, double Ly, double MeanDeg, double SwellSpreadDeg, double WindSpreadDeg, bool bDisp = false)
 	{
 		const int32 N = 32;
 		const double F0 = 0.04, F1 = 0.40, Df = (F1 - F0) / N;
@@ -57,7 +57,8 @@ namespace
 			const double Sig = FMath::Lerp(WindSpreadDeg, SwellSpreadDeg, Ss / FMath::Max(1e-12, Sw + Ss));
 			const double G1 = FMath::Sqrt(-2.0 * FMath::Loge(FMath::Max(1e-9, (double)Rng.FRand()))) * FMath::Cos(UE_TWO_PI * Rng.FRand());   // Box–Muller
 			const double Th = FMath::DegreesToRadians(FMath::Clamp(MeanDeg + Sig * G1, -70.0, 70.0));
-			const double K = Om / FMath::Sqrt(Gm * H0);
+			double K = Om / FMath::Sqrt(Gm * H0);
+			if (bDisp) { for (int32 It = 0; It < 60; ++It) { K = Om * Om / (Gm * FMath::Tanh(K * H0)); } }   // 분산 k (바깥 격자)
 			const double Dk = UE_TWO_PI / Ly;
 			const double Ky = FMath::RoundToDouble(K * FMath::Sin(Th) / Dk) * Dk;
 			W.Add(FVector4f((float)A, (float)Om, (float)(Rng.FRand() * UE_TWO_PI), (float)Ky));
@@ -120,6 +121,41 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 		const double Sd = FMath::Sqrt(FMath::Max(1e-12, S2 / Nn - FMath::Square(Sum2 / Nn)));
 		G.IgGain = FParse::Param(Cmd, TEXT("igoff")) ? 0.f : (float)(-IgCoef * DeepH0 / (4.0 * Sd));
 	}
+	// T3c c4 한 방향 nesting (m3-plan c4, -nest): 바깥 격자 = 같은 단면을 수심 -nestdepth= (3.3 m, Hm0/d < 0.3) 까지, 칸 -nestdx= (25 cm), 분산 · 묶인 IG.
+	// 안쪽 동쪽 입사는 바깥 격자 x = NX·Dx 값으로 (B 안 IG 는 끔)
+	Out.bNest = FParse::Param(Cmd, TEXT("nest"));
+	if (Out.bNest)
+	{
+		double NestDepth = 3.3, NestDx = 0.25;
+		FParse::Value(Cmd, TEXT("nestdepth="), NestDepth);
+		FParse::Value(Cmd, TEXT("nestdx="), NestDx);
+		const double Ly = NY * Dx, XEnd = Xs + FMath::Pow(NestDepth / A, 1.5);
+		const int32 NXo = FMath::CeilToInt(XEnd / NestDx), NYo = FMath::Max(8, FMath::RoundToInt(Ly / NestDx));
+		const double Dyo = Ly / NYo;
+		FSandGridGpuInit& O = Out.GO;
+		O.NX = NXo; O.NY = NYo; O.Dx = (float)NestDx; O.Dy = (float)Dyo; O.Manning = Manning;
+		O.bOpenEast = true; O.bPeriodicY = true; O.bDispersive = true; O.bBoundIg = !FParse::Param(Cmd, TEXT("igoff"));
+		O.BCorner.SetNum((NXo + 1) * (NYo + 1));
+		for (int32 j = 0; j <= NYo; ++j)
+		for (int32 i = 0; i <= NXo; ++i)
+		{
+			const double x = i * NestDx, y = j * Dyo;
+			double B = x >= Xs ? -A * FMath::Pow(x - Xs, 2.0 / 3.0) : (Xs - x) * Slope;
+			const double Ky = UE_TWO_PI / Ly;
+			B += 0.01 * FMath::Sin(2.0 * Ky * y + 0.4 * x) + 0.006 * FMath::Sin(6.0 * Ky * y - 1.7 * x);
+			O.BCorner[j * (NXo + 1) + i] = (float)B;
+		}
+		O.BoundaryDepth = -O.BCorner[NXo];
+		O.Waves = MakeWaves(DeepH0, SwellFrac, SwellTp, WindTp, Seed, O.BoundaryDepth, Ly, MeanDeg, SwellSpread, WindSpread, true);
+		O.W.SetNum(NXo * NYo); O.HU.Init(0.f, NXo * NYo); O.HV.Init(0.f, NXo * NYo);
+		for (int32 j = 0; j < NYo; ++j)
+		for (int32 i = 0; i < NXo; ++i)
+		{
+			const double Bc[4] = { O.BCorner[j * (NXo + 1) + i], O.BCorner[j * (NXo + 1) + i + 1], O.BCorner[(j + 1) * (NXo + 1) + i], O.BCorner[(j + 1) * (NXo + 1) + i + 1] };
+			O.W[j * NXo + i] = (float)(0.25 * (Bc[0] + Bc[1] + Bc[2] + Bc[3]) + FSandGridCpu::CellVolume(Bc, 0.0));
+		}
+		G.Waves.Empty(); G.IgGain = 0.f; G.NestX = NX * Dx;   // NestOuter 는 만든 쪽이 넣는다
+	}
 	Out.BCellV.SetNum(NX * NY);
 	G.W.SetNum(NX * NY); G.HU.Init(0.f, NX * NY); G.HV.Init(0.f, NX * NY);
 	for (int32 j = 0; j < NY; ++j)
@@ -133,8 +169,10 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	G.BCorner = BCorner;
 	Out.NX = NX; Out.NY = NY; Out.Dx = Dx; Out.H0 = H0; Out.Hs = Hs; Out.Xs = Xs; Out.Slope = Slope; Out.DeepH0 = DeepH0;
 	Out.Tp = SwellFrac >= 0.5 ? SwellTp : WindTp;
+	const FString NestInfo = Out.bNest ? FString::Printf(TEXT(" · nesting 바깥 %d×%d (칸 %.0fcm, %.0fm, 경계 수심 %.2fm, Hs %.2fm, 묶인 IG %s)"),
+		Out.GO.NX, Out.GO.NY, Out.GO.Dx * 100, Out.GO.NX * Out.GO.Dx, Out.GO.BoundaryDepth, DeepH0, Out.GO.bBoundIg ? TEXT("켬") : TEXT("끔")) : FString();
 	Out.Info = FString::Printf(TEXT("T3 파도 — 격자 %d×%d (칸 %.0fcm, %.1f×%.1fm) · 해변 1:%.0f · 경계 수심 %.2fm · 경계 Hs %.2fm · 먼바다 H0 %.2fm · 너울 %.0f%% Tp %.0fs · 풍파 Tp %.0fs · Manning %.3f · IG 계수 %.2f (이득 %.2f)"),
-		NX, NY, Dx * 100, NX * Dx, NY * Dx, 1.0 / Slope, H0, Hs, DeepH0, SwellFrac * 100, SwellTp, WindTp, Manning, IgCoef, G.IgGain);
+		NX, NY, Dx * 100, NX * Dx, NY * Dx, 1.0 / Slope, H0, Hs, DeepH0, SwellFrac * 100, SwellTp, WindTp, Manning, IgCoef, G.IgGain) + NestInfo;
 }
 
 bool USandWavesSubsystem::ShouldCreateSubsystem(UObject* Outer) const
@@ -157,6 +195,7 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 	{
 		if (It->GetClass()->GetName().Contains(TEXT("SpikeActor"))) { It->SetActorTickEnabled(false); It->SetActorHiddenInGame(true); }
 	}
+	if (Sc.bNest) { GridOuter = MakeUnique<FSandGridGpu>(); GridOuter->Init(Sc.GO); G.NestOuter = GridOuter.Get(); }
 	Grid = MakeUnique<FSandGridGpu>();
 	Grid->Init(G);
 	UE_LOG(LogSandWaves, Display, TEXT("%s"), *Sc.Info);
@@ -226,6 +265,7 @@ void USandWavesSubsystem::Deinitialize()
 {
 	FTSTicker::GetCoreTicker().RemoveTicker(TickHandle);
 	Grid.Reset();
+	GridOuter.Reset();
 	Super::Deinitialize();
 }
 
@@ -312,6 +352,7 @@ bool USandWavesSubsystem::Tick(float DeltaTime)
 	const bool bAuto = !ShotPath.IsEmpty();
 	const float Dt = bAuto ? 1.f / 60.f : FMath::Min(DeltaTime, 1.f / 30.f);   // 자동 시험은 고정 (프레임 속도와 무관하게 같은 장면)
 	if (!bAuto) { UpdateCamera(PC, Dt); }
+	if (GridOuter.IsValid()) { GridOuter->Advance(Dt, 64); }   // 바깥 먼저 (안쪽 경계가 이 프레임 끝 값을 쓴다)
 	Grid->Advance(Dt, 64);
 	UpdateWaterMesh();
 	if (GEngine)
@@ -337,7 +378,8 @@ int32 RunWaveMeasure(const FString& Params)
 	FWaveScene Sc;
 	BuildWaveScene(*Params, Sc);
 	UE_LOG(LogSandWaves, Display, TEXT("%s"), *Sc.Info);
-	FSandGridGpu Grid;
+	FSandGridGpu Outer, Grid;
+	if (Sc.bNest) { Outer.Init(Sc.GO); Sc.G.NestOuter = &Outer; }
 	Grid.Init(Sc.G);
 	float Secs = 1500.f; FParse::Value(*Params, TEXT("wavesecs="), Secs);
 	FString Tag = TEXT("run"); FParse::Value(*Params, TEXT("wavetag="), Tag);
@@ -345,14 +387,25 @@ int32 RunWaveMeasure(const FString& Params)
 	const int32 NX = Sc.NX, NY = Sc.NY;
 	const int32 Rows[4] = { NY / 8, 3 * NY / 8, 5 * NY / 8, 7 * NY / 8 };
 	const int32 Jb = NY / 2, Ib = NX - 2;
-	FString Csv = FString::Printf(TEXT("# %s\n# beta %.4f deepH0 %.3f Tp %.2f boundary_h0 %.3f\nt,R0,R1,R2,R3,eta_b,u_b,A2\n"), *Sc.Info, Sc.Slope, Sc.DeepH0, Sc.Tp, Sc.H0);
-	TArray<float> W, HU, HV;
+	FString Csv = FString::Printf(TEXT("# %s\n# beta %.4f deepH0 %.3f Tp %.2f boundary_h0 %.3f\n"), *Sc.Info, Sc.Slope, Sc.DeepH0, Sc.Tp, Sc.H0);
+	// -nest: 바깥 격자 경계 근처 (NXo − 12) · 안쪽 경계 위치 수면, 성분 표 (분석에서 묶인 IG 이론값)
+	const int32 NXo = Sc.GO.NX, Jo = Sc.bNest ? FMath::Clamp(FMath::FloorToInt((Jb + 0.5f) * Sc.Dx / Sc.GO.Dy), 0, Sc.GO.NY - 1) : 0;
+	const int32 Io = Sc.bNest ? FMath::Clamp(FMath::FloorToInt(NX * Sc.Dx / Sc.GO.Dx - 0.5f), 0, NXo - 2) : 0, IoB = FMath::Max(0, NXo - 12);
+	const float FoX = Sc.bNest ? NX * Sc.Dx / Sc.GO.Dx - 0.5f - Io : 0.f;
+	if (Sc.bNest)
+	{
+		Csv += FString::Printf(TEXT("# nest y %.3f x_b %.2f h_b %.3f x_ob %.2f\n"), (Jo + 0.5f) * Sc.GO.Dy, (IoB + 0.5f) * Sc.GO.Dx, Sc.GO.BoundaryDepth, NXo * Sc.GO.Dx);
+		for (const FVector4f& Wv : Sc.GO.Waves) { Csv += FString::Printf(TEXT("# wave %.6f %.6f %.6f %.6f\n"), Wv.X, Wv.Y, Wv.Z, Wv.W); }
+	}
+	Csv += Sc.bNest ? TEXT("t,R0,R1,R2,R3,eta_b,u_b,A2,eta_nest,eta_ob\n") : TEXT("t,R0,R1,R2,R3,eta_b,u_b,A2\n");
+	TArray<float> W, HU, HV, Wo, HUo, HVo;
 	// 물가 판정 수심 (기본 2cm) — 침투가 없어 되돌림 뒤 얇은 막이 남는다 (m3-log #7). Stockdon 은 비디오로 본 물가
 	float RunH = 0.02f; FParse::Value(*Params, TEXT("runh="), RunH);
 	float T = 0.f, NextRec = 0.f;
 	const double T0 = FPlatformTime::Seconds();
 	while (T < Secs)
 	{
+		if (Sc.bNest) { Outer.Advance(1.f / 60.f, 64); }
 		Grid.Advance(1.f / 60.f, 64);
 		Grid.Download(W, HU, HV, &T);   // 동기 — 측정용
 		if (T + 1e-4f < NextRec) { continue; }
@@ -373,8 +426,15 @@ int32 RunWaveMeasure(const FString& Params)
 		const int32 kb = Jb * NX + Ib;
 		const float Hb = FMath::Max(1e-4f, W[kb] - Sc.BCellV[kb]);
 		double Re = 0, Im = 0;
-		for (const FVector4f& Wv : Sc.G.Waves) { const double Ph = Wv.Z + Wv.W * (Jb + 0.5) * Sc.Dx - Wv.Y * T; Re += Wv.X * FMath::Cos(Ph); Im += Wv.X * FMath::Sin(Ph); }
-		Csv += FString::Printf(TEXT("%.2f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f\n"), T, R[0], R[1], R[2], R[3], W[kb], HU[kb] / Hb, Re * Re + Im * Im);
+		for (const FVector4f& Wv : (Sc.bNest ? Sc.GO.Waves : Sc.G.Waves)) { const double Ph = Wv.Z + Wv.W * (Jb + 0.5) * Sc.Dx - Wv.Y * T; Re += Wv.X * FMath::Cos(Ph); Im += Wv.X * FMath::Sin(Ph); }
+		Csv += FString::Printf(TEXT("%.2f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f"), T, R[0], R[1], R[2], R[3], W[kb], HU[kb] / Hb, Re * Re + Im * Im);
+		if (Sc.bNest)
+		{
+			Outer.Download(Wo, HUo, HVo);
+			const float En = FMath::Lerp(Wo[Jo * NXo + Io], Wo[Jo * NXo + Io + 1], FoX);
+			Csv += FString::Printf(TEXT(",%.4f,%.4f"), En, Wo[Jo * NXo + IoB]);
+		}
+		Csv += TEXT("\n");
 		if (FMath::FloorToInt(T / 100.f) != FMath::FloorToInt((T - 0.1f) / 100.f)) { UE_LOG(LogSandWaves, Display, TEXT("T3b %.0fs / %.0fs (벽시계 %.0fs)"), T, Secs, FPlatformTime::Seconds() - T0); }
 	}
 	FFileHelper::SaveStringToFile(Csv, *Path, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);

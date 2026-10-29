@@ -481,6 +481,33 @@ namespace
 		UE_LOG(LogSandGrid, Display, TEXT("c3 GPU 정상파 kd %.1f Boussinesq: 주기 %.4f s · Airy %.4f (비 %.3f)"), Kd, Tsim, Tth, Tsim / Tth);
 	}
 
+	// c4 주기 y 순환 삼중대각 (Sherman–Morrison): y 로 진행하는 정상파, NY = 2 파장 (80 칸, 2 의 거듭제곱 아님)
+	void GpuPeriodicY(double Kd)
+	{
+		const double d = 1.0, k = Kd / d, Lam = UE_TWO_PI / k, Dy = Lam / 40.0;
+		FSandGridCpu S; Apply(S); S.bDispersive = true; S.SeaLevel = 0.0; S.bWetDry = true;
+		const int32 NX = 4, NY = 80;
+		S.Init(NX, NY, Dy, Dy);
+		for (int32 j = 0; j <= NY; ++j) { for (int32 i = 0; i <= NX; ++i) { S.BCorner[j * (NX + 1) + i] = -d; } }
+		for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i < NX; ++i) { S.W[S.Idx(i, j)] = 0.002 * FMath::Cos(k * (j + 0.5) * Dy + 0.3); }   // 위상을 틀어 감싸는 칸이 마디가 아니게
+		const double Om = FMath::Sqrt(9.81 * k * FMath::Tanh(Kd)), Tth = UE_TWO_PI / Om, Dt = Tth / 400.0;
+		FSandGridGpuInit In = ToGpu(S); In.bPeriodicY = true;
+		FSandGridGpu G; G.Init(In);
+		double T = 0, Prev = S.W[0], Tz0 = -1, Tz1 = -1, Asym = 0; int32 Nz = 0;
+		TArray<float> W, HU, HV;
+		while (T < 6.5 * Tth)
+		{
+			G.StepFixed((float)Dt, 4); T += 4 * Dt;
+			G.Download(W, HU, HV);
+			const double E = W[0];
+			if ((Prev > 0) != (E > 0)) { if (Nz == 0) { Tz0 = T; } Tz1 = T; ++Nz; }
+			Prev = E;
+			for (int32 j = 0; j < NY / 2; ++j) { Asym = FMath::Max(Asym, (double)FMath::Abs(W[j * NX] - W[(j + NY / 2) * NX])); }   // 두 파장이 같아야 (주기 이음매 오차)
+		}
+		const double Tsim = Nz > 1 ? 2.0 * (Tz1 - Tz0) / (Nz - 1) : 0.0;
+		UE_LOG(LogSandGrid, Display, TEXT("c4 GPU 주기 y 정상파 kd %.1f: 주기 %.4f s · Airy %.4f (비 %.3f) · 두 파장 차 최대 %.2e m (진폭 2e-3)"), Kd, Tsim, Tth, Tsim / Tth, Asym);
+	}
+
 	void GpuCost(int32 Size, bool bDisp = false)
 	{
 		FSandGridCpu C; Apply(C);   // 지형 · 초기값만 (CPU 로 풀지 않는다)
@@ -504,6 +531,7 @@ int32 RunSandGridGpuTest(const FString& Params)
 	{
 		CompareDynamic(true);
 		for (double Kd : { 0.5, 1.0, 2.0, 3.0 }) { GpuStandingWave(Kd); }
+		for (double Kd : { 0.5, 2.0 }) { GpuPeriodicY(Kd); }
 		GpuCost(512, false); GpuCost(512, true); GpuCost(1024, false); GpuCost(1024, true);
 		return 0;
 	}
