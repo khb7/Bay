@@ -96,6 +96,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	float Manning = 0.025f; FParse::Value(Cmd, TEXT("manning="), Manning);
 	FSandGridGpuInit& G = Out.G;
 	G.NX = NX; G.NY = NY; G.Dx = Dx; G.Dy = Dx; G.Manning = Manning;
+	G.ManningSwash = Manning; FParse::Value(Cmd, TEXT("manswash="), G.ManningSwash); FParse::Value(Cmd, TEXT("fricx="), G.FricX);   // 진단 D-M3-13
 	G.bOpenEast = true; G.SeaLevel = 0.f; G.BoundaryDepth = H0;
 	// T3c c6 지하수 · 침투 (m3-plan c6): -groundoff 로 끔 · -gwk= (5e-4 m/s)
 	G.bGround = !FParse::Param(Cmd, TEXT("groundoff"));   // 기본 켬 (m3-log #14)

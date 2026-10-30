@@ -26,6 +26,9 @@ uint  Stage;            // 1 또는 2
 uint  bFixedDt;
 float FixedDt;
 float Manning;
+float ManningSwash;      // 진단 (papers D-M3-13): x < FricX (평균 물가선 땅 쪽) 칸 Manning
+float FricX;
+float ManningAt(uint i) { return (i + 0.5f) * Dx < FricX ? ManningSwash : Manning; }
 // T3 바다 쪽 경계 (+x, i = NX) — 리만 불변량 (papers D-M3-5): 나가는 R⁺ = u + 2√(gh) 안쪽에서, 들어오는 R⁻ 는 입사파로
 uint  bOpenEast;
 float SeaLevel;
@@ -370,10 +373,10 @@ void UpdateCS(uint3 Tid : SV_DispatchThreadID)
 	else            { const float4 A = U0RO[k]; O = float4(0.5f * (A.xyz + U.xyz + Dt * L), 0.f); }
 	const float h = O.x - BCell(i, j);
 	if (h < HDry) { O.y = 0.f; O.z = 0.f; }
-	else if (Manning > 0.f)
+	else if (ManningAt(i) > 0.f)
 	{
 		const float Uv = sqrt(O.y * O.y + O.z * O.z) / h;
-		const float Dn = 1.f + Dt * Gravity * Manning * Manning * Uv / pow(h, 4.f / 3.f);
+		const float Dn = 1.f + Dt * Gravity * ManningAt(i) * ManningAt(i) * Uv / pow(h, 4.f / 3.f);
 		O.y /= Dn; O.z /= Dn;
 	}
 	UOutRW[k] = O;
@@ -546,10 +549,10 @@ void FixCS(uint3 Tid : SV_DispatchThreadID)
 	float4 O = UOutRW[k];
 	const float h = O.x - BCell(i, j);
 	if (h < HDry) { O.y = 0.f; O.z = 0.f; }
-	else if (Manning > 0.f)
+	else if (ManningAt(i) > 0.f)
 	{
 		const float Uv = sqrt(O.y * O.y + O.z * O.z) / h;
-		const float Dn = 1.f + Dt * Gravity * Manning * Manning * Uv / pow(h, 4.f / 3.f);
+		const float Dn = 1.f + Dt * Gravity * ManningAt(i) * ManningAt(i) * Uv / pow(h, 4.f / 3.f);
 		O.y /= Dn; O.z /= Dn;
 	}
 	UOutRW[k] = O;
