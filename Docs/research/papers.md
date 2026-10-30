@@ -1950,6 +1950,24 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
 - **판정**: 쇄파대는 **Manning 형태 유지 + n 을 Strickler 낟알 값**으로 (맞춤 아님 — d50 하나에서 나옴). 쇄파 난류 · bore 가 더하는 저항은 Boussinesq 쇄파 소산 (MS92 breaking) 이 이미 맡으므로 마찰에 겹쳐 넣지 않는다. swash 구역은 D-M3-13 대로 n 0.025 (현장 c_f 0.03, Howe 2019 bore 난류로 Moody 보다 큼).
 - **구역 경계**: 진단 #15 와 같이 젖음 비율 < 100% (= 되밀림 한계). 시작 물가선 (x 11.5 m) 은 setup 0.47 m · 경사 1:15 로 평균 물가선 (4.5 m) 보다 7 m 바다 쪽 → 고정은 ±1.5 m 둔감 범위를 넘으므로 **실행 중 갱신** (m3-plan c7). d50 0.3 mm 는 프로젝트에 값이 없어 c6 의 K 와 같은 중간 모래로 둔 가정.
 
+### D-M3-15. ★ 구역 경계 없는 마찰 식 하나 — Manning vs White-Colebrook (2026-10-30)
+#16: 구역 분할 (c7) 의 경계 판정 (1 mm · 120 s) 이 근거 없음 · 포화 막에 무너짐. 문헌 모델은 구역을 실행 중 판정하지 않고 **영역 전체에 식 하나** (공간 변화는 고정 지도 bedfricfile 정도).
+- **XBeach 매뉴얼 (openearth/xbeach-docs `xbeach_manual.rst` ✓ 원문)**: bedfriction = chezy · cf · manning · white-colebrook · white-colebrook-grainsize. Manning c_f = g n²/h^⅓. White-Colebrook c_f = g/C², C = 18 log10(12h/k_s), "log relation with the water depth", **k_s 전형 0.01~0.15 m**. grainsize: k_s = 3·D90 (XBeach-G 기본). (매뉴얼 식은 sqrt(g/C²) 로 적혀 있으나 차원상 c_f = g/C² 가 맞다 — Chezy 식 (51) c_f = g/C² 와 일관.) XBeach-G 는 침투 · 침출 시 Conley & Inman (1994) 환기 경계층 보정 c_f = c_f0·Φ/(e^Φ − 1) — 침투면 커지고 침출이면 작아짐.
+- **SWASH 매뉴얼 △**: constant · Chezy · Manning · Colebrook-White (값 = Nikuradse k_s) · 로그 벽 법칙.
+- **Howe et al. (2019, JMSE 7(10) 358 △ 초록 · 2차)**: 직접 전단 측정, 원형 크기 (GWK) 에서 **Colebrook-White (Moody) + 일정 k_s 로 시간 변하는 마찰을 ±50%** 로 추정 가능. 다른 거칠기 처리는 최대 ~600% 오차. 원문은 403 으로 못 읽음 — k_s 값 미확인.
+- **깊이 의존 비교** (c_f, 계산):
+
+| h | WC k_s 3·D90 (1.35 mm) | WC k_s 0.01 m | Manning 0.0123 | Manning 0.025 | 관측 |
+|---|---|---|---|---|---|
+| 1 m | 0.0019 | 0.0032 | 0.0015 | 0.0061 | 쇄파대 0.0007~0.006 |
+| 0.5 m | 0.0023 | 0.0039 | 0.0019 | 0.0077 | 〃 |
+| 0.2 m | 0.0029 | 0.0053 | 0.0025 | 0.0105 | 〃 |
+| 2 cm | 0.0060 | 0.016 | 0.0055 | 0.023 | swash 0.01~0.05 (현장 0.03) |
+| 5 mm | 0.011 | 0.050 | 0.0087 | 0.036 | 〃 |
+
+- **판정**: Manning (h^−⅓) 은 어떤 n 으로도 두 구역을 같이 못 맞춘다 (D-M3-13). **White-Colebrook 은 얕은 곳에서 log 가 작아져 깊이 의존이 훨씬 강하다** → k_s ≈ 1 cm 하나로 쇄파대 (0.003~0.005) 와 swash (0.016~0.05) 관측 범위를 **둘 다** 지난다. 낟알 k_s (3·D90) 는 쇄파대엔 맞지만 swash 를 3~5 배 작게 낸다.
+- **남은 근거 문제**: k_s 1 cm 는 XBeach 전형 범위의 아래 끝일 뿐 우리 해변에서 유도된 값이 아니다. 후보 근거 — (a) Feddersen 2003 고도계 거칠기 (쇄파대 k_rms 수 cm, 원문 수치 미확인) · (b) 움직이는 바닥 (sheet flow) k_s 식 (Wilson 1989 류 k_s ∝ θ·d50 — 미조사) · (c) Howe 2019 의 k_s (원문 필요). 확인 전엔 낟알 k_s (유도 가능) 와 k_s 1 cm (범위 맞음) 를 둘 다 측정해 비교.
+
 ### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
 - Epic 의 얕은 물은 있다: `Engine/Plugins/FX/NiagaraFluids/Content/Modules/Grid2D/ShallowWater/` (`Grid2D_SW_Advect · UpdateDepthGrid · FilterOvershoot · ExtrapolateVelocities · MovingWindow_*` …) · `Plugins/Experimental/WaterAdvanced` 의 `ShallowWaterRiverActor.cpp:339` 가 `Grid2D_SW_River` 를 쓴다. 바닥은 **SceneCapture 깊이로 찍어 읽기만** (`:107`) — 단방향 시각 효과. 침식 · 모래 · 수분 채널 없음. 모듈 이름으로 보아 이류 + 넘침 거르기 계열 (uasset 그래프라 알고리즘 세부는 미확인).
 - Niagara GPU 틱은 정해진 세 시점에만 돈다: `ENiagaraGpuComputeTickStage { PreInitViews, PostInitViews, PostOpaqueRender }` (`Niagara/Public/NiagaraCommon.h:1924-1926`). 우리 입자 시뮬 RDG 패스 사이에 끼울 수 없다 → M4 의 **같은 프레임 양방향 결합**(격자 → 입자 하중 · 수분, 입자 → 장애물 · 파괴 환원)이 막히거나 1 프레임 늦는다. 외부 RDG 버퍼를 읽히려면 사용자 정의 DI 를 C++ 로 써야 한다.
