@@ -29,6 +29,13 @@ float Manning;
 float ManningSwash;      // 진단 (papers D-M3-13): x < FricX (평균 물가선 땅 쪽) 칸 Manning
 float FricX;
 float ManningAt(uint i) { return (i + 0.5f) * Dx < FricX ? ManningSwash : Manning; }
+float Ks;                // White-Colebrook (papers D-M3-15): > 0 이면 영역 전체 c_f = g/C², C = 18 log10(12h/k_s) — Manning · 구역 대신
+float CfAt(uint i, float h)
+{
+	if (Ks > 0.f) { const float C = max(18.f * log10(12.f * h / Ks), 1.f); return Gravity / (C * C); }   // C ≥ 1: h < k_s/12 근처에서 흐름을 멈추는 수치 가드
+	const float n = ManningAt(i);
+	return Gravity * n * n / pow(h, 1.f / 3.f);
+}
 // T3 바다 쪽 경계 (+x, i = NX) — 리만 불변량 (papers D-M3-5): 나가는 R⁺ = u + 2√(gh) 안쪽에서, 들어오는 R⁻ 는 입사파로
 uint  bOpenEast;
 float SeaLevel;
@@ -373,10 +380,10 @@ void UpdateCS(uint3 Tid : SV_DispatchThreadID)
 	else            { const float4 A = U0RO[k]; O = float4(0.5f * (A.xyz + U.xyz + Dt * L), 0.f); }
 	const float h = O.x - BCell(i, j);
 	if (h < HDry) { O.y = 0.f; O.z = 0.f; }
-	else if (ManningAt(i) > 0.f)
+	else if (CfAt(i, h) > 0.f)
 	{
 		const float Uv = sqrt(O.y * O.y + O.z * O.z) / h;
-		const float Dn = 1.f + Dt * Gravity * ManningAt(i) * ManningAt(i) * Uv / pow(h, 4.f / 3.f);
+		const float Dn = 1.f + Dt * CfAt(i, h) * Uv / h;   // τ/ρ = c_f |u| u, 암시적
 		O.y /= Dn; O.z /= Dn;
 	}
 	UOutRW[k] = O;
@@ -549,10 +556,10 @@ void FixCS(uint3 Tid : SV_DispatchThreadID)
 	float4 O = UOutRW[k];
 	const float h = O.x - BCell(i, j);
 	if (h < HDry) { O.y = 0.f; O.z = 0.f; }
-	else if (ManningAt(i) > 0.f)
+	else if (CfAt(i, h) > 0.f)
 	{
 		const float Uv = sqrt(O.y * O.y + O.z * O.z) / h;
-		const float Dn = 1.f + Dt * Gravity * ManningAt(i) * ManningAt(i) * Uv / pow(h, 4.f / 3.f);
+		const float Dn = 1.f + Dt * CfAt(i, h) * Uv / h;   // τ/ρ = c_f |u| u, 암시적
 		O.y /= Dn; O.z /= Dn;
 	}
 	UOutRW[k] = O;

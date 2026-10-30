@@ -26,6 +26,7 @@ struct FSandGridGpuInit
 	bool  bBoundIg = false;         // T3c c4 경계에 묶인 장주기파 (성분 쌍, LHS 1962 방향 일반화 — m3-plan c4)
 	class FSandGridGpu* NestOuter = nullptr;   // T3c c4 한 방향 nesting: 동쪽 입사를 이 바깥 격자에서 (바깥을 같은 프레임에 먼저 Advance). y 길이는 같게
 	float NestX = 0.f;              // 바깥 격자 좌표에서 이 격자 동쪽 경계 x (m)
+	float Ks = 0.f;                 // White-Colebrook k_s (m, papers D-M3-15): > 0 이면 Manning · 구역 대신 영역 전체 한 식
 	float ManningSwash = 0.f, FricX = 0.f;   // 구역 마찰 (papers D-M3-13/14): x < FricX (swash 구역) 칸은 ManningSwash (FricX 0 이면 안 씀)
 	bool  bGround = false;          // T3c c6 지하수 · 침투 (m3-plan c6 — Dupuit Darcy + Green–Ampt + 침출). 대수층 바닥 = 최저 바닥 − 1 m
 	float GwK = 5e-4f;              // 투수 계수 m/s (중사, papers D-M3-12)

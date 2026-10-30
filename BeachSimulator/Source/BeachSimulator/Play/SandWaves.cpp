@@ -83,9 +83,14 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	const float Dx = 0.05f;
 	int32 NX = 512; FParse::Value(Cmd, TEXT("wavecells="), NX);
 	const int32 NY = NX / 2;
+	// 땅 쪽 추가 폭 (m3-log #16: 처오름 최대 ~1.06 m 가 뒷벽 바닥 0.77 m 를 넘음) — 기본 8 m → 뒷벽 1:15 에서 1.30 m. 바다 쪽 · NY 는 그대로
+	float LandM = 8.f; FParse::Value(Cmd, TEXT("landm="), LandM);
+	const int32 LandCells = FMath::Max(0, FMath::RoundToInt(LandM / Dx));
+	const double XsBase = 0.45 * NX * Dx;
+	NX += LandCells;
 	// 해변 단면 (papers D-M3-6): 물가 x_s 에서 바다 쪽(+x) Dean h = A·(x − x_s)^(2/3), 땅 쪽 직선 (기본 1:15)
 	double Slope = 1.0 / 15.0; { double Inv = 0; if (FParse::Value(Cmd, TEXT("beachslope="), Inv) && Inv > 0) { Slope = 1.0 / Inv; } }   // -beachslope=10 → 1:10
-	const double A = 0.1, Xs = 0.45 * NX * Dx;   // 땅 45% — 처오름이 뒷벽에 닿지 않게 (m3-log #5)
+	const double A = 0.1, Xs = XsBase + LandCells * Dx;   // 땅 45% + 추가 폭 — 처오름이 뒷벽에 닿지 않게 (m3-log #5 · #16)
 	TArray<float>& BCorner = Out.BCorner;
 	BCorner.SetNum((NX + 1) * (NY + 1));
 	for (int32 j = 0; j <= NY; ++j)
@@ -110,8 +115,12 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	FSandGridGpuInit& G = Out.G;
 	G.NX = NX; G.NY = NY; G.Dx = Dx; G.Dy = Dx; G.Manning = Manning;
 	G.ManningSwash = 0.025f; FParse::Value(Cmd, TEXT("manswash="), G.ManningSwash);
-	G.FricX = (float)(0.45 * NX * Dx);   // 시작 물가선 — 실행 중 FSwashZone 이 되밀림 한계로 옮긴다
+	G.FricX = (float)Xs;   // 시작 물가선 — 실행 중 FSwashZone 이 되밀림 한계로 옮긴다
 	if (FParse::Param(Cmd, TEXT("onefric"))) { G.ManningSwash = Manning; G.FricX = 0.f; }   // 구역 없이 한 값
+	// -ks= (m): White-Colebrook 영역 전체 (D-M3-15). -ksgrain: k_s = 3·D90 (XBeach-G), D90 ≈ 1.5·d50 가정
+	if (FParse::Param(Cmd, TEXT("ksgrain"))) { G.Ks = (float)(3.0 * 1.5 * D50); }
+	FParse::Value(Cmd, TEXT("ks="), G.Ks);
+	if (G.Ks > 0.f) { G.FricX = 0.f; }
 	G.bOpenEast = true; G.SeaLevel = 0.f; G.BoundaryDepth = H0;
 	// T3c c6 지하수 · 침투 (m3-plan c6): -groundoff 로 끔 · -gwk= (5e-4 m/s)
 	G.bGround = !FParse::Param(Cmd, TEXT("groundoff"));   // 기본 켬 (m3-log #14)
@@ -152,7 +161,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 		const int32 NXo = FMath::CeilToInt(XEnd / NestDx), NYo = FMath::Max(8, FMath::RoundToInt(Ly / NestDx));
 		const double Dyo = Ly / NYo;
 		FSandGridGpuInit& O = Out.GO;
-		O.NX = NXo; O.NY = NYo; O.Dx = (float)NestDx; O.Dy = (float)Dyo; O.Manning = Manning;
+		O.NX = NXo; O.NY = NYo; O.Dx = (float)NestDx; O.Dy = (float)Dyo; O.Manning = Manning; O.Ks = G.Ks;
 		O.bOpenEast = true; O.bPeriodicY = true; O.bDispersive = true; O.bBoundIg = !FParse::Param(Cmd, TEXT("igoff"));
 		O.BCorner.SetNum((NXo + 1) * (NYo + 1));
 		for (int32 j = 0; j <= NYo; ++j)
@@ -207,7 +216,7 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 	const TCHAR* Cmd = FCommandLine::Get();
 	FWaveScene Sc;
 	BuildWaveScene(Cmd, Sc);
-	NX = Sc.NX; NY = Sc.NY; BCorner = Sc.BCorner; BCellV = Sc.BCellV; H0 = Sc.H0; Hs = Sc.Hs; bZone = Sc.G.FricX > 0.f;
+	NX = Sc.NX; NY = Sc.NY; BCorner = Sc.BCorner; BCellV = Sc.BCellV; H0 = Sc.H0; Hs = Sc.Hs; bZone = Sc.G.FricX > 0.f; Xs0 = (float)Sc.Xs;
 	FSandGridGpuInit& G = Sc.G;
 	const double Xs = Sc.Xs;
 	// 맵에 놓인 예전 입자 시험 액터는 끈다 (프레임마다 14ms — 이 화면과 무관)
@@ -349,7 +358,7 @@ void USandWavesSubsystem::UpdateWaterMesh()
 			if (h > 0.003f) { Shore = FMath::Min(Shore, i); }
 		}
 		UE_LOG(LogSandWaves, Display, TEXT("T3 진단 %.0fs: 물 부피 %.2f m³ · 경계 근처 평균 수위 %+.3f m · 물 닿은 땅 쪽 끝 x %.2f m (정지 물가 %.2f)"),
-			SimTime, V * Dx * Dx, Lev / FMath::Max(1, Nl), Shore * Dx, 0.45 * NX * Dx);
+			SimTime, V * Dx * Dx, Lev / FMath::Max(1, Nl), Shore * Dx, Xs0);
 	}
 	// 수면 법선 — 파도 모양에 빛이 맞게 (지형 법선을 그대로 쓰면 파봉이 안 보인다)
 	WaterNormals.SetNum(WaterVerts.Num());

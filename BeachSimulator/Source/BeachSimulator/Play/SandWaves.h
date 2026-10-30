@@ -64,7 +64,7 @@ private:
 	int32 NX = 0, NY = 0, Step = 2;       // 메시는 Step 칸마다 정점
 	float Dx = 0.05f;
 	TArray<float> BCorner, BCellV;         // m
-	FSwashZone Swash; bool bZone = false;
+	FSwashZone Swash; bool bZone = false; float Xs0 = 0.f;
 	TArray<float> Wet;                     // 정점별 젖음 (물이 닿은 뒤 서서히 마름) — 모래 재질 정점 색 R
 	TArray<FVector> WaterVerts, WaterNormals;
 	TArray<FColor> WaterColors, SandColors;
