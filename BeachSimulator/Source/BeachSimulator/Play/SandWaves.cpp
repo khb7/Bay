@@ -97,8 +97,8 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	FSandGridGpuInit& G = Out.G;
 	G.NX = NX; G.NY = NY; G.Dx = Dx; G.Dy = Dx; G.Manning = Manning;
 	G.bOpenEast = true; G.SeaLevel = 0.f; G.BoundaryDepth = H0;
-	// T3c c6 지하수 · 침투 (m3-plan c6): -ground · -gwk= (5e-4 m/s)
-	G.bGround = FParse::Param(Cmd, TEXT("ground"));
+	// T3c c6 지하수 · 침투 (m3-plan c6): -groundoff 로 끔 · -gwk= (5e-4 m/s)
+	G.bGround = !FParse::Param(Cmd, TEXT("groundoff"));   // 기본 켬 (m3-log #14)
 	FParse::Value(Cmd, TEXT("gwk="), G.GwK);
 	double MeanDeg = 10.0, SwellSpread = 15.0, WindSpread = 40.0;
 	FParse::Value(Cmd, TEXT("wavedir="), MeanDeg);
