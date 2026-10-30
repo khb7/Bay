@@ -1920,6 +1920,14 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
 - **Stockdon 의 β 의존**: setup 0.35β√(H₀L₀) 의 β 는 전안 (foreshore) 경사 — 실제 해변에선 쇄파대 경사와 같이 움직인다. 우리 시험은 **물 위 경사만 바꾸고 쇄파대 (Dean) 는 그대로** → 계산 setup 이 경사에 거의 무관 (0.45~0.49 m) 한 건 이 설계 때문이고, "완만할수록 과대" 는 일부가 시험 설계의 산물. 경사와 무관한 관측식 Guza & Thornton (1981, JGR, 소산 해변) setup ≈ 0.17·H₀ 과 견주면 기본 0.48 은 2.8 배 — 과대는 남는다. NHESS 2023 (Gomes da Silva 등 △): Guza–Thornton 은 setup 을 과소, Holman & Sallenger (1985) ξ 식이 낫다.
 - **결론 (진단 계획)**: (1) 처오름 문턱 민감도 (0.5 / 2 / 5 cm) · 고정점 평균 수위 단면 (Bowen 쇄파대 setup 기울기와 비교) — 측정 문제인지 물리 문제인지 가른다. (2) Manning 0.01 로 마찰 영향. (3) 침투 (M5) 는 조사만 — 들어가면 막이 사라진다.
 
+### D-M3-12. ★ swash 침투 모델 (setup 진단 #13 뒤, 2026-10-30)
+- **Packwood (1983, "The influence of beach porosity on wave uprush and backwash", Coastal Eng 7 △ 2차 인용)**: NSW 처오름 + **포화되지 않은 모래로 들어가는 날카로운 습윤 전선 (Green–Ampt 형)**. 침투 속도 f = K(1 + (h + ψ)/z_f), 전선 깊이 dz_f/dt = f/n_e (h 물 깊이, ψ 모세관 흡인, n_e 유효 공극률). 결과: 세사 K = 0.01 cm/s 면 거의 안 스미고, 중사 K = 0.1 cm/s 면 **최대 처오름 감소는 작다** — 침투는 끝단과 되밀림 (backwash) 의 얇은 물만 깎는다.
+- **Jamal, Simmonds, Magar & Pan (2010 ICCE 32 △ 초록)**: XBeach 변형에 Packwood 침투를 그대로 넣음 (불포화 swash 구역만) → backwash 부피 · 속도가 줄고 자갈 해변 퇴적 재현.
+- **XBeach groundwater (McCall 2012 ICCE / XBeach 매뉴얼 ✓ 일부)**: 지하수가 바닥 밑에 있는 칸에서만 S_inf = K·(p_b/ρg + δ_inf)/δ_inf (δ_inf 습윤 전선 두께, 압력 차 ÷ 전선 두께 = Green–Ampt 와 같은 꼴). 지하수가 바닥 위로 차면 침출 S_exf = n_p·∂(z_b − η_gw)/∂t. 정식 지하수 (Darcy, 수두) 는 M5 범위.
+- **임계 투수 계수 (Masselink & Li 2001, Mar Geol △)**: 침투가 **지형** (쌓임) 을 바꾸는 건 K > 1 cm/s (입경 > 1.5 mm) — 모래 해변 (K ~ 1e-4 ~ 1e-3 m/s) 에선 처오름 · 지형 효과가 작다. 같은 결론: 자갈 장벽에서 K > 0.01 m/s 부터 월파량에 큰 영향 (McCall 2014 △).
+- **Hammeken & Simons (2017 ICCE △)**: VARANS — 침투는 바닥 응력을 늘릴 수도 줄일 수도 있다 (얇아진 막 vs 경계층 흡입). 지형 단계 (M4+) 에서 다시 볼 일.
+- **결론 (설계 근거)**: 모래 K ~ 5e-4 m/s 의 Green–Ampt 침투는 **처오름 최대 · swash 엔 거의 영향 없고, 남은 mm~cm 막을 수 초~수십 초 만에 지운다** — 우리 증상 (#13: 늘 젖은 막 위 판정) 에 꼭 맞는 크기. 간이 구현 = 칸마다 전선 깊이 z_f (상태 1 채널), 물에 잠겨 있으면 f = K(1 + (h+ψ)/z_f) 로 빼고 z_f 증가, 마르면 배수 시간 τ 로 z_f 를 천천히 되돌림 (지하수면 없음 = 무한히 깊은 불포화층 가정). 바다 쪽 늘 잠긴 칸은 포화 (지하수와 연결) 로 보고 침투 0 — 경계는 정지 수위 (나중엔 조석 수위) 로. M5 의 Darcy 지하수가 이를 대체한다. 파라미터: K 5e-4 m/s (중사), ψ 0.1 m, n_e 0.3 — 측정에 맞추지 않고 입도 표준값으로.
+
 ### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
 - Epic 의 얕은 물은 있다: `Engine/Plugins/FX/NiagaraFluids/Content/Modules/Grid2D/ShallowWater/` (`Grid2D_SW_Advect · UpdateDepthGrid · FilterOvershoot · ExtrapolateVelocities · MovingWindow_*` …) · `Plugins/Experimental/WaterAdvanced` 의 `ShallowWaterRiverActor.cpp:339` 가 `Grid2D_SW_River` 를 쓴다. 바닥은 **SceneCapture 깊이로 찍어 읽기만** (`:107`) — 단방향 시각 효과. 침식 · 모래 · 수분 채널 없음. 모듈 이름으로 보아 이류 + 넘침 거르기 계열 (uasset 그래프라 알고리즘 세부는 미확인).
 - Niagara GPU 틱은 정해진 세 시점에만 돈다: `ENiagaraGpuComputeTickStage { PreInitViews, PostInitViews, PostOpaqueRender }` (`Niagara/Public/NiagaraCommon.h:1924-1926`). 우리 입자 시뮬 RDG 패스 사이에 끼울 수 없다 → M4 의 **같은 프레임 양방향 결합**(격자 → 입자 하중 · 수분, 입자 → 장애물 · 파괴 환원)이 막히거나 1 프레임 늦는다. 외부 RDG 버퍼를 읽히려면 사용자 정의 DI 를 C++ 로 써야 한다.
