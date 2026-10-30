@@ -45,6 +45,16 @@ uint  DispTaper;         // 열린 경계 쪽 분산 줄이는 칸 수 (d → 0)
 StructuredBuffer<float4>   NestARO;
 StructuredBuffer<float4>   NestBRO;
 RWStructuredBuffer<float4> NestOutRW;
+// T3c c6 지하수 · 침투 (m3-plan c6, papers D-M3-12) — XBeach gwnonh=0: Dupuit Darcy + Green–Ampt 침투 + 침출. 서브스텝 끝 GwFluxCS → GwApplyCS
+uint  bGround;
+float GwK;               // 투수 계수 (m/s)
+float GwPsi;             // 습윤 전선 흡인 ψ (m)
+float GwNe;              // 유효 공극률
+float GwZaq;             // 대수층 바닥 (m)
+StructuredBuffer<float2>   GwRO;   // (η_gw 지하수면, δ 습윤 전선 깊이)
+RWStructuredBuffer<float2> GwRW;
+StructuredBuffer<float>    GwQRO;  // 칸 Darcy 순유입 (m/s)
+RWStructuredBuffer<float>  GwQRW;
 uint  bPeriodicY;        // 해안선 방향(y) 주기 경계 — 비스듬한 파도가 옆 벽에서 튕기지 않게 (k_y 는 2π m / L_y 로 맞춘다)          // 바닥 마찰 n (s/m^⅓) — CPU FixDry 와 같은 암시적 꼴
 
 StructuredBuffer<float>    BCorner;
@@ -562,4 +572,76 @@ void NestCS(uint3 Tid : SV_DispatchThreadID)
 		V[q] = h > HDry ? float3(U.x - SeaLevel, -U.y / h, U.z / h) : float3(U.x - SeaLevel, 0.f, 0.f);
 	}
 	NestOutRW[j] = float4(lerp(V[0], V[1], f), TimeRO[2]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// T3c c6 지하수 (m3-plan c6). 연결 = 젖은 칸 + 지하수면이 바닥에 닿음 → 수두 = 지표 수위, 포화 두께는 바닥까지
+static const float GW_EPS = 1e-4f;
+
+void GwHead(uint i, uint j, out float H, out float Hg)
+{
+	const uint k = Idx(i, j);
+	const float w = URO[k].x, B = BCell(i, j), g = GwRO[k].x;
+	const bool bConn = w - B > HDry && g >= B - GW_EPS;
+	H = bConn ? w : g;
+	Hg = max(min(H, B) - GwZaq, 0.f);
+}
+
+[numthreads(8, 8, 1)]
+void GwFluxCS(uint3 Tid : SV_DispatchThreadID)
+{
+	// 면 Darcy (Dupuit) q = −K·h̄_gw·ΔH/Δ, 칸 순유입. 바깥 경계 무유량, y 주기면 감싼다
+	const uint i = Tid.x, j = Tid.y;
+	if (i >= NX || j >= NY) { return; }
+	float H, Hg;
+	GwHead(i, j, H, Hg);
+	float Q = 0.f;
+	const int2 Nb[4] = { int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1) };
+	[unroll] for (uint n = 0; n < 4; ++n)
+	{
+		const int a = (int)i + Nb[n].x;
+		int b = (int)j + Nb[n].y;
+		if (a < 0 || a >= (int)NX) { continue; }
+		if (b < 0 || b >= (int)NY) { if (bPeriodicY == 0u) { continue; } b = WJ(b); }
+		float Hn, Hgn;
+		GwHead((uint)a, (uint)b, Hn, Hgn);
+		const float D = n < 2 ? Dx : Dy;
+		Q += GwK * 0.5f * (Hg + Hgn) * (Hn - H) / (D * D);
+	}
+	GwQRW[Idx(i, j)] = Q;
+}
+
+[numthreads(8, 8, 1)]
+void GwApplyCS(uint3 Tid : SV_DispatchThreadID)
+{
+	// 연결: Darcy 순유입이 곧 지표와 교환 · 연결 안 됨: 지하수면 갱신 + 침투 (Green–Ampt) + 넘치면 침출. 지표에서 빠진 만큼 hu, hv 같은 비율
+	const uint i = Tid.x, j = Tid.y;
+	if (i >= NX || j >= NY) { return; }
+	const uint k = Idx(i, j);
+	const float Dt = TimeRO[0];
+	float4 U = UOutRW[k];
+	float2 G = GwRW[k];
+	const float B = BCell(i, j), h = U.x - B, Qd = GwQRO[k] * Dt;
+	if (h > HDry && G.x >= B - GW_EPS)
+	{
+		const float dW = max(Qd, -h);   // 지표가 모자라면 나머지는 지하수에서
+		U.x += dW;
+		G = float2(B + min(0.f, Qd - dW) / GwNe, 0.f);
+	}
+	else
+	{
+		G.x += Qd / GwNe;
+		if (h > HDry)
+		{
+			const float F = GwK * (1.f + (h + GwPsi) / max(G.y, 1e-3f));
+			const float I = clamp(F * Dt, 0.f, min(h, GwNe * max(B - G.x, 0.f)));
+			U.x -= I; G.x += I / GwNe; G.y += I / GwNe;
+		}
+		else { G.y = 0.f; }
+		if (G.x > B) { U.x += GwNe * (G.x - B); G.x = B; }
+	}
+	const float hn = U.x - B;
+	if (h > HDry && hn < h) { U.yz *= max(hn, 0.f) / h; }
+	UOutRW[k] = U;
+	GwRW[k] = G;
 }

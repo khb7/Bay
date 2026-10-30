@@ -508,6 +508,100 @@ namespace
 		UE_LOG(LogSandGrid, Display, TEXT("c4 GPU 주기 y 정상파 kd %.1f: 주기 %.4f s · Airy %.4f (비 %.3f) · 두 파장 차 최대 %.2e m (진폭 2e-3)"), Kd, Tsim, Tth, Tsim / Tth, Asym);
 	}
 
+	// c6 지하수 (m3-plan c6) — 평평 · 경사 바닥 격자 (닫힌 상자, 벽)
+	FSandGridGpuInit GroundGrid(int32 NX, int32 NY, double Dx, TFunctionRef<double(double)> Bof)
+	{
+		FSandGridGpuInit In;
+		In.NX = NX; In.NY = NY; In.Dx = In.Dy = (float)Dx; In.bGround = true;
+		In.BCorner.SetNum((NX + 1) * (NY + 1));
+		for (int32 j = 0; j <= NY; ++j) for (int32 i = 0; i <= NX; ++i) { In.BCorner[j * (NX + 1) + i] = (float)Bof(i * Dx); }
+		In.W.SetNum(NX * NY); In.HU.Init(0.f, NX * NY); In.HV.Init(0.f, NX * NY);
+		for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i < NX; ++i) { In.W[j * NX + i] = (float)(0.5 * (Bof(i * Dx) + Bof((i + 1) * Dx))); }   // 마름 (수심 0)
+		return In;
+	}
+
+	double GroundVolume(const FSandGridGpuInit& In, const FSandGridGpu& G, double Ne)
+	{
+		TArray<float> W, HU, HV; TArray<FVector2f> Gw; float Zaq = 0.f;
+		G.Download(W, HU, HV); G.DownloadGround(Gw, &Zaq);
+		double V = 0.0;
+		for (int32 j = 0; j < In.NY; ++j)
+		for (int32 i = 0; i < In.NX; ++i)
+		{
+			const int32 k = j * In.NX + i, c = j * (In.NX + 1) + i;
+			const double Bm = 0.25 * (In.BCorner[c] + In.BCorner[c + 1] + In.BCorner[c + In.NX + 1] + In.BCorner[c + In.NX + 2]);
+			V += (W[k] - Bm) + Ne * (Gw[k].X - Zaq);
+		}
+		return V * In.Dx * In.Dy;
+	}
+
+	void GpuGround()
+	{
+		// (1) 질량 보존 — 1:5 경사 (바다 쪽 물), 물가 위 마른 모래에 물 덩이 → 처오르고 스미고 지하수가 흐른다
+		{
+			const int32 NX = 120, NY = 8; const double Dx = 0.05;
+			FSandGridGpuInit In = GroundGrid(NX, NY, Dx, [](double x) { return 0.6 - 0.2 * x; });   // x 0 → +0.6, 6 m → −0.6
+			In.Manning = 0.02f;
+			for (int32 j = 0; j < NY; ++j)
+			for (int32 i = 0; i < NX; ++i)
+			{
+				const double x = (i + 0.5) * Dx, B = 0.6 - 0.2 * x;
+				float& W = In.W[j * NX + i];
+				W = (float)FMath::Max(B, 0.0);
+				if (x > 1.0 && x < 1.6) { W = (float)(B + 0.08); }
+			}
+			FSandGridGpu G; G.Init(In);
+			const double V0 = GroundVolume(In, G, In.GwNe);
+			double Vmax = 0.0;
+			for (int32 n = 0; n < 40; ++n) { G.StepFixed(2e-3f, 250); Vmax = FMath::Max(Vmax, FMath::Abs(GroundVolume(In, G, In.GwNe) - V0)); }
+			TArray<FVector2f> Gw; G.DownloadGround(Gw);
+			UE_LOG(LogSandGrid, Display, TEXT("c6 ① 지하수 질량 보존 (닫힌 상자 20 s): 최대 |ΔV| %.3e m³ / 전체 %.4f m³ (상대 %.2e, 기준 < 1e-4) · 물가 위 x 1.3 m 지하수면 %.3f m (처음 0)"),
+				Vmax, V0, Vmax / V0, Gw[4 * NX + 26].X);
+		}
+		// (2) 지하수면 계단 (지표수 없음) → 선형 확산 D = K·h/n_e, erf 해
+		{
+			const int32 NX = 200, NY = 4; const double Dx = 0.05, L = NX * Dx;
+			FSandGridGpuInit In = GroundGrid(NX, NY, Dx, [](double) { return 1.0; });   // 대수층 바닥 0
+			In.GwInit.SetNum(NX * NY);
+			for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i < NX; ++i) { In.GwInit[j * NX + i] = (i + 0.5) * Dx < 0.5 * L ? 0.41f : 0.39f; }
+			FSandGridGpu G; G.Init(In);
+			const double Tend = 600.0;
+			for (int32 n = 0; n < 60; ++n) { G.StepFixed(0.05f, 200); }
+			TArray<FVector2f> Gw; G.DownloadGround(Gw);
+			const double D = In.GwK * 0.4 / In.GwNe;
+			double Err = 0.0;
+			for (int32 i = 0; i < NX; ++i)
+			{
+				const double x = (i + 0.5) * Dx - 0.5 * L, An = 0.4 - 0.01 * std::erf(x / FMath::Sqrt(4.0 * D * Tend));
+				Err = FMath::Max(Err, FMath::Abs(Gw[NX + i].X - An));
+			}
+			UE_LOG(LogSandGrid, Display, TEXT("c6 ② 지하수면 계단 확산 (D %.2e m²/s, 600 s, 퍼짐 %.2f m): 최대 오차 %.2f%% (계단 2 cm 대비, 기준 ±5%%)"), D, FMath::Sqrt(4.0 * D * Tend), 100.0 * Err / 0.02);
+		}
+		// (3) 마른 모래 위 웅덩이 10 cm → Green–Ampt 누적 침투 F(t) (같은 식 CPU 상미분)
+		{
+			const int32 NX = 8, NY = 8; const double Dx = 0.05;
+			FSandGridGpuInit In = GroundGrid(NX, NY, Dx, [](double) { return 0.0; });   // 대수층 바닥 −1
+			for (float& W : In.W) { W = 0.1f; }
+			In.GwInit.Init(-0.9f, NX * NY);
+			FSandGridGpu G; G.Init(In);
+			const double K = In.GwK, Psi = In.GwPsi, Ne = In.GwNe;
+			double F = 0.0, Tc = 0.0, ErrMax = 0.0;
+			FString Line;
+			TArray<float> W, HU, HV;
+			for (int32 n = 1; n <= 6; ++n)
+			{
+				for (int32 m = 0; m < 40; ++m) { G.StepFixed(1e-3f, 500); }
+				for (int32 s = 0; s < 200000; ++s) { const double h = 0.1 - F; if (h <= 0.0) { break; } F += FMath::Min(h, K * (1.0 + (h + Psi) / FMath::Max(F / Ne, 1e-3)) * 1e-4); }
+				Tc += 20.0;
+				G.Download(W, HU, HV);
+				const double Fg = 0.1 - W[3 * NX + 3];
+				ErrMax = FMath::Max(ErrMax, FMath::Abs(Fg - F) / 0.1);
+				Line += FString::Printf(TEXT(" %.0fs %.2f/%.2f cm"), Tc, 100 * Fg, 100 * F);
+			}
+			UE_LOG(LogSandGrid, Display, TEXT("c6 ③ Green–Ampt 웅덩이 (GPU/CPU):%s · 최대 오차 %.1f%% (웅덩이 대비, 기준 ±5%%)"), *Line, 100 * ErrMax);
+		}
+	}
+
 	void GpuCost(int32 Size, bool bDisp = false)
 	{
 		FSandGridCpu C; Apply(C);   // 지형 · 초기값만 (CPU 로 풀지 않는다)
@@ -527,6 +621,7 @@ int32 RunSandGridGpuTest(const FString& Params)
 {
 	GOpt = FOpt();
 	FParse::Value(*Params, TEXT("gridmanning="), GOpt.N);
+	if (FParse::Param(*Params, TEXT("gridground"))) { GpuGround(); return 0; }
 	if (FParse::Param(*Params, TEXT("gridbous")))
 	{
 		CompareDynamic(true);

@@ -3,7 +3,7 @@
 //   바다 쪽 경계 = 리만 불변량 입사 · 반사 흡수 (D-M3-5), 경계 유의파고 = 쇄파대 포화 H_rms 0.42·h (Thornton & Guza 1982)
 //   스펙트럼 = 풍파 JONSWAP γ 3.3 + 너울 γ 20 (G-6c), 32 성분, 주파수를 칸 안에서 무작위 (반복 방지)
 //   가운데 끌기 둘러보기 · WASD QE 이동 · -sandwavesshot= (자동: 스크린샷 몇 장 후 종료)
-//   -swellfrac= (0.6) -swelltp= (12) -windtp= (5) -wavehs= (경계 포화값) -wavecells= (512) -manning= (0.025)
+//   -swellfrac= (0.6) -swelltp= (12) -windtp= (5) -wavehs= (경계 포화값) -wavecells= (512) -manning= (0.025) -ground (지하수 · 침투, m3-plan c6) -gwk= (5e-4)
 //   -waveh0= (먼바다 H0 1m) -igcoef= (경계 IG 유의파고 / H0, 0.25) -igoff -beachslope= (15 → 1:15) -waveseed=
 //   -nest (바깥 25cm 격자 → 안쪽 경계, m3-plan c4) -nestdepth= (3.3) -nestdx= (0.25)
 //   -wavedir= (평균 방향 10°) -swellspread= (15°) -windspread= (40°) — 방향 분산 (G-6c), 해안선 방향은 주기 경계

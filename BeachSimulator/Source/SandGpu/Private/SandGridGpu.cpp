@@ -69,6 +69,15 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, NestARO)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, NestBRO)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, NestOutRW)
+	SHADER_PARAMETER(uint32, bGround)
+	SHADER_PARAMETER(float, GwK)
+	SHADER_PARAMETER(float, GwPsi)
+	SHADER_PARAMETER(float, GwNe)
+	SHADER_PARAMETER(float, GwZaq)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float2>, GwRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float2>, GwRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, GwQRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, GwQRW)
 END_SHADER_PARAMETER_STRUCT()
 
 #define GRID_SHADER(ClassName, EntryPoint) \
@@ -97,12 +106,17 @@ GRID_SHADER(FSandGridDispCS,   "DispCS")
 GRID_SHADER(FSandGridSolveCS,  "SolveCS")
 GRID_SHADER(FSandGridFixCS,    "FixCS")
 GRID_SHADER(FSandGridNestCS,   "NestCS")
+GRID_SHADER(FSandGridGwFluxCS, "GwFluxCS")
+GRID_SHADER(FSandGridGwApplyCS, "GwApplyCS")
 
 struct FSandGridGpu::FState
 {
 	TRefCountPtr<FRDGPooledBuffer> BCorner, U0, U1, Level, FX, FY, Drain, AMax, Time, Waves;
 	TRefCountPtr<FRDGPooledBuffer> Dst, UV0, UV1, FsPrev, FsT, Disp;   // T3c 분산
 	TRefCountPtr<FRDGPooledBuffer> NestA, NestB;                      // T3c c4 nesting 스냅샷 (앞 · 뒤)
+	TRefCountPtr<FRDGPooledBuffer> Gw, GwQ;                           // T3c c6 지하수 (η_gw, δ) · Darcy 순유입
+	float GwZaq = 0.f;
+	FRHIGPUBufferReadback DlGw{ TEXT("SandGrid.DlGw") };
 	uint32 NumIg = 0;
 	bool bNestPrimed = false;
 	FRHIGPUBufferReadback DlU{ TEXT("SandGrid.DlU") }, DlTime{ TEXT("SandGrid.DlTime") };
@@ -190,7 +204,20 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 	FState* S = State;
 	const int32 NX = In.NX, NY = In.NY;
 	S->NumIg = NumIg; S->bNestPrimed = false;
-	ENQUEUE_RENDER_COMMAND(SandGridInit)([S, U = MoveTemp(U), BC = MoveTemp(BC), Wv = MoveTemp(Wv), N, NX, NY, NestNY](FRHICommandListImmediate& RHICmdList)
+	// c6 지하수: 처음 지하수면 = min(B, SeaLevel) (물 밑은 바닥에 닿아 연결), 대수층 바닥 = 최저 꼭짓점 − 1 m (m3-plan c6)
+	TArray<FVector2f> Gw; Gw.SetNum(N);
+	{
+		float Bmin = BC.Num() ? BC[0] : 0.f;
+		for (float V : BC) { Bmin = FMath::Min(Bmin, V); }
+		S->GwZaq = Bmin - 1.f;
+		for (int32 j = 0; j < NY; ++j)
+		for (int32 i = 0; i < NX; ++i)
+		{
+			const float Bm = 0.25f * (BC[j * (NX + 1) + i] + BC[j * (NX + 1) + i + 1] + BC[(j + 1) * (NX + 1) + i] + BC[(j + 1) * (NX + 1) + i + 1]);
+			Gw[j * NX + i] = FVector2f(In.GwInit.Num() == N ? In.GwInit[j * NX + i] : FMath::Min(Bm, In.SeaLevel), 0.f);
+		}
+	}
+	ENQUEUE_RENDER_COMMAND(SandGridInit)([S, U = MoveTemp(U), BC = MoveTemp(BC), Wv = MoveTemp(Wv), Gw = MoveTemp(Gw), N, NX, NY, NestNY](FRHICommandListImmediate& RHICmdList)
 	{
 		FRDGBuilder GraphBuilder(RHICmdList, RDG_EVENT_NAME("SandGridInit"));
 		S->BCorner = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.BCorner"), BC.GetData());
@@ -211,11 +238,13 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 		S->Waves = MakeBuffer(GraphBuilder, sizeof(FVector4f), Wv.Num(), TEXT("SandGrid.Waves"), Wv.GetData());
 		S->NestA = MakeBuffer(GraphBuilder, sizeof(FVector4f), NestNY, TEXT("SandGrid.NestA"));
 		S->NestB = MakeBuffer(GraphBuilder, sizeof(FVector4f), NestNY, TEXT("SandGrid.NestB"));
+		S->Gw = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.Gw"), Gw.GetData());
+		S->GwQ = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.GwQ"));
 		GraphBuilder.Execute();
 		if (!S->Ts[0].IsValid()) { for (FRenderQueryRHIRef& Q : S->Ts) { Q = RHICreateRenderQuery(RQT_AbsoluteTime); } }
 	});
 	FlushRenderingCommands();
-	Params.BCorner.Empty(); Params.W.Empty(); Params.HU.Empty(); Params.HV.Empty();   // Waves 는 둔다 (NumWaves)
+	Params.BCorner.Empty(); Params.W.Empty(); Params.HU.Empty(); Params.HV.Empty(); Params.GwInit.Empty();   // Waves 는 둔다 (NumWaves)
 }
 
 void FSandGridGpu::StepFixed(float Dt, int32 NumSteps) { Run(true, Dt, NumSteps); }
@@ -279,6 +308,8 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 			B.Waves = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Waves));
 			B.bDispersive = P.bDispersive ? 1u : 0u; B.BreakRatio = P.BreakRatio; B.DispTaper = (uint32)FMath::Max(0, P.DispTaper);
 			B.NumIg = S->NumIg;
+			B.bGround = P.bGround ? 1u : 0u; B.GwK = P.GwK; B.GwPsi = P.GwPsi; B.GwNe = P.GwNe; B.GwZaq = S->GwZaq;
+			FRDGBufferRef GwB = GraphBuilder.RegisterExternalBuffer(S->Gw), GwQB = GraphBuilder.RegisterExternalBuffer(S->GwQ);
 			B.bNest = OS ? 1u : 0u; B.NestNY = OS ? OP.NY : 1u; B.NestDy = OS ? OP.Dy : 1.f;
 			B.NestARO = GraphBuilder.CreateSRV(NA); B.NestBRO = GraphBuilder.CreateSRV(NB);
 			FRDGBufferRef Ds = GraphBuilder.RegisterExternalBuffer(S->Dst);
@@ -376,6 +407,14 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 						AddGridPass<FSandGridUpdateCS>(GraphBuilder, RDG_EVENT_NAME("SandGridUpdate1"), ShaderMap, Up, GC);
 					}
 				}
+				if (P.bGround)
+				{
+					// c6 지하수 — 서브스텝 끝 U0 에서 (연산자 분리)
+					FSandGridParams X = B; X.URO = GraphBuilder.CreateSRV(U0); X.GwRO = GraphBuilder.CreateSRV(GwB); X.GwQRW = GraphBuilder.CreateUAV(GwQB);
+					AddGridPass<FSandGridGwFluxCS>(GraphBuilder, RDG_EVENT_NAME("SandGridGwFlux"), ShaderMap, X, GC);
+					FSandGridParams Y = B; Y.TimeRO = GraphBuilder.CreateSRV(Tm); Y.GwQRO = GraphBuilder.CreateSRV(GwQB); Y.GwRW = GraphBuilder.CreateUAV(GwB); Y.UOutRW = GraphBuilder.CreateUAV(U0);
+					AddGridPass<FSandGridGwApplyCS>(GraphBuilder, RDG_EVENT_NAME("SandGridGwApply"), ShaderMap, Y, GC);
+				}
 			}
 			GraphBuilder.AddPass(RDG_EVENT_NAME("SandGridTs1"), ERDGPassFlags::NeverCull, [Q = S->Ts[1].GetReference()](FRHICommandListImmediate& Cmd) { Cmd.EndRenderQuery(Q); });
 			GraphBuilder.Execute();
@@ -388,6 +427,26 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 	});
 	FlushRenderingCommands();
 	GpuMs = Ms;
+}
+
+void FSandGridGpu::DownloadGround(TArray<FVector2f>& OutGw, float* OutZaq) const
+{
+	const int32 N = Params.NX * Params.NY;
+	OutGw.SetNum(N);
+	FState* S = State;
+	ENQUEUE_RENDER_COMMAND(SandGridDownloadGw)([S, N, &OutGw](FRHICommandListImmediate& RHICmdList)
+	{
+		{
+			FRDGBuilder GraphBuilder(RHICmdList, RDG_EVENT_NAME("SandGridDownloadGw"));
+			AddEnqueueCopyPass(GraphBuilder, &S->DlGw, GraphBuilder.RegisterExternalBuffer(S->Gw), N * sizeof(FVector2f));
+			GraphBuilder.Execute();
+		}
+		RHICmdList.SubmitAndBlockUntilGPUIdle();
+		if (const void* Src = S->DlGw.Lock(N * sizeof(FVector2f))) { FMemory::Memcpy(OutGw.GetData(), Src, N * sizeof(FVector2f)); }
+		S->DlGw.Unlock();
+	});
+	FlushRenderingCommands();
+	if (OutZaq) { *OutZaq = State->GwZaq; }
 }
 
 void FSandGridGpu::Download(TArray<float>& OutW, TArray<float>& OutHU, TArray<float>& OutHV, float* OutSimTime) const

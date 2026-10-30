@@ -97,6 +97,9 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	FSandGridGpuInit& G = Out.G;
 	G.NX = NX; G.NY = NY; G.Dx = Dx; G.Dy = Dx; G.Manning = Manning;
 	G.bOpenEast = true; G.SeaLevel = 0.f; G.BoundaryDepth = H0;
+	// T3c c6 지하수 · 침투 (m3-plan c6): -ground · -gwk= (5e-4 m/s)
+	G.bGround = FParse::Param(Cmd, TEXT("ground"));
+	FParse::Value(Cmd, TEXT("gwk="), G.GwK);
 	double MeanDeg = 10.0, SwellSpread = 15.0, WindSpread = 40.0;
 	FParse::Value(Cmd, TEXT("wavedir="), MeanDeg);
 	FParse::Value(Cmd, TEXT("swellspread="), SwellSpread);
@@ -172,7 +175,8 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	const FString NestInfo = Out.bNest ? FString::Printf(TEXT(" · nesting 바깥 %d×%d (칸 %.0fcm, %.0fm, 경계 수심 %.2fm, Hs %.2fm, 묶인 IG %s)"),
 		Out.GO.NX, Out.GO.NY, Out.GO.Dx * 100, Out.GO.NX * Out.GO.Dx, Out.GO.BoundaryDepth, DeepH0, Out.GO.bBoundIg ? TEXT("켬") : TEXT("끔")) : FString();
 	Out.Info = FString::Printf(TEXT("T3 파도 — 격자 %d×%d (칸 %.0fcm, %.1f×%.1fm) · 해변 1:%.0f · 경계 수심 %.2fm · 경계 Hs %.2fm · 먼바다 H0 %.2fm · 너울 %.0f%% Tp %.0fs · 풍파 Tp %.0fs · Manning %.3f · IG 계수 %.2f (이득 %.2f)"),
-		NX, NY, Dx * 100, NX * Dx, NY * Dx, 1.0 / Slope, H0, Hs, DeepH0, SwellFrac * 100, SwellTp, WindTp, Manning, IgCoef, G.IgGain) + NestInfo;
+		NX, NY, Dx * 100, NX * Dx, NY * Dx, 1.0 / Slope, H0, Hs, DeepH0, SwellFrac * 100, SwellTp, WindTp, Manning, IgCoef, G.IgGain) + NestInfo
+		+ (G.bGround ? FString::Printf(TEXT(" · 지하수 K %.1e m/s"), G.GwK) : FString());
 }
 
 bool USandWavesSubsystem::ShouldCreateSubsystem(UObject* Outer) const
@@ -398,7 +402,8 @@ int32 RunWaveMeasure(const FString& Params)
 		for (const FVector4f& Wv : Sc.GO.Waves) { Csv += FString::Printf(TEXT("# wave %.6f %.6f %.6f %.6f\n"), Wv.X, Wv.Y, Wv.Z, Wv.W); }
 	}
 	Csv += Sc.bNest ? TEXT("t,R0,R1,R2,R3,eta_b,u_b,A2,Rlo,Rhi,eta_nest,eta_ob\n") : TEXT("t,R0,R1,R2,R3,eta_b,u_b,A2,Rlo,Rhi\n");
-	TArray<double> ProfW, ProfN; ProfW.Init(0.0, NX); ProfN.Init(0.0, NX); double ProfT = 0.0;
+	TArray<double> ProfW, ProfN, ProfG; ProfW.Init(0.0, NX); ProfN.Init(0.0, NX); ProfG.Init(0.0, NX); double ProfT = 0.0, ProfGn = 0.0;
+	TArray<FVector2f> Gw;
 	TArray<float> W, HU, HV, Wo, HUo, HVo;
 	// 물가 판정 수심 (기본 2cm) — 침투가 없어 되돌림 뒤 얇은 막이 남는다 (m3-log #7). Stockdon 은 비디오로 본 물가
 	float RunH = 0.02f; FParse::Value(*Params, TEXT("runh="), RunH);
@@ -429,6 +434,13 @@ int32 RunWaveMeasure(const FString& Params)
 			// 평균 수위 단면 (y 평균, 젖은 시간만) — 쇄파대 setup 기울기 (D-M3-11)
 			for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i < NX; ++i) { const int32 k = j * NX + i; if (W[k] - Sc.BCellV[k] > 0.001f) { ProfW[i] += W[k]; ProfN[i] += 1.0; } }
 			ProfT += NY;
+			if (Sc.G.bGround && FMath::FloorToInt(T) != FMath::FloorToInt(T - 0.1f))
+			{
+				// 지하수면 단면 (1 초마다, y 평균) — c6
+				Grid.DownloadGround(Gw);
+				for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i < NX; ++i) { ProfG[i] += Gw[j * NX + i].X; }
+				ProfGn += NY;
+			}
 		}
 		const int32 kb = Jb * NX + Ib;
 		const float Hb = FMath::Max(1e-4f, W[kb] - Sc.BCellV[kb]);
@@ -447,8 +459,8 @@ int32 RunWaveMeasure(const FString& Params)
 	}
 	FFileHelper::SaveStringToFile(Csv, *Path, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 	{
-		FString Pf = TEXT("x,B,eta_mean,wet_frac\n");
-		for (int32 i = 0; i < NX; ++i) { Pf += FString::Printf(TEXT("%.3f,%.4f,%.4f,%.4f\n"), (i + 0.5f) * Sc.Dx, Sc.BCellV[Jb * NX + i], ProfN[i] > 0 ? ProfW[i] / ProfN[i] : 0.0, ProfT > 0 ? ProfN[i] / ProfT : 0.0); }
+		FString Pf = TEXT("x,B,eta_mean,wet_frac,gw_mean\n");
+		for (int32 i = 0; i < NX; ++i) { Pf += FString::Printf(TEXT("%.3f,%.4f,%.4f,%.4f,%.4f\n"), (i + 0.5f) * Sc.Dx, Sc.BCellV[Jb * NX + i], ProfN[i] > 0 ? ProfW[i] / ProfN[i] : 0.0, ProfT > 0 ? ProfN[i] / ProfT : 0.0, ProfGn > 0 ? ProfG[i] / ProfGn : 0.0); }
 		FFileHelper::SaveStringToFile(Pf, *Path.Replace(TEXT(".csv"), TEXT("_prof.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 	}
 	UE_LOG(LogSandWaves, Display, TEXT("T3b 측정 끝 → %s (벽시계 %.0fs)"), *Path, FPlatformTime::Seconds() - T0);

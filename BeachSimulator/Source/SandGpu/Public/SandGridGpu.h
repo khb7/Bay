@@ -26,6 +26,11 @@ struct FSandGridGpuInit
 	bool  bBoundIg = false;         // T3c c4 경계에 묶인 장주기파 (성분 쌍, LHS 1962 방향 일반화 — m3-plan c4)
 	class FSandGridGpu* NestOuter = nullptr;   // T3c c4 한 방향 nesting: 동쪽 입사를 이 바깥 격자에서 (바깥을 같은 프레임에 먼저 Advance). y 길이는 같게
 	float NestX = 0.f;              // 바깥 격자 좌표에서 이 격자 동쪽 경계 x (m)
+	bool  bGround = false;          // T3c c6 지하수 · 침투 (m3-plan c6 — Dupuit Darcy + Green–Ampt + 침출). 대수층 바닥 = 최저 바닥 − 1 m
+	float GwK = 5e-4f;              // 투수 계수 m/s (중사, papers D-M3-12)
+	float GwPsi = 0.05f;            // 습윤 전선 흡인 m (Rawls 1983 모래)
+	float GwNe = 0.3f;              // 유효 공극률
+	TArray<float> GwInit;           // 처음 지하수면 NX·NY (비면 min(B, SeaLevel)) — 시험용
 	TArray<float> BCorner;          // (NX+1)·(NY+1)
 	TArray<float> W, HU, HV;        // NX·NY
 };
@@ -43,6 +48,8 @@ public:
 	void Advance(float FrameTime, int32 MaxSub);
 	/** 동기 내려받기 (시험용) */
 	void Download(TArray<float>& OutW, TArray<float>& OutHU, TArray<float>& OutHV, float* OutSimTime = nullptr) const;
+	/** 지하수 (η_gw, δ) 동기 내려받기 · 대수층 바닥 */
+	void DownloadGround(TArray<FVector2f>& OutGw, float* OutZaq = nullptr) const;
 	/** 마지막 Step 의 GPU 시간 (타임스탬프, ms) */
 	float LastGpuMs() const { return GpuMs; }
 	int32 GetLastSubsteps() const { return LastSubsteps; }
