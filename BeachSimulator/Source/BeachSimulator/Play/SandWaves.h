@@ -30,6 +30,15 @@ struct FWaveScene
 };
 void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out);
 
+// swash 구역 경계 (papers D-M3-14 · m3-plan c7): 최근 Mem 초 안에 한 번이라도 마른 칸이 있는 열 중 가장 바다 쪽 — 되밀림 한계.
+// 그 땅 쪽은 swash 마찰 (n 0.025), 바다 쪽은 쇄파대 마찰 (Strickler 낟알 n)
+struct FSwashZone
+{
+	TArray<float> LastDry;
+	float Mem = 120.f;
+	float Update(const TArray<float>& W, const TArray<float>& BCellV, int32 NX, int32 NY, float Dx, float T);
+};
+
 UCLASS()
 class USandWavesSubsystem : public UWorldSubsystem
 {
@@ -55,6 +64,7 @@ private:
 	int32 NX = 0, NY = 0, Step = 2;       // 메시는 Step 칸마다 정점
 	float Dx = 0.05f;
 	TArray<float> BCorner, BCellV;         // m
+	FSwashZone Swash; bool bZone = false;
 	TArray<float> Wet;                     // 정점별 젖음 (물이 닿은 뒤 서서히 마름) — 모래 재질 정점 색 R
 	TArray<FVector> WaterVerts, WaterNormals;
 	TArray<FColor> WaterColors, SandColors;

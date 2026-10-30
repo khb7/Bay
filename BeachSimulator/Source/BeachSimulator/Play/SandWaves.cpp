@@ -67,6 +67,17 @@ namespace
 	}
 }
 
+float FSwashZone::Update(const TArray<float>& W, const TArray<float>& BCellV, int32 NX, int32 NY, float Dx, float T)
+{
+	if (LastDry.Num() != NX) { LastDry.Init(-1e9f, NX); }
+	for (int32 i = 0; i < NX; ++i)
+	{
+		for (int32 j = 0; j < NY; ++j) { const int32 k = j * NX + i; if (W[k] - BCellV[k] <= 0.001f) { LastDry[i] = T; break; } }   // 젖음 문턱 = 단면 측정과 같은 1 mm
+	}
+	for (int32 i = NX - 1; i >= 0; --i) { if (T - LastDry[i] <= Mem) { return (i + 1) * Dx; } }
+	return 0.f;
+}
+
 void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 {
 	const float Dx = 0.05f;
@@ -93,10 +104,14 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	FParse::Value(Cmd, TEXT("swellfrac="), SwellFrac);
 	FParse::Value(Cmd, TEXT("swelltp="), SwellTp);
 	FParse::Value(Cmd, TEXT("windtp="), WindTp);
-	float Manning = 0.025f; FParse::Value(Cmd, TEXT("manning="), Manning);
+	// 바닥 마찰 (papers D-M3-13/14 · m3-plan c7): 쇄파대 = Strickler 낟알 n = d50^⅙/21.1 (d50 0.3 mm → 0.0123), swash 구역 = 0.025 (현장 c_f 0.03)
+	double D50 = 0.3e-3; { double Mm = 0; if (FParse::Value(Cmd, TEXT("d50="), Mm) && Mm > 0) { D50 = Mm * 1e-3; } }   // -d50= (mm)
+	float Manning = (float)(FMath::Pow(D50, 1.0 / 6.0) / 21.1); FParse::Value(Cmd, TEXT("manning="), Manning);
 	FSandGridGpuInit& G = Out.G;
 	G.NX = NX; G.NY = NY; G.Dx = Dx; G.Dy = Dx; G.Manning = Manning;
-	G.ManningSwash = Manning; FParse::Value(Cmd, TEXT("manswash="), G.ManningSwash); FParse::Value(Cmd, TEXT("fricx="), G.FricX);   // 진단 D-M3-13
+	G.ManningSwash = 0.025f; FParse::Value(Cmd, TEXT("manswash="), G.ManningSwash);
+	G.FricX = (float)(0.45 * NX * Dx);   // 시작 물가선 — 실행 중 FSwashZone 이 되밀림 한계로 옮긴다
+	if (FParse::Param(Cmd, TEXT("onefric"))) { G.ManningSwash = Manning; G.FricX = 0.f; }   // 구역 없이 한 값
 	G.bOpenEast = true; G.SeaLevel = 0.f; G.BoundaryDepth = H0;
 	// T3c c6 지하수 · 침투 (m3-plan c6): -groundoff 로 끔 · -gwk= (5e-4 m/s)
 	G.bGround = !FParse::Param(Cmd, TEXT("groundoff"));   // 기본 켬 (m3-log #14)
@@ -192,7 +207,7 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 	const TCHAR* Cmd = FCommandLine::Get();
 	FWaveScene Sc;
 	BuildWaveScene(Cmd, Sc);
-	NX = Sc.NX; NY = Sc.NY; BCorner = Sc.BCorner; BCellV = Sc.BCellV; H0 = Sc.H0; Hs = Sc.Hs;
+	NX = Sc.NX; NY = Sc.NY; BCorner = Sc.BCorner; BCellV = Sc.BCellV; H0 = Sc.H0; Hs = Sc.Hs; bZone = Sc.G.FricX > 0.f;
 	FSandGridGpuInit& G = Sc.G;
 	const double Xs = Sc.Xs;
 	// 맵에 놓인 예전 입자 시험 액터는 끈다 (프레임마다 14ms — 이 화면과 무관)
@@ -304,6 +319,7 @@ void USandWavesSubsystem::UpdateWaterMesh()
 {
 	TArray<float> W, HU, HV;
 	Grid->Download(W, HU, HV, &SimTime);
+	if (bZone) { Grid->SetFricX(Swash.Update(W, BCellV, NX, NY, Dx, SimTime)); }
 	const int32 VX = NX / Step + 1, VY = NY / Step + 1;
 	const float DryRate = 1.f / 60.f / 20.f;   // 물이 빠지면 20 초에 걸쳐 마른 색으로 (M5 증발 전까지의 눈요기)
 	for (int32 vj = 0; vj < VY; ++vj)
@@ -408,7 +424,8 @@ int32 RunWaveMeasure(const FString& Params)
 	TArray<float> W, HU, HV, Wo, HUo, HVo;
 	// 물가 판정 수심 (기본 2cm) — 침투가 없어 되돌림 뒤 얇은 막이 남는다 (m3-log #7). Stockdon 은 비디오로 본 물가
 	float RunH = 0.02f; FParse::Value(*Params, TEXT("runh="), RunH);
-	float T = 0.f, NextRec = 0.f;
+	float T = 0.f, NextRec = 0.f, FricX = Sc.G.FricX;
+	FSwashZone Zone;
 	const double T0 = FPlatformTime::Seconds();
 	while (T < Secs)
 	{
@@ -417,6 +434,7 @@ int32 RunWaveMeasure(const FString& Params)
 		Grid.Download(W, HU, HV, &T);   // 동기 — 측정용
 		if (T + 1e-4f < NextRec) { continue; }
 		NextRec += 0.1f;
+		if (Sc.G.FricX > 0.f) { FricX = Zone.Update(W, Sc.BCellV, NX, NY, Sc.Dx, T); Grid.SetFricX(FricX); }
 		// 바다 쪽에서 땅 쪽으로: 처음 3 칸 연속 마른 곳 바로 앞의 젖은 칸 수면 (뒤에 남은 웅덩이는 무시)
 		auto Runup = [&](int32 j, float H)
 		{
@@ -464,6 +482,6 @@ int32 RunWaveMeasure(const FString& Params)
 		for (int32 i = 0; i < NX; ++i) { Pf += FString::Printf(TEXT("%.3f,%.4f,%.4f,%.4f,%.4f\n"), (i + 0.5f) * Sc.Dx, Sc.BCellV[Jb * NX + i], ProfN[i] > 0 ? ProfW[i] / ProfN[i] : 0.0, ProfT > 0 ? ProfN[i] / ProfT : 0.0, ProfGn > 0 ? ProfG[i] / ProfGn : 0.0); }
 		FFileHelper::SaveStringToFile(Pf, *Path.Replace(TEXT(".csv"), TEXT("_prof.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 	}
-	UE_LOG(LogSandWaves, Display, TEXT("T3b 측정 끝 → %s (벽시계 %.0fs)"), *Path, FPlatformTime::Seconds() - T0);
+	UE_LOG(LogSandWaves, Display, TEXT("T3b 측정 끝 → %s (벽시계 %.0fs) · swash 마찰 경계 x %.2f m"), *Path, FPlatformTime::Seconds() - T0, FricX);
 	return 0;
 }

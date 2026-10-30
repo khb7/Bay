@@ -1946,9 +1946,9 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
 - **Feddersen, Gallagher, Guza & Elgar (2003, CE 48 △ 초록)**: Duck94 2 달. 운동량 수지 c_d 와 고도계 거칠기 둘 다 쇄파대 안이 바깥보다 크지만, **쇄파대 안 c_d 는 거칠기 (k_rms/h) 와 무관.** → 사주 · 연흔 거칠기 식 (Grant-Madsen 류) 은 근거 약함.
 - **Feddersen & Trowbridge (2005, JPO 35 △ 초록)**: 쇄파 난류 모델에서 추론한 c_d 가 **Manning-Strickler 형태** (거칠기 ↑ · 깊이 ↓ 에 따라 커짐) 를 따른다. 깊이 의존은 쇄파의 대리일 수 있음. 쇄파대 c_d ≈ 바깥의 3 배 (Feddersen 1998).
 - **관측 범위**: c_f 0.0007~0.006 (Raubenheimer 2004 인용), 남캘리포니아 평균 0.01 (Veit 1977 △), Lentz (CoOP): 선형 c_d 쇄파대 ≈ 바깥 10 배.
-- **Strickler (1923)**: 낟알 거칠기 n = d50^⅙ / 21.1 (SI). 모래 d50 0.2 · 0.3 · 0.5 mm → n 0.0115 · 0.0123 · 0.0133. n 0.0123 이면 c_f = g n²/h^⅓: h 1 m 0.0015 · 0.5 m 0.0019 · 0.2 m 0.0025 → **관측 범위 안.** 지금 n 0.025 (0.006~0.008) 는 위 끝 · 넘음.
+- **Strickler (1923)** ✓ (2차 확인: SI 형 n = 0.047·D50^⅙ = D50^⅙/21.1, D50 m — Guatemala ASA 지 · Turkish 계열 문헌 인용; mm 단위 변형 0.0132·D50^⅙ 와 구분. 낟알 거칠기만 — 형상 (연흔 · 사주) 거칠기는 안 들어감, 위 Feddersen 2003 이 쇄파대에선 형상 거칠기와 무관하다 했으므로 맞다): 낟알 거칠기 n = d50^⅙ / 21.1 (SI). 모래 d50 0.2 · 0.3 · 0.5 mm → n 0.0115 · 0.0123 · 0.0133. n 0.0123 이면 c_f = g n²/h^⅓: h 1 m 0.0015 · 0.5 m 0.0019 · 0.2 m 0.0025 → **관측 범위 안.** 지금 n 0.025 (0.006~0.008) 는 위 끝 · 넘음.
 - **판정**: 쇄파대는 **Manning 형태 유지 + n 을 Strickler 낟알 값**으로 (맞춤 아님 — d50 하나에서 나옴). 쇄파 난류 · bore 가 더하는 저항은 Boussinesq 쇄파 소산 (MS92 breaking) 이 이미 맡으므로 마찰에 겹쳐 넣지 않는다. swash 구역은 D-M3-13 대로 n 0.025 (현장 c_f 0.03, Howe 2019 bore 난류로 Moody 보다 큼).
-- **구역 경계**: 진단 #15 와 같이 평균 물가선 (젖음 비율 < 100%) 으로 — 실행 중 프로파일에서 자동으로 정하거나 시작 해수면 물가선 (B = SeaLevel) 기준. 경계 ±1.5 m 에 결과가 둔감 (#15) 하므로 시작 물가선 고정으로 충분.
+- **구역 경계**: 진단 #15 와 같이 젖음 비율 < 100% (= 되밀림 한계). 시작 물가선 (x 11.5 m) 은 setup 0.47 m · 경사 1:15 로 평균 물가선 (4.5 m) 보다 7 m 바다 쪽 → 고정은 ±1.5 m 둔감 범위를 넘으므로 **실행 중 갱신** (m3-plan c7). d50 0.3 mm 는 프로젝트에 값이 없어 c6 의 K 와 같은 중간 모래로 둔 가정.
 
 ### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
 - Epic 의 얕은 물은 있다: `Engine/Plugins/FX/NiagaraFluids/Content/Modules/Grid2D/ShallowWater/` (`Grid2D_SW_Advect · UpdateDepthGrid · FilterOvershoot · ExtrapolateVelocities · MovingWindow_*` …) · `Plugins/Experimental/WaterAdvanced` 의 `ShallowWaterRiverActor.cpp:339` 가 `Grid2D_SW_River` 를 쓴다. 바닥은 **SceneCapture 깊이로 찍어 읽기만** (`:107`) — 단방향 시각 효과. 침식 · 모래 · 수분 채널 없음. 모듈 이름으로 보아 이류 + 넘침 거르기 계열 (uasset 그래프라 알고리즘 세부는 미확인).
