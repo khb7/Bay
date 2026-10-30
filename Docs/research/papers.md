@@ -1954,7 +1954,7 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
 #16: 구역 분할 (c7) 의 경계 판정 (1 mm · 120 s) 이 근거 없음 · 포화 막에 무너짐. 문헌 모델은 구역을 실행 중 판정하지 않고 **영역 전체에 식 하나** (공간 변화는 고정 지도 bedfricfile 정도).
 - **XBeach 매뉴얼 (openearth/xbeach-docs `xbeach_manual.rst` ✓ 원문)**: bedfriction = chezy · cf · manning · white-colebrook · white-colebrook-grainsize. Manning c_f = g n²/h^⅓. White-Colebrook c_f = g/C², C = 18 log10(12h/k_s), "log relation with the water depth", **k_s 전형 0.01~0.15 m**. grainsize: k_s = 3·D90 (XBeach-G 기본). (매뉴얼 식은 sqrt(g/C²) 로 적혀 있으나 차원상 c_f = g/C² 가 맞다 — Chezy 식 (51) c_f = g/C² 와 일관.) XBeach-G 는 침투 · 침출 시 Conley & Inman (1994) 환기 경계층 보정 c_f = c_f0·Φ/(e^Φ − 1) — 침투면 커지고 침출이면 작아짐.
 - **SWASH 매뉴얼 △**: constant · Chezy · Manning · Colebrook-White (값 = Nikuradse k_s) · 로그 벽 법칙.
-- **Howe et al. (2019, JMSE 7(10) 358 △ 초록 · 2차)**: 직접 전단 측정, 원형 크기 (GWK) 에서 **Colebrook-White (Moody) + 일정 k_s 로 시간 변하는 마찰을 ±50%** 로 추정 가능. 다른 거칠기 처리는 최대 ~600% 오차. 원문은 403 으로 못 읽음 — k_s 값 미확인.
+- **Howe et al. (2019, JMSE 7(10) 358 ✓ 원문 — 브라우저)**: 식 (1) τ0 = ½ρ f|U|U → **우리 c_f = f/2**. 원형 크기 GWK (Hs 0.6~1.0 m, Tp 8~14 s, 경사면): 평균 **f ≈ 0.005 (매끈, k_s 0.003 mm) · 0.008 (아스팔트, k_s 1.5 mm)** → c_f 0.0025 · 0.004. 중간 크기 WRL f ≈ 0.01 (c_f 0.005). f 는 swash 주기 내내 ±20% 로 거의 일정, uprush · backwash 차 작음, Re 커지면 감소. **GWK 에선 Colebrook-White (Moody) + 표면 실제 k_s 로 ±50%** — 다른 (작은 규모 · 현장) 연구는 최대 ~600% 차. 측정값은 Moody 예측보다 큰 편 (비정상 · 발달 중 경계층 · 앞끝 수렴). 문헌 swash f 0.001~0.04.
 - **깊이 의존 비교** (c_f, 계산):
 
 | h | WC k_s 3·D90 (1.35 mm) | WC k_s 0.01 m | Manning 0.0123 | Manning 0.025 | 관측 |
@@ -1966,6 +1966,7 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
 | 5 mm | 0.011 | 0.050 | 0.0087 | 0.036 | 〃 |
 
 - **판정**: Manning (h^−⅓) 은 어떤 n 으로도 두 구역을 같이 못 맞춘다 (D-M3-13). **White-Colebrook 은 얕은 곳에서 log 가 작아져 깊이 의존이 훨씬 강하다** → k_s ≈ 1 cm 하나로 쇄파대 (0.003~0.005) 와 swash (0.016~0.05) 관측 범위를 **둘 다** 지난다. 낟알 k_s (3·D90) 는 쇄파대엔 맞지만 swash 를 3~5 배 작게 낸다.
+- **Howe 반영 후 판정**: 원형 크기 직접 측정은 **실제 표면 k_s (~1.5 mm, 우리 3·D90 1.35 mm 와 같은 크기) 로 c_f ≈ 0.004** — WC 낟알 k_s 의 swash 값 (h 2 cm 0.006 · 10 cm ~0.0035) 과 맞다. Raubenheimer 2004 현장 0.03 은 운동량 수지 간접 추정 (침투 · 가속 · 횡방향 항을 흡수할 수 있음) 이고 직접 측정과 7 배 차. → **직접 측정 기준이면 WC 낟알 k_s 가 근거 있는 선택**, D-M3-13 의 "swash n 0.025 가 현장과 맞다" 는 간접 추정에 기댄 것이라 약해진다.
 - **남은 근거 문제**: k_s 1 cm 는 XBeach 전형 범위의 아래 끝일 뿐 우리 해변에서 유도된 값이 아니다. 후보 근거 — (a) Feddersen 2003 고도계 거칠기 (쇄파대 k_rms 수 cm, 원문 수치 미확인) · (b) 움직이는 바닥 (sheet flow) k_s 식 (Wilson 1989 류 k_s ∝ θ·d50 — 미조사) · (c) Howe 2019 의 k_s (원문 필요). 확인 전엔 낟알 k_s (유도 가능) 와 k_s 1 cm (범위 맞음) 를 둘 다 측정해 비교.
 
 ### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
