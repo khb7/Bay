@@ -1941,6 +1941,15 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
 - **판정**: n 0.025 는 swash (h 수 mm~수 cm) 에서 c_f 0.02~0.036 — **현장 0.03 과 맞다.** n 0.01 은 swash c_f ~0.004 로 관측의 1/7 → swash 를 Stockdon 에 맞춰 주지만 **근거 없는 맞춤**이라 쓰지 않는다. 반대로 쇄파대 (h 0.5~1 m) 에선 n 0.025 의 c_f 0.006~0.008 이 관측 (≤ 0.006) 의 **위 끝 · 약간 위** → IG · bore 가 물가에 닿기 전에 과하게 깎일 수 있다. Manning 의 h^−⅓ 의존이 swash 와 쇄파대 둘 다 맞추기엔 약하다.
 - **다음 (진단)**: 마찰을 구역별로 나눠 어느 쪽이 swash 부족을 만드는지 가른다 — (a) h > 0.3 m 만 n 0.01 (쇄파대만 낮춤) · (b) h < 0.3 m 만 0.01 (swash 만 낮춤). (a) 로 swash 가 회복되면 쇄파대 마찰 형태 (예: c_f 를 관측 범위 0.001~0.006 에서 깊이 함수로) 를 문헌으로 정한다.
 
+### D-M3-14. ★ 쇄파대 마찰 형태 (#15 뒤, 2026-10-30)
+#15: swash 부족은 쇄파대 마찰 탓 (경계 3.5~6 m 에 둔감). 쇄파대 마찰을 맞춤 없이 정할 형태를 찾는다.
+- **Feddersen, Gallagher, Guza & Elgar (2003, CE 48 △ 초록)**: Duck94 2 달. 운동량 수지 c_d 와 고도계 거칠기 둘 다 쇄파대 안이 바깥보다 크지만, **쇄파대 안 c_d 는 거칠기 (k_rms/h) 와 무관.** → 사주 · 연흔 거칠기 식 (Grant-Madsen 류) 은 근거 약함.
+- **Feddersen & Trowbridge (2005, JPO 35 △ 초록)**: 쇄파 난류 모델에서 추론한 c_d 가 **Manning-Strickler 형태** (거칠기 ↑ · 깊이 ↓ 에 따라 커짐) 를 따른다. 깊이 의존은 쇄파의 대리일 수 있음. 쇄파대 c_d ≈ 바깥의 3 배 (Feddersen 1998).
+- **관측 범위**: c_f 0.0007~0.006 (Raubenheimer 2004 인용), 남캘리포니아 평균 0.01 (Veit 1977 △), Lentz (CoOP): 선형 c_d 쇄파대 ≈ 바깥 10 배.
+- **Strickler (1923)**: 낟알 거칠기 n = d50^⅙ / 21.1 (SI). 모래 d50 0.2 · 0.3 · 0.5 mm → n 0.0115 · 0.0123 · 0.0133. n 0.0123 이면 c_f = g n²/h^⅓: h 1 m 0.0015 · 0.5 m 0.0019 · 0.2 m 0.0025 → **관측 범위 안.** 지금 n 0.025 (0.006~0.008) 는 위 끝 · 넘음.
+- **판정**: 쇄파대는 **Manning 형태 유지 + n 을 Strickler 낟알 값**으로 (맞춤 아님 — d50 하나에서 나옴). 쇄파 난류 · bore 가 더하는 저항은 Boussinesq 쇄파 소산 (MS92 breaking) 이 이미 맡으므로 마찰에 겹쳐 넣지 않는다. swash 구역은 D-M3-13 대로 n 0.025 (현장 c_f 0.03, Howe 2019 bore 난류로 Moody 보다 큼).
+- **구역 경계**: 진단 #15 와 같이 평균 물가선 (젖음 비율 < 100%) 으로 — 실행 중 프로파일에서 자동으로 정하거나 시작 해수면 물가선 (B = SeaLevel) 기준. 경계 ±1.5 m 에 결과가 둔감 (#15) 하므로 시작 물가선 고정으로 충분.
+
 ### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
 - Epic 의 얕은 물은 있다: `Engine/Plugins/FX/NiagaraFluids/Content/Modules/Grid2D/ShallowWater/` (`Grid2D_SW_Advect · UpdateDepthGrid · FilterOvershoot · ExtrapolateVelocities · MovingWindow_*` …) · `Plugins/Experimental/WaterAdvanced` 의 `ShallowWaterRiverActor.cpp:339` 가 `Grid2D_SW_River` 를 쓴다. 바닥은 **SceneCapture 깊이로 찍어 읽기만** (`:107`) — 단방향 시각 효과. 침식 · 모래 · 수분 채널 없음. 모듈 이름으로 보아 이류 + 넘침 거르기 계열 (uasset 그래프라 알고리즘 세부는 미확인).
 - Niagara GPU 틱은 정해진 세 시점에만 돈다: `ENiagaraGpuComputeTickStage { PreInitViews, PostInitViews, PostOpaqueRender }` (`Niagara/Public/NiagaraCommon.h:1924-1926`). 우리 입자 시뮬 RDG 패스 사이에 끼울 수 없다 → M4 의 **같은 프레임 양방향 결합**(격자 → 입자 하중 · 수분, 입자 → 장애물 · 파괴 환원)이 막히거나 1 프레임 늦는다. 외부 RDG 버퍼를 읽히려면 사용자 정의 DI 를 C++ 로 써야 한다.
