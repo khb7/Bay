@@ -7,7 +7,7 @@
 ## 목차
 
 **[1. 역학 기초](#1-역학-기초)**  
-[항력 (drag)](terms/drag.md) · [변형 (strain, ε)](terms/strain.md) · [응력 (stress, σ)](terms/stress.md) · [편차 / 체적 분해](terms/deviatoric-volumetric.md) ·
+[항력 (drag)](terms/drag.md) · [힘과 평형](terms/force-equilibrium.md) · [자유물체도와 지지점 반력](terms/support-reaction.md) · [변형 (strain, ε)](terms/strain.md) · [응력 (stress, σ)](terms/stress.md) · [편차 / 체적 분해](terms/deviatoric-volumetric.md) ·
 [Hencky 변형 (로그 변형)](terms/hencky-strain.md) · [연속체 (continuum)](terms/continuum.md) · [등방성 (isotropy) ★](terms/isotropy.md) ·
 [구조 이방성 / 조직 (fabric anisotropy) ★](terms/anisotropy-fabric.md) ·
 [구성 모델 (constitutive model)](terms/constitutive-model.md)
@@ -73,6 +73,8 @@
 | 용어 | |
 |---|---|
 | **[항력 (drag)](terms/drag.md)** | 속도에 비례해 반대 방향으로 작용하는 저항력. |
+| **[힘과 평형](terms/force-equilibrium.md)** | 힘(벡터), 합력, 힘·모멘트 평형, 자유물체도. 응력의 선수 지식. |
+| **[자유물체도와 지지점 반력](terms/support-reaction.md)** | 물체를 떼어내 외력을 그리는 법, 롤러·핀·고정 지지점. |
 | **[변형 (strain, ε)](terms/strain.md)** | 원래 모양에서 얼마나 찌그러졌나. |
 | **[응력 (stress, σ)](terms/stress.md)** | 재료 내부의 단위면적당 힘 (Pa). |
 | **[편차 / 체적 분해](terms/deviatoric-volumetric.md)** | 응력(또는 변형)을 두 성분으로 쪼갬. |

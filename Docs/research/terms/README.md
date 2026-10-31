@@ -2,7 +2,7 @@
 
 > 용어 하나에 문서 하나. 주제별로 보려면 [../glossary.md](../glossary.md) · [../glossary-impl.md](../glossary-impl.md).
 
-총 **167개**.
+총 **169개**.
 
 | 용어 | 구분 | 소속 |
 |---|---|---|
@@ -128,6 +128,8 @@
 | [유의파고 (significant wave height, H_s)](significant-wave-height.md) | 물리 | 7. 파도 |
 | [유효 포화도 Se / 흡입력 / 투수계수](effective-saturation.md) | 물리 | 4. 증발 / 건조 |
 | [응력 (stress, σ)](stress.md) | 물리 | 1. 역학 기초 |
+| [힘과 평형 (force, equilibrium)](force-equilibrium.md) | 물리 | 1. 역학 기초 |
+| [자유물체도와 지지점 반력](support-reaction.md) | 물리 | 1. 역학 기초 |
 | [이웃 탐색 (neighbor search)](neighbor-search.md) | 구현 | 4. 입자 시뮬레이션 |
 | [임계상태 (critical state)](critical-state.md) | 물리 | 2. 소성과 항복 |
 | [자원 상태 전이 (resource transition)](resource-transition.md) | 구현 | 2. GPU 실행 모델 |
