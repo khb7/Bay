@@ -2004,6 +2004,11 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
   4. Physical (u_s/c_b) — 미분 · 거르기 잡음, 1 · 2 와 비슷한 성능.
 - **추천**: 1 부터 (근거 두 개 — SWASH · Kazolea 기본 γ 0.6, 기존 구조 재사용). 바깥 격자 Hs/h 와 안쪽 SS H_rms/h · setup 으로 판단, 부족하면 2 (기울기 조건) → 3.
 
+### D-M3-19. ★ Kennedy 와점성 — FUNWAVE-TVD 문서 식 (#20 뒤, 2026-11-02)
+- **FUNWAVE-TVD 문서 "Wave Breaking, roller and undertow" (fengyanshi.github.io ✓ 원문)**: TVD 판은 쇄파 두 방식 — Tonelli-Petti 전환 (0.8) 과 Kennedy (2000) 와점성. 와점성 항 R_bx = ∂x(ν ∂x P) + ∂y(ν ∂y P), R_by 같은 꼴 (**교차 미분 뺌 — 더 안정적**). ν = B δ_b² (h+η) η_t, **δ_b = 1.2**. Kennedy 원판은 B 를 0→1 로 부드럽게 (갑작스런 시작 · 불안정 방지), TVD 판은 불안정이 없어 B = 1 (η_t ≥ η_t*) / 0. 시작 η_t^(I) = C_brk1 √(gh), 종료 η_t^(F) = C_brk2 √(gh), **Kennedy C_brk1 0.65 · C_brk2 0.15**. Choi et al. (2018, Ocean Modelling 131): 실험에 맞추려면 C1 더 작게 · C2 더 크게 (Vincent-Briggs 0.45 · 0.35).
+- Roller (Schäffer 1993 · Svendsen 1984 A = 0.9 H²) 는 FUNWAVE-TVD 에 질량 · 운동량 항으로 따로 있음 — 이번 범위 밖.
+- **우리 구현 (m3-plan c9)**: 분산 유지 (전환 없음), 칸별 지속 판정 (Kennedy: 그 자리에서 η_t < η_t^(F) 까지), ν 를 BreakCS 에서, 확산은 서브스텝 끝에 **줄마다 암시적 (후진 오일러 · Thomas)** — 5 cm 칸에서 ν ~1 m²/s 면 명시적 한계 Δx²/4ν ≈ 0.6 ms 가 Δt 보다 작다 (FUNWAVE 는 보통 Δx 수십 cm~m). 면 ν 는 한쪽이 0 이면 0. y 줄 끝은 주기 대신 기울기 0 (근사).
+
 ### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
 - Epic 의 얕은 물은 있다: `Engine/Plugins/FX/NiagaraFluids/Content/Modules/Grid2D/ShallowWater/` (`Grid2D_SW_Advect · UpdateDepthGrid · FilterOvershoot · ExtrapolateVelocities · MovingWindow_*` …) · `Plugins/Experimental/WaterAdvanced` 의 `ShallowWaterRiverActor.cpp:339` 가 `Grid2D_SW_River` 를 쓴다. 바닥은 **SceneCapture 깊이로 찍어 읽기만** (`:107`) — 단방향 시각 효과. 침식 · 모래 · 수분 채널 없음. 모듈 이름으로 보아 이류 + 넘침 거르기 계열 (uasset 그래프라 알고리즘 세부는 미확인).
 - Niagara GPU 틱은 정해진 세 시점에만 돈다: `ENiagaraGpuComputeTickStage { PreInitViews, PostInitViews, PostOpaqueRender }` (`Niagara/Public/NiagaraCommon.h:1924-1926`). 우리 입자 시뮬 RDG 패스 사이에 끼울 수 없다 → M4 의 **같은 프레임 양방향 결합**(격자 → 입자 하중 · 수분, 입자 → 장애물 · 파괴 환원)이 막히거나 1 프레임 늦는다. 외부 RDG 버퍼를 읽히려면 사용자 정의 DI 를 C++ 로 써야 한다.

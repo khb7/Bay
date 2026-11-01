@@ -22,6 +22,7 @@ struct FSandGridGpuInit
 	float IgGain = 0.f;             // T3b 장주기파: η_IG = IgGain·(A² − Σa²), A = 성분 포락선. 0 이면 끔
 	bool  bDispersive = false;      // T3c Madsen & Sørensen 1992 Boussinesq (Celeris 방식). 줄 길이 ≤ 1024, 경계는 벽으로 (열린 · 주기 경계 근처 처리는 c4)
 	float BreakStop = 0.3f;         // 쇄파 종료 ε — 켜진 칸은 ε < 이 값까지 NSW 유지 (Tonelli & Petti, papers D-M3-17). 0 이면 순간 판정
+	float EddyDelta = 1.2f;         // BreakMode 2 Kennedy 와점성 δ_b (Kennedy et al. 2000 · FUNWAVE-TVD)
 	int32 BreakMode = 1;            // 1: 시작 (∂η/∂t)/√(gh) > BreakRatio (SWASH · Kazolea, D-M3-18) · 0: |η|/h (Tonelli & Petti)
 	float BreakRatio = 0.8f;        // 쇄파 전환 |η|/h (Tonelli & Petti 2009). 0 이면 끔
 	int32 DispTaper = 8;            // T3c c4 열린 경계 쪽 분산 줄이는 칸 수 (d → 0)

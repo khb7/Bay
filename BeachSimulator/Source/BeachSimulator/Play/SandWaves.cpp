@@ -123,7 +123,11 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	FParse::Value(Cmd, TEXT("ks="), G.Ks);
 	if (G.Ks > 0.f) { G.FricX = 0.f; }
 	// 쇄파 판정 (papers D-M3-18): 기본 Tonelli-Petti |η|/h 0.8. -breakdedt: SWASH HFA (∂η/∂t)/√(gh) > 0.6 · 지속 0.3 — 바깥 격자가 40~60 s 에 무너짐 (m3-log #20), 실험용
-	if (FParse::Param(Cmd, TEXT("breakdedt"))) { G.BreakMode = 1; G.BreakRatio = 0.6f; } else { G.BreakMode = 0; G.BreakRatio = 0.8f; }
+	// 기본: Kennedy et al. (2000) 와점성 (전환 없음, 900 s 안정) — 시작 η_t > 0.65√(gH), 종료 0.15√(gH), δ_b 1.2 (D-M3-19 · m3-plan c9 · m3-log #21).
+	// -breakeps: Tonelli-Petti 전환 (정지 수심 ε 0.8 — 바깥 격자 ~375 s 붕괴, 실험용) · -breakdedt: SWASH 식 (붕괴, 실험용)
+	G.BreakMode = 2; G.BreakRatio = 0.65f; G.BreakStop = 0.15f;
+	if (FParse::Param(Cmd, TEXT("breakeps"))) { G.BreakMode = 0; G.BreakRatio = 0.8f; G.BreakStop = 0.3f; }
+	if (FParse::Param(Cmd, TEXT("breakdedt"))) { G.BreakMode = 1; G.BreakRatio = 0.6f; G.BreakStop = 0.3f; }
 	FParse::Value(Cmd, TEXT("breakratio="), G.BreakRatio);
 	FParse::Value(Cmd, TEXT("breakstop="), G.BreakStop);   // 쇄파 지속 종료 ε (0.3, D-M3-17 · m3-plan c8). 0 이면 이전 순간 판정
 	G.bOpenEast = true; G.SeaLevel = 0.f; G.BoundaryDepth = H0;
@@ -435,7 +439,7 @@ int32 RunWaveMeasure(const FString& Params)
 	Csv += Sc.bNest ? TEXT("t,R0,R1,R2,R3,eta_b,u_b,A2,Rlo,Rhi,eta_nest,eta_ob\n") : TEXT("t,R0,R1,R2,R3,eta_b,u_b,A2,Rlo,Rhi\n");
 	TArray<double> ProfW, ProfW2, ProfN, ProfG; ProfW.Init(0.0, NX); ProfW2.Init(0.0, NX); ProfN.Init(0.0, NX); ProfG.Init(0.0, NX); double ProfT = 0.0, ProfGn = 0.0;
 	TArray<FVector2f> Gw;
-	TArray<float> RowTs;   // _row.bin: 0.1 s 마다 [x = 4i·Dx (i 0..), 가운데 줄 j = NY/2] 수위
+	TArray<float> RowTs, RowTsO, WoPrev, HUoPrev, HVoPrev; bool bNanSaved = false;   // _row.bin: 0.1 s 마다 [x = 4i·Dx (i 0..), 가운데 줄 j = NY/2] 수위
 	TArray<float> W, HU, HV, Wo, HUo, HVo;
 	// 물가 판정 수심 (기본 2cm) — 침투가 없어 되돌림 뒤 얇은 막이 남는다 (m3-log #7). Stockdon 은 비디오로 본 물가
 	float RunH = 0.02f; FParse::Value(*Params, TEXT("runh="), RunH);
@@ -490,14 +494,28 @@ int32 RunWaveMeasure(const FString& Params)
 		if (Sc.bNest)
 		{
 			Outer.Download(Wo, HUo, HVo);
+			{
+				// 진단 (m3-log #21): 바깥 격자에 NaN 이 처음 나오면 직전 상태 (WoPrev) 와 지금을 _nan.bin 으로 저장
+				bool bBad = false; for (const float v : Wo) { if (!FMath::IsFinite(v)) { bBad = true; break; } }
+				if (bBad && WoPrev.Num() == Wo.Num() && !bNanSaved)
+				{
+					TArray<float> Dump; Dump.Append(WoPrev); Dump.Append(HUoPrev); Dump.Append(HVoPrev); Dump.Append(Wo);
+					FFileHelper::SaveArrayToFile(TArrayView<const uint8>((const uint8*)Dump.GetData(), Dump.Num() * sizeof(float)), *Path.Replace(TEXT(".csv"), TEXT("_nan.bin")));
+					UE_LOG(LogSandWaves, Warning, TEXT("바깥 격자 NaN t %.2f s — _nan.bin 저장 (NXo %d NYo %d)"), T, NXo, Sc.GO.NY);
+					bNanSaved = true;
+				}
+				if (!bBad) { WoPrev = Wo; HUoPrev = HUo; HVoPrev = HVo; }
+			}
 			const float En = FMath::Lerp(Wo[Jo * NXo + Io], Wo[Jo * NXo + Io + 1], FoX);
 			Csv += FString::Printf(TEXT(",%.4f,%.4f"), En, Wo[Jo * NXo + IoB]);
+			if (T > 120.f) { for (int32 i = 0; i < NXo; i += 2) { RowTsO.Add(Wo[Jo * NXo + i]); } }   // _rowo.bin: 바깥 격자 줄 (2 칸마다, D-M3-18 진단)
 		}
 		Csv += TEXT("\n");
 		if (FMath::FloorToInt(T / 100.f) != FMath::FloorToInt((T - 0.1f) / 100.f)) { UE_LOG(LogSandWaves, Display, TEXT("T3b %.0fs / %.0fs (벽시계 %.0fs)"), T, Secs, FPlatformTime::Seconds() - T0); }
 	}
 	FFileHelper::SaveStringToFile(Csv, *Path, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 	FFileHelper::SaveArrayToFile(TArrayView<const uint8>((const uint8*)RowTs.GetData(), RowTs.Num() * sizeof(float)), *Path.Replace(TEXT(".csv"), TEXT("_row.bin")));
+	if (RowTsO.Num() > 0) { FFileHelper::SaveArrayToFile(TArrayView<const uint8>((const uint8*)RowTsO.GetData(), RowTsO.Num() * sizeof(float)), *Path.Replace(TEXT(".csv"), TEXT("_rowo.bin"))); }
 	{
 		FString Pf = TEXT("x,B,eta_mean,wet_frac,gw_mean,eta_std\n");   // eta_std: 젖은 시간 수위 표준편차 — H_rms ≈ 2√2·σ (D-M3-16)
 		for (int32 i = 0; i < NX; ++i) { Pf += FString::Printf(TEXT("%.3f,%.4f,%.4f,%.4f,%.4f,%.4f\n"), (i + 0.5f) * Sc.Dx, Sc.BCellV[Jb * NX + i], ProfN[i] > 0 ? ProfW[i] / ProfN[i] : 0.0, ProfT > 0 ? ProfN[i] / ProfT : 0.0, ProfGn > 0 ? ProfG[i] / ProfGn : 0.0,
