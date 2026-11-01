@@ -2009,6 +2009,14 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
 - Roller (Schäffer 1993 · Svendsen 1984 A = 0.9 H²) 는 FUNWAVE-TVD 에 질량 · 운동량 항으로 따로 있음 — 이번 범위 밖.
 - **우리 구현 (m3-plan c9)**: 분산 유지 (전환 없음), 칸별 지속 판정 (Kennedy: 그 자리에서 η_t < η_t^(F) 까지), ν 를 BreakCS 에서, 확산은 서브스텝 끝에 **줄마다 암시적 (후진 오일러 · Thomas)** — 5 cm 칸에서 ν ~1 m²/s 면 명시적 한계 Δx²/4ν ≈ 0.6 ms 가 Δt 보다 작다 (FUNWAVE 는 보통 Δx 수십 cm~m). 면 ν 는 한쪽이 0 이면 0. y 줄 끝은 주기 대신 기울기 0 (근사).
 
+### D-M3-20. ★ 와점성 쇄파의 격자 의존 · 판정 (#21 뒤 — Kennedy 가 바깥 격자에서 약함, 2026-11-02)
+- **Kazolea & Ricchiuto (2018, Ocean Modelling — math.u-bordeaux.fr/~mricchiu/kr18.pdf ✓ 원문, pypdf 추출)**: 약분산 Boussinesq (Nwogu · GN — BOUSS-2D · FUNWAVE · COULWAVE · BOSZ · MIKE21 · TUCWave 계열) 에서 **하이브리드 vs 와점성 (TKE) 를 격자 크기별로 비교.**
+  - 하이브리드: "switch 를 안정적으로 하기 어렵다… **격자를 고울수록 진동이 강해진다**… 완전히 격자 수렴한 결과를 보고한 문헌이 없다". 소산의 대부분이 **수치 소산** (격자 의존). 불안정 시작 격자가 경우 · 모델마다 다름 (예: Δx ≤ 0.05 m). → 우리 #20 · #21 붕괴와 같은 현상.
+  - 와점성 (TKE): **수치 소산의 기여가 아주 작고 격자에 거의 둔감.** 비용은 더 들지만 "견고함 때문에 정당하다".
+  - **판정 (두 방법 공통)**: (a) \|η_t\| ≥ γ√(gH), **γ ∈ [0.3, 0.65] — 쇄파 형태에 따라** · (b) **\|∇η\| ≥ tan φ_c, φ_c ∈ [15°, 30°]** (느리거나 멈춘 도수를 잡음, (a) 를 보완). 표시된 칸을 묶어 영역 → **roller 길이만큼 넓히거나**, Fr² = H_max(H_max+H_min)/(2H_min²) 로 끔. ν_t = C_ν √k ℓ_t, C_ν = 0.09^¼ ≈ 0.55, ℓ_t = κH (κ 경우마다), k 는 1 방정식 (생성 · 확산 · 소멸).
+- **우리 Kennedy 구현과 차이**: (1) 판정이 η_t 하나 · 칸 단위 — 기울기 조건 · 영역 넓힘 없음 · (2) γ 0.65 는 범위의 **위 끝** (가장 늦게 켜짐) · (3) ν 가 η_t > 0 인 앞면 칸에만 (TKE 는 수송 · 확산으로 퍼짐).
+- **판정**: 와점성 방향 자체는 문헌이 지지 (격자 둔감, 하이브리드보다 견고). 바깥 격자에서 약한 건 격자 탓이라기보다 **판정이 늦고 좁은 것** 이 후보 — 원문 근거 있는 보완: 기울기 조건 (φ_c) 추가 · γ 를 쇄파 형태 (우리 ξ₀ ≈ 1.0, plunging 쪽) 에 맞게 범위 안에서 · 영역 넓힘. γ · φ_c 를 쇄파 형태로 고르는 기준은 Kazolea et al. 2014 ([12]) · Roeber 계 ([37]) 원문 필요 (미확인). 더 나아가면 TKE 1 방정식 (Nwogu · Zhang 2014).
+
 ### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
 - Epic 의 얕은 물은 있다: `Engine/Plugins/FX/NiagaraFluids/Content/Modules/Grid2D/ShallowWater/` (`Grid2D_SW_Advect · UpdateDepthGrid · FilterOvershoot · ExtrapolateVelocities · MovingWindow_*` …) · `Plugins/Experimental/WaterAdvanced` 의 `ShallowWaterRiverActor.cpp:339` 가 `Grid2D_SW_River` 를 쓴다. 바닥은 **SceneCapture 깊이로 찍어 읽기만** (`:107`) — 단방향 시각 효과. 침식 · 모래 · 수분 채널 없음. 모듈 이름으로 보아 이류 + 넘침 거르기 계열 (uasset 그래프라 알고리즘 세부는 미확인).
 - Niagara GPU 틱은 정해진 세 시점에만 돈다: `ENiagaraGpuComputeTickStage { PreInitViews, PostInitViews, PostOpaqueRender }` (`Niagara/Public/NiagaraCommon.h:1924-1926`). 우리 입자 시뮬 RDG 패스 사이에 끼울 수 없다 → M4 의 **같은 프레임 양방향 결합**(격자 → 입자 하중 · 수분, 입자 → 장애물 · 파괴 환원)이 막히거나 1 프레임 늦는다. 외부 RDG 버퍼를 읽히려면 사용자 정의 DI 를 C++ 로 써야 한다.
