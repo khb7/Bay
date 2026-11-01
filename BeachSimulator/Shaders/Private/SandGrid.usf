@@ -89,6 +89,7 @@ float BreakRatio;
 float BreakStop;         // 쇄파 종료 ε (Tonelli & Petti 지속, papers D-M3-17). 0 이면 지속 없음 (순간 판정)
 RWStructuredBuffer<float2> BrkRW;  // 칸별 (쇄파 상태 0/1, 지난 판정 때 수위 w) — 서브스텝 · 프레임을 넘어 유지 (이번 판정 쓰기)
 StructuredBuffer<float2> BrkRO;    // 지난 판정 (핑퐁 — 이웃 상태를 경쟁 없이 읽는다)
+float BreakSlope;        // tan φ_c (기울기 쇄파 조건, 0 이면 끔)
 float EddyDelta;         // Kennedy et al. (2000) δ_b (1.2) — ν = δ_b² (h+η) η_t (FUNWAVE-TVD 문서 식 (3), papers D-M3-19)
 RWStructuredBuffer<float>  NuRW;   // 칸별 와점성 ν (m²/s) — BreakCS 가 쓰고 EddyCS 가 읽는다
 StructuredBuffer<float>    NuRO;
@@ -442,7 +443,17 @@ void BreakCS(uint3 Tid : SV_DispatchThreadID)
 		if (j + 1u < NY) { bWas = bWas || BrkRO[Idx(i, j + 1u)].x > 0.5f; }
 	}
 	bWas = bWas && BreakStop > 0.f;
-	const bool bBrk = BreakRatio > 0.f && h > HDry && H0s > HDry && Eps > (bWas ? BreakStop : BreakRatio);   // 시작 BreakRatio · 켜진 뒤엔 ε < BreakStop 까지 유지
+	// 2 (와점성): 기울기 조건도 — |∇η| ≥ tan φ_c (Kazolea & Ricchiuto 2018 · Kazolea 2014, φ_c 30°). 느린 · 멈춘 도수와 성긴 격자에서
+	// η_t 가 문턱에 못 미치는 가파른 앞면을 잡는다 (D-M3-20). BreakSlope 0 이면 끔
+	bool bSlope = false;
+	if (BreakMode == 2u && BreakSlope > 0.f && h > HDry && H0s > HDry)
+	{
+		const int ii = (int)i, jj = (int)j;
+		const float Ex = (URO[Idx((uint)min(ii + 1, (int)NX - 1), j)].x - URO[Idx((uint)max(ii - 1, 0), j)].x) / (2.f * Dx);
+		const float Ey = (URO[Idx(i, (uint)WJ(jj + 1))].x - URO[Idx(i, (uint)WJ(jj - 1))].x) / (2.f * Dy);
+		bSlope = sqrt(Ex * Ex + Ey * Ey) >= BreakSlope;
+	}
+	const bool bBrk = BreakRatio > 0.f && h > HDry && H0s > HDry && (Eps > (bWas ? BreakStop : BreakRatio) || bSlope);   // 시작 BreakRatio · 켜진 뒤엔 ε < BreakStop 까지 유지
 	BrkRW[Idx(i, j)] = float2(bBrk ? 1.f : 0.f, w);
 	// 2: Kennedy 와점성 — 전환 없이 (분산 유지) ν 만. B = 1 (FUNWAVE-TVD), 켜짐 · 꺼짐은 위 지속 판정 (C_brk1 · C_brk2)
 	NuRW[Idx(i, j)] = BreakMode == 2u && bBrk ? EddyDelta * EddyDelta * h * max(EtaT, 0.f) : 0.f;

@@ -126,6 +126,8 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	// 기본: Kennedy et al. (2000) 와점성 (전환 없음, 900 s 안정) — 시작 η_t > 0.65√(gH), 종료 0.15√(gH), δ_b 1.2 (D-M3-19 · m3-plan c9 · m3-log #21).
 	// -breakeps: Tonelli-Petti 전환 (정지 수심 ε 0.8 — 바깥 격자 ~375 s 붕괴, 실험용) · -breakdedt: SWASH 식 (붕괴, 실험용)
 	G.BreakMode = 2; G.BreakRatio = 0.65f; G.BreakStop = 0.15f;
+	// -breakkr: Kazolea & Ricchiuto (2018) 판정 — γ 0.6 + 기울기 φ_c 30° (경사면 · reef 시험 값, D-M3-20). 종료는 Kennedy 0.15
+	if (FParse::Param(Cmd, TEXT("breakkr"))) { G.BreakRatio = 0.6f; G.BreakSlope = FMath::Tan(FMath::DegreesToRadians(30.f)); }
 	if (FParse::Param(Cmd, TEXT("breakeps"))) { G.BreakMode = 0; G.BreakRatio = 0.8f; G.BreakStop = 0.3f; }
 	if (FParse::Param(Cmd, TEXT("breakdedt"))) { G.BreakMode = 1; G.BreakRatio = 0.6f; G.BreakStop = 0.3f; }
 	FParse::Value(Cmd, TEXT("breakratio="), G.BreakRatio);
@@ -170,7 +172,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 		const int32 NXo = FMath::CeilToInt(XEnd / NestDx), NYo = FMath::Max(8, FMath::RoundToInt(Ly / NestDx));
 		const double Dyo = Ly / NYo;
 		FSandGridGpuInit& O = Out.GO;
-		O.NX = NXo; O.NY = NYo; O.Dx = (float)NestDx; O.Dy = (float)Dyo; O.Manning = Manning; O.Ks = G.Ks; O.BreakStop = G.BreakStop; O.BreakMode = G.BreakMode; O.BreakRatio = G.BreakRatio;
+		O.NX = NXo; O.NY = NYo; O.Dx = (float)NestDx; O.Dy = (float)Dyo; O.Manning = Manning; O.Ks = G.Ks; O.BreakStop = G.BreakStop; O.BreakMode = G.BreakMode; O.BreakRatio = G.BreakRatio; O.BreakSlope = G.BreakSlope;
 		O.bOpenEast = true; O.bPeriodicY = true; O.bDispersive = true; O.bBoundIg = !FParse::Param(Cmd, TEXT("igoff"));
 		O.BCorner.SetNum((NXo + 1) * (NYo + 1));
 		for (int32 j = 0; j <= NYo; ++j)
@@ -439,6 +441,7 @@ int32 RunWaveMeasure(const FString& Params)
 	Csv += Sc.bNest ? TEXT("t,R0,R1,R2,R3,eta_b,u_b,A2,Rlo,Rhi,eta_nest,eta_ob\n") : TEXT("t,R0,R1,R2,R3,eta_b,u_b,A2,Rlo,Rhi\n");
 	TArray<double> ProfW, ProfW2, ProfN, ProfG; ProfW.Init(0.0, NX); ProfW2.Init(0.0, NX); ProfN.Init(0.0, NX); ProfG.Init(0.0, NX); double ProfT = 0.0, ProfGn = 0.0;
 	TArray<FVector2f> Gw;
+	TArray<float> NuO; TArray<double> NuFrac, NuMean; double NuN = 0.0;
 	TArray<float> RowTs, RowTsO, WoPrev, HUoPrev, HVoPrev; bool bNanSaved = false;   // _row.bin: 0.1 s 마다 [x = 4i·Dx (i 0..), 가운데 줄 j = NY/2] 수위
 	TArray<float> W, HU, HV, Wo, HUo, HVo;
 	// 물가 판정 수심 (기본 2cm) — 침투가 없어 되돌림 뒤 얇은 막이 남는다 (m3-log #7). Stockdon 은 비디오로 본 물가
@@ -508,13 +511,27 @@ int32 RunWaveMeasure(const FString& Params)
 			}
 			const float En = FMath::Lerp(Wo[Jo * NXo + Io], Wo[Jo * NXo + Io + 1], FoX);
 			Csv += FString::Printf(TEXT(",%.4f,%.4f"), En, Wo[Jo * NXo + IoB]);
-			if (T > 120.f) { for (int32 i = 0; i < NXo; i += 2) { RowTsO.Add(Wo[Jo * NXo + i]); } }   // _rowo.bin: 바깥 격자 줄 (2 칸마다, D-M3-18 진단)
+			if (T > 120.f) { for (int32 i = 0; i < NXo; i += 2) { RowTsO.Add(Wo[Jo * NXo + i]); } }
+			if (T > 120.f && Sc.GO.BreakMode == 2)
+			{
+				// 바깥 격자 쇄파 진단 (D-M3-20): x 별 ν > 0 비율 · 평균 ν (모든 j)
+				Outer.DownloadNu(NuO);
+				if (NuFrac.Num() != NXo) { NuFrac.Init(0.0, NXo); NuMean.Init(0.0, NXo); }
+				for (int32 j = 0; j < Sc.GO.NY; ++j) for (int32 i = 0; i < NXo; ++i) { const float v = NuO[j * NXo + i]; if (v > 0.f) { NuFrac[i] += 1.0; } NuMean[i] += v; }
+				NuN += Sc.GO.NY;
+			}   // _rowo.bin: 바깥 격자 줄 (2 칸마다, D-M3-18 진단)
 		}
 		Csv += TEXT("\n");
 		if (FMath::FloorToInt(T / 100.f) != FMath::FloorToInt((T - 0.1f) / 100.f)) { UE_LOG(LogSandWaves, Display, TEXT("T3b %.0fs / %.0fs (벽시계 %.0fs)"), T, Secs, FPlatformTime::Seconds() - T0); }
 	}
 	FFileHelper::SaveStringToFile(Csv, *Path, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 	FFileHelper::SaveArrayToFile(TArrayView<const uint8>((const uint8*)RowTs.GetData(), RowTs.Num() * sizeof(float)), *Path.Replace(TEXT(".csv"), TEXT("_row.bin")));
+	if (NuN > 0.0)
+	{
+		FString Nf = TEXT("x,nu_frac,nu_mean\n");
+		for (int32 i = 0; i < NuFrac.Num(); ++i) { Nf += FString::Printf(TEXT("%.3f,%.5f,%.5f\n"), (i + 0.5f) * Sc.GO.Dx, NuFrac[i] / NuN, NuMean[i] / NuN); }
+		FFileHelper::SaveStringToFile(Nf, *Path.Replace(TEXT(".csv"), TEXT("_nuo.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	}
 	if (RowTsO.Num() > 0) { FFileHelper::SaveArrayToFile(TArrayView<const uint8>((const uint8*)RowTsO.GetData(), RowTsO.Num() * sizeof(float)), *Path.Replace(TEXT(".csv"), TEXT("_rowo.bin"))); }
 	{
 		FString Pf = TEXT("x,B,eta_mean,wet_frac,gw_mean,eta_std\n");   // eta_std: 젖은 시간 수위 표준편차 — H_rms ≈ 2√2·σ (D-M3-16)

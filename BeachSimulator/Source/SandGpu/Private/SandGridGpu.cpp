@@ -57,6 +57,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float2>, BrkRO)
 	SHADER_PARAMETER(uint32, BreakMode)
 	SHADER_PARAMETER(float, EddyDelta)
+	SHADER_PARAMETER(float, BreakSlope)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, NuRW)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, NuRO)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, EdCRW)
@@ -132,6 +133,7 @@ struct FSandGridGpu::FState
 	TRefCountPtr<FRDGPooledBuffer> Gw, GwQ;                           // T3c c6 지하수 (η_gw, δ) · Darcy 순유입
 	float GwZaq = 0.f;
 	FRHIGPUBufferReadback DlGw{ TEXT("SandGrid.DlGw") };
+	FRHIGPUBufferReadback DlNu{ TEXT("SandGrid.DlNu") };
 	uint32 NumIg = 0;
 	bool bNestPrimed = false;
 	FRHIGPUBufferReadback DlU{ TEXT("SandGrid.DlU") }, DlTime{ TEXT("SandGrid.DlTime") };
@@ -323,7 +325,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 			B.BCorner = GraphBuilder.CreateSRV(BC);
 			B.bOpenEast = P.bOpenEast ? 1u : 0u; B.SeaLevel = P.SeaLevel; B.BoundaryDepth = P.BoundaryDepth; B.NumWaves = P.Waves.Num(); B.bPeriodicY = P.bPeriodicY ? 1u : 0u; B.IgGain = P.IgGain;
 			B.Waves = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Waves));
-			B.bDispersive = P.bDispersive ? 1u : 0u; B.BreakRatio = P.BreakRatio; B.BreakStop = P.BreakStop; B.BreakMode = P.BreakMode; B.EddyDelta = P.EddyDelta; B.DispTaper = (uint32)FMath::Max(0, P.DispTaper);
+			B.bDispersive = P.bDispersive ? 1u : 0u; B.BreakRatio = P.BreakRatio; B.BreakStop = P.BreakStop; B.BreakMode = P.BreakMode; B.EddyDelta = P.EddyDelta; B.BreakSlope = P.BreakSlope; B.DispTaper = (uint32)FMath::Max(0, P.DispTaper);
 			B.NumIg = S->NumIg;
 			B.bGround = P.bGround ? 1u : 0u; B.GwK = P.GwK; B.GwPsi = P.GwPsi; B.GwNe = P.GwNe; B.GwZaq = S->GwZaq;
 			FRDGBufferRef GwB = GraphBuilder.RegisterExternalBuffer(S->Gw), GwQB = GraphBuilder.RegisterExternalBuffer(S->GwQ);
@@ -457,6 +459,25 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 	});
 	FlushRenderingCommands();
 	GpuMs = Ms;
+}
+
+void FSandGridGpu::DownloadNu(TArray<float>& OutNu) const
+{
+	const int32 N = Params.NX * Params.NY;
+	OutNu.SetNum(N);
+	FState* S = State;
+	ENQUEUE_RENDER_COMMAND(SandGridDownloadNu)([S, N, &OutNu](FRHICommandListImmediate& RHICmdList)
+	{
+		{
+			FRDGBuilder GraphBuilder(RHICmdList, RDG_EVENT_NAME("SandGridDownloadNu"));
+			AddEnqueueCopyPass(GraphBuilder, &S->DlNu, GraphBuilder.RegisterExternalBuffer(S->Nu), N * sizeof(float));
+			GraphBuilder.Execute();
+		}
+		RHICmdList.SubmitAndBlockUntilGPUIdle();
+		if (const void* Src = S->DlNu.Lock(N * sizeof(float))) { FMemory::Memcpy(OutNu.GetData(), Src, N * sizeof(float)); }
+		S->DlNu.Unlock();
+	});
+	FlushRenderingCommands();
 }
 
 void FSandGridGpu::DownloadGround(TArray<FVector2f>& OutGw, float* OutZaq) const
