@@ -122,6 +122,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	if (!FParse::Param(Cmd, TEXT("zonefric"))) { G.Ks = (float)(3.0 * 1.5 * D50); }
 	FParse::Value(Cmd, TEXT("ks="), G.Ks);
 	if (G.Ks > 0.f) { G.FricX = 0.f; }
+	FParse::Value(Cmd, TEXT("breakstop="), G.BreakStop);   // 쇄파 지속 종료 ε (0.3, D-M3-17 · m3-plan c8). 0 이면 이전 순간 판정
 	G.bOpenEast = true; G.SeaLevel = 0.f; G.BoundaryDepth = H0;
 	// T3c c6 지하수 · 침투 (m3-plan c6): -groundoff 로 끔 · -gwk= (5e-4 m/s)
 	G.bGround = !FParse::Param(Cmd, TEXT("groundoff"));   // 기본 켬 (m3-log #14)
@@ -162,7 +163,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 		const int32 NXo = FMath::CeilToInt(XEnd / NestDx), NYo = FMath::Max(8, FMath::RoundToInt(Ly / NestDx));
 		const double Dyo = Ly / NYo;
 		FSandGridGpuInit& O = Out.GO;
-		O.NX = NXo; O.NY = NYo; O.Dx = (float)NestDx; O.Dy = (float)Dyo; O.Manning = Manning; O.Ks = G.Ks;
+		O.NX = NXo; O.NY = NYo; O.Dx = (float)NestDx; O.Dy = (float)Dyo; O.Manning = Manning; O.Ks = G.Ks; O.BreakStop = G.BreakStop;
 		O.bOpenEast = true; O.bPeriodicY = true; O.bDispersive = true; O.bBoundIg = !FParse::Param(Cmd, TEXT("igoff"));
 		O.BCorner.SetNum((NXo + 1) * (NYo + 1));
 		for (int32 j = 0; j <= NYo; ++j)

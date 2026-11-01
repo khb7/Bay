@@ -21,6 +21,7 @@ struct FSandGridGpuInit
 	bool  bPeriodicY = false;       // 해안선 방향 주기 경계 (끄면 벽)
 	float IgGain = 0.f;             // T3b 장주기파: η_IG = IgGain·(A² − Σa²), A = 성분 포락선. 0 이면 끔
 	bool  bDispersive = false;      // T3c Madsen & Sørensen 1992 Boussinesq (Celeris 방식). 줄 길이 ≤ 1024, 경계는 벽으로 (열린 · 주기 경계 근처 처리는 c4)
+	float BreakStop = 0.3f;         // 쇄파 종료 ε — 켜진 칸은 ε < 이 값까지 NSW 유지 (Tonelli & Petti, papers D-M3-17). 0 이면 순간 판정
 	float BreakRatio = 0.8f;        // 쇄파 전환 |η|/h (Tonelli & Petti 2009). 0 이면 끔
 	int32 DispTaper = 8;            // T3c c4 열린 경계 쪽 분산 줄이는 칸 수 (d → 0)
 	bool  bBoundIg = false;         // T3c c4 경계에 묶인 장주기파 (성분 쌍, LHS 1962 방향 일반화 — m3-plan c4)

@@ -86,6 +86,8 @@ StructuredBuffer<float>    TimeRO;   // [4] 지난 서브스텝 Δt (분산 F* �
 // T3c Boussinesq 분산 (CPU StepBoussinesq 와 같은 식, papers D-M3-9). 상태 U.yz = P, Q (유량), 시간 적분은 UV = (U, V) 로
 uint  bDispersive;
 float BreakRatio;
+float BreakStop;         // 쇄파 종료 ε (Tonelli & Petti 지속, papers D-M3-17). 0 이면 지속 없음 (순간 판정)
+RWStructuredBuffer<float> BrkRW;   // 칸별 쇄파 상태 (0/1) — 서브스텝 · 프레임을 넘어 유지
 uint  DispMode;          // DispCS — 1: 서브스텝 처음 (F*_t 외삽 · F* 저장도) · 2: 2 단계 입력
 uint  LineAxis;          // SolveCS — 0: 행 (P ← U) · 1: 열 (Q ← V)
 RWStructuredBuffer<float>  DstRW;     // 정지 수심 d (쇄파 칸 0)
@@ -402,7 +404,10 @@ void BreakCS(uint3 Tid : SV_DispatchThreadID)
 	const uint i = Tid.x, j = Tid.y;
 	if (i >= NX || j >= NY) { return; }
 	const float w = URO[Idx(i, j)].x, Bm = BCell(i, j), h = w - Bm;
-	const bool bBrk = BreakRatio > 0.f && h > HDry && abs(w - SeaLevel) / h > BreakRatio;
+	const float Eps = h > HDry ? abs(w - SeaLevel) / h : 0.f;
+	const bool bWas = BreakStop > 0.f && BrkRW[Idx(i, j)] > 0.5f;
+	const bool bBrk = BreakRatio > 0.f && h > HDry && Eps > (bWas ? BreakStop : BreakRatio);   // 시작 0.8 · 켜진 뒤엔 ε < BreakStop 까지 유지
+	BrkRW[Idx(i, j)] = bBrk ? 1.f : 0.f;
 	// 열린 경계 쪽 DispTaper 칸에서 d → 0 (경계 칸은 얕은 물 — 리만 경계와 맞게, m3-plan c4)
 	const float Tp = bOpenEast != 0u && DispTaper > 0u ? saturate((float)(NX - 1u - i) / (float)DispTaper) : 1.f;
 	DstRW[Idx(i, j)] = bBrk ? 0.f : Tp * max(0.f, SeaLevel - Bm);
