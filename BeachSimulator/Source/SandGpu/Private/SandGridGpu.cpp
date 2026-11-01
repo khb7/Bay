@@ -53,7 +53,9 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER(uint32, bDispersive)
 	SHADER_PARAMETER(float, BreakRatio)
 	SHADER_PARAMETER(float, BreakStop)
-	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, BrkRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float2>, BrkRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float2>, BrkRO)
+	SHADER_PARAMETER(uint32, BreakMode)
 	SHADER_PARAMETER(uint32, DispMode)
 	SHADER_PARAMETER(uint32, LineAxis)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, DstRW)
@@ -118,7 +120,7 @@ struct FSandGridGpu::FState
 {
 	TRefCountPtr<FRDGPooledBuffer> BCorner, U0, U1, Level, FX, FY, Drain, AMax, Time, Waves;
 	TRefCountPtr<FRDGPooledBuffer> Dst, UV0, UV1, FsPrev, FsT, Disp;   // T3c 분산
-	TRefCountPtr<FRDGPooledBuffer> Brk;                               // 쇄파 상태 (지속, D-M3-17)
+	TRefCountPtr<FRDGPooledBuffer> Brk, BrkB;                         // 쇄파 상태 (지속, D-M3-17/18) — 핑퐁
 	TRefCountPtr<FRDGPooledBuffer> NestA, NestB;                      // T3c c4 nesting 스냅샷 (앞 · 뒤)
 	TRefCountPtr<FRDGPooledBuffer> Gw, GwQ;                           // T3c c6 지하수 (η_gw, δ) · Darcy 순유입
 	float GwZaq = 0.f;
@@ -236,7 +238,7 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 		S->AMax = MakeBuffer(GraphBuilder, sizeof(uint32), 1, TEXT("SandGrid.AMax"));
 		S->Time = MakeBuffer(GraphBuilder, sizeof(float), 5, TEXT("SandGrid.Time"));
 		S->Dst = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.Dst"));
-		{ TArray<float> Z; Z.Init(0.f, N); S->Brk = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.Brk"), Z.GetData()); }
+		{ TArray<FVector2f> Z; Z.SetNum(N); for (int32 k = 0; k < N; ++k) { Z[k] = FVector2f(0.f, U[k].X); } S->Brk = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.Brk"), Z.GetData()); S->BrkB = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.BrkB"), Z.GetData()); }
 		S->UV0 = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.UV0"));
 		S->UV1 = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.UV1"));
 		S->FsPrev = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.FsPrev"));
@@ -313,7 +315,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 			B.BCorner = GraphBuilder.CreateSRV(BC);
 			B.bOpenEast = P.bOpenEast ? 1u : 0u; B.SeaLevel = P.SeaLevel; B.BoundaryDepth = P.BoundaryDepth; B.NumWaves = P.Waves.Num(); B.bPeriodicY = P.bPeriodicY ? 1u : 0u; B.IgGain = P.IgGain;
 			B.Waves = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Waves));
-			B.bDispersive = P.bDispersive ? 1u : 0u; B.BreakRatio = P.BreakRatio; B.BreakStop = P.BreakStop; B.DispTaper = (uint32)FMath::Max(0, P.DispTaper);
+			B.bDispersive = P.bDispersive ? 1u : 0u; B.BreakRatio = P.BreakRatio; B.BreakStop = P.BreakStop; B.BreakMode = P.BreakMode; B.DispTaper = (uint32)FMath::Max(0, P.DispTaper);
 			B.NumIg = S->NumIg;
 			B.bGround = P.bGround ? 1u : 0u; B.GwK = P.GwK; B.GwPsi = P.GwPsi; B.GwNe = P.GwNe; B.GwZaq = S->GwZaq;
 			FRDGBufferRef GwB = GraphBuilder.RegisterExternalBuffer(S->Gw), GwQB = GraphBuilder.RegisterExternalBuffer(S->GwQ);
@@ -348,7 +350,8 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 				if (P.bDispersive)
 				{
 					// 쇄파 판정 → d · U = P − … (ToU) · 분산 항 + F*_t (지난 Δt 로 외삽). 1 단계 P, Q 는 U0 의 것 그대로 (CPU 는 SolveP(ToU(P)) = P)
-					FSandGridParams X = B; X.URO = GraphBuilder.CreateSRV(U0); X.DstRW = GraphBuilder.CreateUAV(Ds); X.BrkRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->Brk));
+					FSandGridParams X = B; X.URO = GraphBuilder.CreateSRV(U0); X.DstRW = GraphBuilder.CreateUAV(Ds); X.BrkRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Brk)); X.BrkRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->BrkB)); X.TimeRO = GraphBuilder.CreateSRV(Tm);
+					Swap(S->Brk, S->BrkB);   // 다음 판정은 이번 결과를 읽는다
 					AddGridPass<FSandGridBreakCS>(GraphBuilder, RDG_EVENT_NAME("SandGridBreak"), ShaderMap, X, GC);
 					FSandGridParams Y = B; Y.URO = GraphBuilder.CreateSRV(U0); Y.DstRO = GraphBuilder.CreateSRV(Ds); Y.UVRW = GraphBuilder.CreateUAV(UV0);
 					AddGridPass<FSandGridToUCS>(GraphBuilder, RDG_EVENT_NAME("SandGridToU"), ShaderMap, Y, GC);

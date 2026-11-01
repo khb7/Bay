@@ -87,7 +87,9 @@ StructuredBuffer<float>    TimeRO;   // [4] 지난 서브스텝 Δt (분산 F* �
 uint  bDispersive;
 float BreakRatio;
 float BreakStop;         // 쇄파 종료 ε (Tonelli & Petti 지속, papers D-M3-17). 0 이면 지속 없음 (순간 판정)
-RWStructuredBuffer<float> BrkRW;   // 칸별 쇄파 상태 (0/1) — 서브스텝 · 프레임을 넘어 유지
+RWStructuredBuffer<float2> BrkRW;  // 칸별 (쇄파 상태 0/1, 지난 판정 때 수위 w) — 서브스텝 · 프레임을 넘어 유지 (이번 판정 쓰기)
+StructuredBuffer<float2> BrkRO;    // 지난 판정 (핑퐁 — 이웃 상태를 경쟁 없이 읽는다)
+uint  BreakMode;         // 0: ε = |η − SeaLevel|/h (Tonelli & Petti) · 1: ε = (∂η/∂t)/√(gh) (SWASH HFA Smit 2013 · Kazolea 2014, papers D-M3-18)
 uint  DispMode;          // DispCS — 1: 서브스텝 처음 (F*_t 외삽 · F* 저장도) · 2: 2 단계 입력
 uint  LineAxis;          // SolveCS — 0: 행 (P ← U) · 1: 열 (Q ← V)
 RWStructuredBuffer<float>  DstRW;     // 정지 수심 d (쇄파 칸 0)
@@ -404,10 +406,22 @@ void BreakCS(uint3 Tid : SV_DispatchThreadID)
 	const uint i = Tid.x, j = Tid.y;
 	if (i >= NX || j >= NY) { return; }
 	const float w = URO[Idx(i, j)].x, Bm = BCell(i, j), h = w - Bm;
-	const float Eps = h > HDry ? abs(w - SeaLevel) / h : 0.f;
-	const bool bWas = BreakStop > 0.f && BrkRW[Idx(i, j)] > 0.5f;
-	const bool bBrk = BreakRatio > 0.f && h > HDry && Eps > (bWas ? BreakStop : BreakRatio);   // 시작 0.8 · 켜진 뒤엔 ε < BreakStop 까지 유지
-	BrkRW[Idx(i, j)] = bBrk ? 1.f : 0.f;
+	const float2 Prev = BrkRO[Idx(i, j)];
+	const float Dt = TimeRO[0];   // 지난 판정과의 간격 ≈ 이번 서브스텝 Δt (적응 Δt 라 근사)
+	float Eps = 0.f;
+	if (h > HDry) { Eps = BreakMode == 1u ? (w - Prev.y) / max(Dt, 1e-6f) / sqrt(Gravity * h) : abs(w - SeaLevel) / h; }   // 1: 수면 상승 속도만 (앞면)
+	// 지속 (SWASH HFA, Smit 2013): 자기 또는 이웃 (4 방향) 이 지난 판정에 쇄파였으면 ε > BreakStop 까지 — 앞면을 따라 영역이 이어진다
+	bool bWas = Prev.x > 0.5f;
+	if (BreakMode == 1u)
+	{
+		if (i > 0u)      { bWas = bWas || BrkRO[Idx(i - 1u, j)].x > 0.5f; }
+		if (i + 1u < NX) { bWas = bWas || BrkRO[Idx(i + 1u, j)].x > 0.5f; }
+		if (j > 0u)      { bWas = bWas || BrkRO[Idx(i, j - 1u)].x > 0.5f; }
+		if (j + 1u < NY) { bWas = bWas || BrkRO[Idx(i, j + 1u)].x > 0.5f; }
+	}
+	bWas = bWas && BreakStop > 0.f;
+	const bool bBrk = BreakRatio > 0.f && h > HDry && Eps > (bWas ? BreakStop : BreakRatio);   // 시작 BreakRatio · 켜진 뒤엔 ε < BreakStop 까지 유지
+	BrkRW[Idx(i, j)] = float2(bBrk ? 1.f : 0.f, w);
 	// 열린 경계 쪽 DispTaper 칸에서 d → 0 (경계 칸은 얕은 물 — 리만 경계와 맞게, m3-plan c4)
 	const float Tp = bOpenEast != 0u && DispTaper > 0u ? saturate((float)(NX - 1u - i) / (float)DispTaper) : 1.f;
 	DstRW[Idx(i, j)] = bBrk ? 0.f : Tp * max(0.f, SeaLevel - Bm);

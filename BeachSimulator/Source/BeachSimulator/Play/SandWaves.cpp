@@ -122,6 +122,9 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	if (!FParse::Param(Cmd, TEXT("zonefric"))) { G.Ks = (float)(3.0 * 1.5 * D50); }
 	FParse::Value(Cmd, TEXT("ks="), G.Ks);
 	if (G.Ks > 0.f) { G.FricX = 0.f; }
+	// 쇄파 판정 (papers D-M3-18): 기본 Tonelli-Petti |η|/h 0.8. -breakdedt: SWASH HFA (∂η/∂t)/√(gh) > 0.6 · 지속 0.3 — 바깥 격자가 40~60 s 에 무너짐 (m3-log #20), 실험용
+	if (FParse::Param(Cmd, TEXT("breakdedt"))) { G.BreakMode = 1; G.BreakRatio = 0.6f; } else { G.BreakMode = 0; G.BreakRatio = 0.8f; }
+	FParse::Value(Cmd, TEXT("breakratio="), G.BreakRatio);
 	FParse::Value(Cmd, TEXT("breakstop="), G.BreakStop);   // 쇄파 지속 종료 ε (0.3, D-M3-17 · m3-plan c8). 0 이면 이전 순간 판정
 	G.bOpenEast = true; G.SeaLevel = 0.f; G.BoundaryDepth = H0;
 	// T3c c6 지하수 · 침투 (m3-plan c6): -groundoff 로 끔 · -gwk= (5e-4 m/s)
@@ -163,7 +166,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 		const int32 NXo = FMath::CeilToInt(XEnd / NestDx), NYo = FMath::Max(8, FMath::RoundToInt(Ly / NestDx));
 		const double Dyo = Ly / NYo;
 		FSandGridGpuInit& O = Out.GO;
-		O.NX = NXo; O.NY = NYo; O.Dx = (float)NestDx; O.Dy = (float)Dyo; O.Manning = Manning; O.Ks = G.Ks; O.BreakStop = G.BreakStop;
+		O.NX = NXo; O.NY = NYo; O.Dx = (float)NestDx; O.Dy = (float)Dyo; O.Manning = Manning; O.Ks = G.Ks; O.BreakStop = G.BreakStop; O.BreakMode = G.BreakMode; O.BreakRatio = G.BreakRatio;
 		O.bOpenEast = true; O.bPeriodicY = true; O.bDispersive = true; O.bBoundIg = !FParse::Param(Cmd, TEXT("igoff"));
 		O.BCorner.SetNum((NXo + 1) * (NYo + 1));
 		for (int32 j = 0; j <= NYo; ++j)
