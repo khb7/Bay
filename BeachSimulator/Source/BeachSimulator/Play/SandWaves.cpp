@@ -125,12 +125,16 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	// 쇄파 판정 (papers D-M3-18): 기본 Tonelli-Petti |η|/h 0.8. -breakdedt: SWASH HFA (∂η/∂t)/√(gh) > 0.6 · 지속 0.3 — 바깥 격자가 40~60 s 에 무너짐 (m3-log #20), 실험용
 	// 기본: Kennedy et al. (2000) 와점성 (전환 없음, 900 s 안정) — 시작 η_t > 0.65√(gH), 종료 0.15√(gH), δ_b 1.2 (D-M3-19 · m3-plan c9 · m3-log #21).
 	// -breakeps: Tonelli-Petti 전환 (정지 수심 ε 0.8 — 바깥 격자 ~375 s 붕괴, 실험용) · -breakdedt: SWASH 식 (붕괴, 실험용)
-	G.BreakMode = 2; G.BreakRatio = 0.65f; G.BreakStop = 0.15f;
+	G.BreakMode = 3; G.BreakRatio = 0.65f; G.BreakStop = 0.15f; G.BreakTbrk = (float)SwellTp;   // 기본 = FUNWAVE-TVD breaker.F 기본 (m3-log #23). -breakkennedy: 이전 칸별 Kennedy ν = δ²Hη_t
+	if (FParse::Param(Cmd, TEXT("breakkennedy"))) { G.BreakMode = 2; }
 	// -breakkr: Kazolea & Ricchiuto (2018) 판정 — γ 0.6 + 기울기 φ_c 30° (경사면 · reef 시험 값, D-M3-20). 종료는 Kennedy 0.15
 	if (FParse::Param(Cmd, TEXT("breakkr"))) { G.BreakRatio = 0.6f; G.BreakSlope = FMath::Tan(FMath::DegreesToRadians(30.f)); }
+	// -breakfw: FUNWAVE-TVD breaker.F 기본 (나이 · 위쪽 이웃 번짐, ν = H·C2·√(gH), T_brk = 너울 주기) — papers D-M3-21
+	if (FParse::Param(Cmd, TEXT("breakfw"))) { G.BreakMode = 3; G.BreakRatio = 0.65f; G.BreakStop = 0.15f; G.BreakTbrk = (float)SwellTp; }
 	if (FParse::Param(Cmd, TEXT("breakeps"))) { G.BreakMode = 0; G.BreakRatio = 0.8f; G.BreakStop = 0.3f; }
 	if (FParse::Param(Cmd, TEXT("breakdedt"))) { G.BreakMode = 1; G.BreakRatio = 0.6f; G.BreakStop = 0.3f; }
 	FParse::Value(Cmd, TEXT("breakratio="), G.BreakRatio);
+	FParse::Value(Cmd, TEXT("eddydelta="), G.EddyDelta);
 	FParse::Value(Cmd, TEXT("breakstop="), G.BreakStop);   // 쇄파 지속 종료 ε (0.3, D-M3-17 · m3-plan c8). 0 이면 이전 순간 판정
 	G.bOpenEast = true; G.SeaLevel = 0.f; G.BoundaryDepth = H0;
 	// T3c c6 지하수 · 침투 (m3-plan c6): -groundoff 로 끔 · -gwk= (5e-4 m/s)
@@ -172,7 +176,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 		const int32 NXo = FMath::CeilToInt(XEnd / NestDx), NYo = FMath::Max(8, FMath::RoundToInt(Ly / NestDx));
 		const double Dyo = Ly / NYo;
 		FSandGridGpuInit& O = Out.GO;
-		O.NX = NXo; O.NY = NYo; O.Dx = (float)NestDx; O.Dy = (float)Dyo; O.Manning = Manning; O.Ks = G.Ks; O.BreakStop = G.BreakStop; O.BreakMode = G.BreakMode; O.BreakRatio = G.BreakRatio; O.BreakSlope = G.BreakSlope;
+		O.NX = NXo; O.NY = NYo; O.Dx = (float)NestDx; O.Dy = (float)Dyo; O.Manning = Manning; O.Ks = G.Ks; O.BreakStop = G.BreakStop; O.BreakMode = G.BreakMode; O.BreakRatio = G.BreakRatio; O.BreakSlope = G.BreakSlope; O.EddyDelta = G.EddyDelta; O.BreakTbrk = G.BreakTbrk;
 		O.bOpenEast = true; O.bPeriodicY = true; O.bDispersive = true; O.bBoundIg = !FParse::Param(Cmd, TEXT("igoff"));
 		O.BCorner.SetNum((NXo + 1) * (NYo + 1));
 		for (int32 j = 0; j <= NYo; ++j)
@@ -456,6 +460,7 @@ int32 RunWaveMeasure(const FString& Params)
 		Grid.Download(W, HU, HV, &T);   // 동기 — 측정용
 		if (T + 1e-4f < NextRec) { continue; }
 		NextRec += 0.1f;
+		if (T > 120.f && T - 0.1f <= 120.f) { Grid.ResetBreakDiag(); if (Sc.bNest) { Outer.ResetBreakDiag(); } }   // 판정량 진단은 시작 충격 뒤부터
 		if (T > 120.f)
 		{
 			// 가운데 줄 수위 시계열 (4 칸마다, float32) — 단면 SS · IG 분리 스펙트럼 (D-M3-16). 마른 칸은 바닥값
@@ -512,7 +517,7 @@ int32 RunWaveMeasure(const FString& Params)
 			const float En = FMath::Lerp(Wo[Jo * NXo + Io], Wo[Jo * NXo + Io + 1], FoX);
 			Csv += FString::Printf(TEXT(",%.4f,%.4f"), En, Wo[Jo * NXo + IoB]);
 			if (T > 120.f) { for (int32 i = 0; i < NXo; i += 2) { RowTsO.Add(Wo[Jo * NXo + i]); } }
-			if (T > 120.f && Sc.GO.BreakMode == 2)
+			if (T > 120.f && Sc.GO.BreakMode >= 2)
 			{
 				// 바깥 격자 쇄파 진단 (D-M3-20): x 별 ν > 0 비율 · 평균 ν (모든 j)
 				Outer.DownloadNu(NuO);
@@ -526,6 +531,23 @@ int32 RunWaveMeasure(const FString& Params)
 	}
 	FFileHelper::SaveStringToFile(Csv, *Path, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 	FFileHelper::SaveArrayToFile(TArrayView<const uint8>((const uint8*)RowTs.GetData(), RowTs.Num() * sizeof(float)), *Path.Replace(TEXT(".csv"), TEXT("_row.bin")));
+	{
+		// 쇄파 판정량 진단 (m3-log #23): x 별 — 줄 평균 · 줄 최대 의 칸별 최대 |∇η| 와 최대 η_t/√(gH). 바깥 · 안쪽
+		auto DumpDiag = [&](FSandGridGpu& Gd, const FSandGridGpuInit& Pi, const TCHAR* Suffix)
+		{
+			TArray<FVector2f> Dg; Gd.DownloadBreakDiag(Dg);
+			FString Df = TEXT("x,slope_mean,slope_max,etat_mean,etat_max\n");
+			for (int32 i = 0; i < Pi.NX; ++i)
+			{
+				double Sm = 0, Sx = 0, Em = 0, Ex = 0;
+				for (int32 j = 0; j < Pi.NY; ++j) { const FVector2f v = Dg[j * Pi.NX + i]; Sm += v.X; Em += v.Y; Sx = FMath::Max(Sx, (double)v.X); Ex = FMath::Max(Ex, (double)v.Y); }
+				Df += FString::Printf(TEXT("%.3f,%.4f,%.4f,%.4f,%.4f\n"), (i + 0.5f) * Pi.Dx, Sm / Pi.NY, Sx, Em / Pi.NY, Ex);
+			}
+			FFileHelper::SaveStringToFile(Df, *Path.Replace(TEXT(".csv"), Suffix), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		};
+		DumpDiag(Grid, Sc.G, TEXT("_diag.csv"));
+		if (Sc.bNest) { DumpDiag(Outer, Sc.GO, TEXT("_diago.csv")); }
+	}
 	if (NuN > 0.0)
 	{
 		FString Nf = TEXT("x,nu_frac,nu_mean\n");

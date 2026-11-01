@@ -23,7 +23,8 @@ struct FSandGridGpuInit
 	bool  bDispersive = false;      // T3c Madsen & Sørensen 1992 Boussinesq (Celeris 방식). 줄 길이 ≤ 1024, 경계는 벽으로 (열린 · 주기 경계 근처 처리는 c4)
 	float BreakStop = 0.3f;         // 쇄파 종료 ε — 켜진 칸은 ε < 이 값까지 NSW 유지 (Tonelli & Petti, papers D-M3-17). 0 이면 순간 판정
 	float BreakSlope = 0.f;         // BreakMode 2 기울기 조건 tan φ_c (Kazolea & Ricchiuto 2018: φ_c 30° → 0.577). 0 이면 끔
-	float EddyDelta = 1.2f;         // BreakMode 2 Kennedy 와점성 δ_b (Kennedy et al. 2000 · FUNWAVE-TVD)
+	float EddyDelta = 1.2f;
+	float BreakTbrk = 12.f;         // BreakMode 3 (FUNWAVE 나이 · 번짐 와점성) 쇄파 지속 T_brk (s)         // BreakMode 2 Kennedy 와점성 δ_b (Kennedy et al. 2000 · FUNWAVE-TVD)
 	int32 BreakMode = 1;            // 1: 시작 (∂η/∂t)/√(gh) > BreakRatio (SWASH · Kazolea, D-M3-18) · 0: |η|/h (Tonelli & Petti)
 	float BreakRatio = 0.8f;        // 쇄파 전환 |η|/h (Tonelli & Petti 2009). 0 이면 끔
 	int32 DispTaper = 8;            // T3c c4 열린 경계 쪽 분산 줄이는 칸 수 (d → 0)
@@ -57,7 +58,9 @@ public:
 	void Download(TArray<float>& OutW, TArray<float>& OutHU, TArray<float>& OutHV, float* OutSimTime = nullptr) const;
 	/** 지하수 (η_gw, δ) 동기 내려받기 · 대수층 바닥 */
 	void DownloadGround(TArray<FVector2f>& OutGw, float* OutZaq = nullptr) const;
-	void DownloadNu(TArray<float>& OutNu) const;   // 쇄파 와점성 ν (진단, D-M3-20)
+	void DownloadNu(TArray<float>& OutNu) const;
+	void DownloadBreakDiag(TArray<FVector2f>& Out) const;
+	void ResetBreakDiag();   // 칸별 (최대 |∇η|, 최대 η_t/√(gH)) — 시작부터 누적 (진단)   // 쇄파 와점성 ν (진단, D-M3-20)
 	/** 마지막 Step 의 GPU 시간 (타임스탬프, ms) */
 	float LastGpuMs() const { return GpuMs; }
 	int32 GetLastSubsteps() const { return LastSubsteps; }

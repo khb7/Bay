@@ -89,7 +89,9 @@ float BreakRatio;
 float BreakStop;         // 쇄파 종료 ε (Tonelli & Petti 지속, papers D-M3-17). 0 이면 지속 없음 (순간 판정)
 RWStructuredBuffer<float2> BrkRW;  // 칸별 (쇄파 상태 0/1, 지난 판정 때 수위 w) — 서브스텝 · 프레임을 넘어 유지 (이번 판정 쓰기)
 StructuredBuffer<float2> BrkRO;    // 지난 판정 (핑퐁 — 이웃 상태를 경쟁 없이 읽는다)
-float BreakSlope;        // tan φ_c (기울기 쇄파 조건, 0 이면 끔)
+float BreakSlope;
+float BreakTbrk;         // 3 (FUNWAVE 나이): 쇄파 지속 시간 T_brk (s) — FUNWAVE 는 입사 주기
+RWStructuredBuffer<float2> BrkDiagRW;   // 진단: 칸별 (최대 |∇η|, 최대 η_t/√(gH)) 누적 (m3-log #23)        // tan φ_c (기울기 쇄파 조건, 0 이면 끔)
 float EddyDelta;         // Kennedy et al. (2000) δ_b (1.2) — ν = δ_b² (h+η) η_t (FUNWAVE-TVD 문서 식 (3), papers D-M3-19)
 RWStructuredBuffer<float>  NuRW;   // 칸별 와점성 ν (m²/s) — BreakCS 가 쓰고 EddyCS 가 읽는다
 StructuredBuffer<float>    NuRO;
@@ -446,18 +448,53 @@ void BreakCS(uint3 Tid : SV_DispatchThreadID)
 	// 2 (와점성): 기울기 조건도 — |∇η| ≥ tan φ_c (Kazolea & Ricchiuto 2018 · Kazolea 2014, φ_c 30°). 느린 · 멈춘 도수와 성긴 격자에서
 	// η_t 가 문턱에 못 미치는 가파른 앞면을 잡는다 (D-M3-20). BreakSlope 0 이면 끔
 	bool bSlope = false;
-	if (BreakMode == 2u && BreakSlope > 0.f && h > HDry && H0s > HDry)
+	if (h > HDry && H0s > HDry)
 	{
 		const int ii = (int)i, jj = (int)j;
 		const float Ex = (URO[Idx((uint)min(ii + 1, (int)NX - 1), j)].x - URO[Idx((uint)max(ii - 1, 0), j)].x) / (2.f * Dx);
 		const float Ey = (URO[Idx(i, (uint)WJ(jj + 1))].x - URO[Idx(i, (uint)WJ(jj - 1))].x) / (2.f * Dy);
-		bSlope = sqrt(Ex * Ex + Ey * Ey) >= BreakSlope;
+		const float Sl = sqrt(Ex * Ex + Ey * Ey);
+		bSlope = BreakMode == 2u && BreakSlope > 0.f && Sl >= BreakSlope;
 	}
 	const bool bBrk = BreakRatio > 0.f && h > HDry && H0s > HDry && (Eps > (bWas ? BreakStop : BreakRatio) || bSlope);   // 시작 BreakRatio · 켜진 뒤엔 ε < BreakStop 까지 유지
 	BrkRW[Idx(i, j)] = float2(bBrk ? 1.f : 0.f, w);
 	// 2: Kennedy 와점성 — 전환 없이 (분산 유지) ν 만. B = 1 (FUNWAVE-TVD), 켜짐 · 꺼짐은 위 지속 판정 (C_brk1 · C_brk2)
-	NuRW[Idx(i, j)] = BreakMode == 2u && bBrk ? EddyDelta * EddyDelta * h * max(EtaT, 0.f) : 0.f;
-	if (BreakMode == 2u)
+	float NuV = BreakMode == 2u && bBrk ? EddyDelta * EddyDelta * h * max(EtaT, 0.f) : 0.f;
+	if (BreakMode == 3u)
+	{
+		// FUNWAVE-TVD breaker.F (기본 컴파일) 를 옮김 (papers D-M3-21): 칸별 쇄파 나이 AGE (BrkRO.x).
+		// 시작: η_t ≥ C1√(gH) 이고 (AGE = 0 또는 > T_brk) → AGE = Δt. 진행 중: AGE += Δt.
+		// 번짐: AGE = 0 이고 η_t ≥ C2√(gH) 일 때, 파 진행 방향 (−∇η) 의 위쪽 이웃 셋 중 하나가 AGE ≥ Δt 이고 AGE > 그 거리 / c 이면 AGE = Δt.
+		// ν = H · C2 · √(gH) (정적) — 0 < AGE < T_brk 이고 η_t > C2√(gH) 인 칸.
+		const float Sq = sqrt(Gravity * max(h, HDry)), T1 = BreakRatio * Sq, T2 = BreakStop * Sq;
+		float Age = Prev.x;
+		if (h > HDry && H0s > HDry)
+		{
+			if (EtaT >= T1 && (Age <= 0.f || Age > BreakTbrk)) { Age = Dt; }
+			else if (Age > 0.f) { Age += Dt; }
+			else if (EtaT >= T2)
+			{
+				const int ii = (int)i, jj = (int)j;
+				const float Ex = (URO[Idx((uint)min(ii + 1, (int)NX - 1), j)].x - URO[Idx((uint)max(ii - 1, 0), j)].x) / (2.f * Dx);
+				const float Ey = (URO[Idx(i, (uint)WJ(jj + 1))].x - URO[Idx(i, (uint)WJ(jj - 1))].x) / (2.f * Dy);
+				const float Gm = max(sqrt(Ex * Ex + Ey * Ey), 1e-6f);
+				const float C = min(abs(EtaT) / Gm, sqrt(Gravity * abs(h)));
+				const float Px = Dx / max(C, 1e-6f), Py = Dy / max(C, 1e-6f), Pxy = sqrt(Dx * Dx + Dy * Dy) / max(C, 1e-6f);
+				const int sx = -Ex >= 0.f ? -1 : 1, sy = -Ey >= 0.f ? -1 : 1;   // 위쪽 (파가 온 쪽) 이웃 방향
+				const float A1 = BrkRO[Idx((uint)clamp(ii + sx, 0, (int)NX - 1), j)].x;
+				const float A2 = BrkRO[Idx((uint)clamp(ii + sx, 0, (int)NX - 1), (uint)WJ(jj + sy))].x;
+				const float A3 = BrkRO[Idx(i, (uint)WJ(jj + sy))].x;
+				if ((A1 >= Dt && A1 > Px) || (A2 >= Dt && A2 > Pxy) || (A3 >= Dt && A3 > Py)) { Age = Dt; }
+			}
+		}
+		else { Age = 0.f; }
+		const bool bOn = Age > 0.f && Age < BreakTbrk && EtaT > T2;
+		NuV = bOn ? h * T2 : 0.f;
+		BrkRW[Idx(i, j)] = float2(Age, w);
+	}
+	NuRW[Idx(i, j)] = NuV;
+	if (h > HDry && H0s > HDry) { const float2 Dg = BrkDiagRW[Idx(i, j)]; BrkDiagRW[Idx(i, j)] = float2(max(Dg.x, bBrk ? 1.f + NuV : 0.f), max(Dg.y, Eps)); }   // 진단: x = 쇄파면 1 + ν, y = ε
+	if (BreakMode >= 2u)
 	{
 		const float TpE = bOpenEast != 0u && DispTaper > 0u ? saturate((float)(NX - 1u - i) / (float)DispTaper) : 1.f;
 		DstRW[Idx(i, j)] = TpE * max(0.f, SeaLevel - Bm);
@@ -718,9 +755,9 @@ void GwApplyCS(uint3 Tid : SV_DispatchThreadID)
 
 // Kennedy 와점성 확산 (papers D-M3-19 · m3-plan c9): ∂P/∂t = ∂x(ν ∂x P) + ∂y(ν ∂y P) (FUNWAVE-TVD 식 (1)(2), 교차 미분 없음).
 // 5 cm 칸에선 명시적 안정 한계 (Δt ≤ Δx²/4ν ~ 0.6 ms) 가 Δt 보다 작다 → 줄마다 암시적 (후진 오일러, Thomas). x 줄 → y 줄 (Lie 분리).
-// 면 ν = 두 칸 평균, 한쪽이라도 0 (쇄파 아님 · 마름) 이면 0 — 쇄파 영역 밖으로 운동량이 새지 않게. 줄 끝은 유속 기울기 0.
+// 면 ν = 두 칸 평균 (마른 칸은 ν = 0). 줄 끝은 유속 기울기 0.
 uint EddyNext(uint L, uint s) { return LineAxis == 0u ? Idx(s, L) : Idx(L, s); }
-float EddyFace(float A, float B) { return A > 0.f && B > 0.f ? 0.5f * (A + B) : 0.f; }
+float EddyFace(float A, float B) { return 0.5f * (A + B); }   // FUNWAVE 와 같이 칸 ν 평균 — "양쪽 다 > 0" 이면 1~2 칸 폭 앞면 띠에서 확산이 0 이 됐다 (m3-log #23)
 [numthreads(64, 1, 1)]
 void EddyCS(uint3 Tid : SV_DispatchThreadID)
 {
