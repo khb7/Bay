@@ -1984,6 +1984,26 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
 - **판정 — 우리 구현의 빠진 점**: (1) **종료 기준 · 지속 없음** — 마루가 0.8h 를 넘는 순간의 칸만 NSW, 마루 앞면 · 골은 계속 분산 → 분산항이 bore 가 가파러지는 걸 막아 **충격파 소산이 덜 일어난다** (SS 과대와 같은 방향) · (2) **영역 확장 없음** (ε = 0.3 까지 아래쪽) · (3) 기준 수위가 정지 수위 (setup 0.4 m 가 쌓인 안쪽에선 거의 항상 > 0.8 → 안쪽은 이미 NSW 일 수 있음 — 바깥 · 중간 쇄파대에서의 판정이 문제) · (4) 1:15 급경사에서 0.8 자체가 큼.
 - **다음 (설계)**: Tonelli-Petti 원 정의대로 칸마다 쇄파 상태 플래그를 두고 시작 0.8 · 종료 ε < 0.3 (영역 정의의 0.3 과 같은 값, 0.55~0.25 범위 안) 지속. 바깥 · 안쪽 격자 둘 다. 검증: SS H_rms/h 단면이 0.42 쪽으로 · setup 비.
 
+### D-M3-18. ★ 쇄파 모델 비교 — 해결책 후보 (#19 뒤, 2026-11-02)
+#19: 바깥 격자에서 Hs/h 1.36 까지 안 부서짐. ε = |η|/h > 0.8 (마루 진폭) 은 파고로 H/h ≈ 1.2~1.6 에서야 켜진다.
+
+| 모델 · 문헌 | 쇄파 시작 | 종료 · 지속 | 소산 방식 | 근거 |
+|---|---|---|---|---|
+| **(현재) Tonelli & Petti 2009~2012** (FUNWAVE-TVD) | ε = A/h > 0.8 | ε 0.55~0.25 (우리 0.3) | NSW 전환 (충격파) | Bacigaluppi 2019 ✓ · 급경사엔 0.8 이 큼 (Water 2025 △) |
+| **Kazolea et al. 2014** (Bacigaluppi "Hybrid") | \|∂η/∂t\|/√(gh) > γ (0.35~0.65, 기본 **0.6**) **또는** \|∇η\| ≥ tan φ (φ 14°~33°) | bore Froude Fr_b = √(((2H₂/H₁+1)²−1)/8) < **1.3** (Tissier 2012), roller 길이 l_r = 2.9(H₂−H₁) 로 영역 | NSW 전환 | Bacigaluppi 2019 ✓ 원문 (MS92 + NSW, 우리와 같은 틀) — "꽤 만족스러움, 넓은 범위" |
+| **Bacigaluppi 2019 Physical** | 마루 표면 유속 u_s / 파속 c_b > Fr_s,cr (1, Boussinesq 덜 천수 보정 0.75) | 위와 같음 | NSW 전환 | ✓ — Hybrid 와 비슷, 일부 (Hansen-Svendsen setup) 더 나음. 2 계 미분 · 거르기 필요 |
+| **SWASH HFA, Smit et al. 2013** | ∂ζ/∂t > α√(gh), **α 0.6** | 지속 β = 0.3 (이웃 칸이 쇄파면 ∂ζ/∂t > β√(gh) 까지) | 정수압 (비정수압 끔 = 우리 분산 끔과 같은 뜻) | CE 2013 △ 2차 인용 |
+| **Kennedy et al. 2000** (FUNWAVE 1.0 · Celeris · COULWAVE) | ∂η/∂t > η_t^(I) = (0.35~0.65)√(gh) | η_t^(F) = 0.15√(gh), 전이 시간 T* = 5√(h/g) | **와점성** ν = B δ² h ∂η/∂t 를 운동량에 (앞면 국소) | △ 2차 — 기본값 원문 미확인 |
+| Schäffer et al. 1993 roller (MIKE 21 BW) | 앞면 기울기 | — | roller 운동량 항 | △ 미조사 |
+
+- **공통점**: 문헌 다수 (Kazolea · SWASH · Kennedy) 가 시작을 **∂η/∂t/√(gh) ≈ 0.6** (수면 상승 속도 — 앞면이 서는 것) 으로 본다. 마루 높이 (ε) 보다 일찍, 앞면이 가파러질 때 켜짐. 하이브리드는 격자가 아주 고우면 결합 불안정 (Bacigaluppi 결론).
+- **해결책 후보 (작은 변경 → 큰 변경)**:
+  1. **SWASH 식 (∂η/∂t 시작 0.6 + 지속 0.3)** — 우리 Brk 버퍼 · NSW 전환 그대로, 판정량만 ε → ∂η/∂t/√(gh). 비용 최소. Kazolea 의 ∂η/∂t 조건과 같은 값.
+  2. **Kazolea 전체** — 1 + 기울기 조건 (φ, 범위 넓음 — 값 선택 근거 필요) + bore Froude 종료 (마루 · 골 군집 분석 — GPU 에선 줄 단위 탐색 필요).
+  3. **Kennedy 와점성** — 전환 대신 운동량 확산항. Celeris 계열 표준이지만 새 항 · 계수 (B, δ) 원문 확인 필요.
+  4. Physical (u_s/c_b) — 미분 · 거르기 잡음, 1 · 2 와 비슷한 성능.
+- **추천**: 1 부터 (근거 두 개 — SWASH · Kazolea 기본 γ 0.6, 기존 구조 재사용). 바깥 격자 Hs/h 와 안쪽 SS H_rms/h · setup 으로 판단, 부족하면 2 (기울기 조건) → 3.
+
 ### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
 - Epic 의 얕은 물은 있다: `Engine/Plugins/FX/NiagaraFluids/Content/Modules/Grid2D/ShallowWater/` (`Grid2D_SW_Advect · UpdateDepthGrid · FilterOvershoot · ExtrapolateVelocities · MovingWindow_*` …) · `Plugins/Experimental/WaterAdvanced` 의 `ShallowWaterRiverActor.cpp:339` 가 `Grid2D_SW_River` 를 쓴다. 바닥은 **SceneCapture 깊이로 찍어 읽기만** (`:107`) — 단방향 시각 효과. 침식 · 모래 · 수분 채널 없음. 모듈 이름으로 보아 이류 + 넘침 거르기 계열 (uasset 그래프라 알고리즘 세부는 미확인).
 - Niagara GPU 틱은 정해진 세 시점에만 돈다: `ENiagaraGpuComputeTickStage { PreInitViews, PostInitViews, PostOpaqueRender }` (`Niagara/Public/NiagaraCommon.h:1924-1926`). 우리 입자 시뮬 RDG 패스 사이에 끼울 수 없다 → M4 의 **같은 프레임 양방향 결합**(격자 → 입자 하중 · 수분, 입자 → 장애물 · 파괴 환원)이 막히거나 1 프레임 늦는다. 외부 RDG 버퍼를 읽히려면 사용자 정의 DI 를 C++ 로 써야 한다.
