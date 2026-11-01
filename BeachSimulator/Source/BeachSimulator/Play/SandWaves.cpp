@@ -117,8 +117,9 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	G.ManningSwash = 0.025f; FParse::Value(Cmd, TEXT("manswash="), G.ManningSwash);
 	G.FricX = (float)Xs;   // 시작 물가선 — 실행 중 FSwashZone 이 되밀림 한계로 옮긴다
 	if (FParse::Param(Cmd, TEXT("onefric"))) { G.ManningSwash = Manning; G.FricX = 0.f; }   // 구역 없이 한 값
-	// -ks= (m): White-Colebrook 영역 전체 (D-M3-15). -ksgrain: k_s = 3·D90 (XBeach-G), D90 ≈ 1.5·d50 가정
-	if (FParse::Param(Cmd, TEXT("ksgrain"))) { G.Ks = (float)(3.0 * 1.5 * D50); }
+	// 기본: White-Colebrook 영역 전체, k_s = 3·D90 (XBeach-G · Howe 2019 원형 크기 측정과 맞음, D-M3-15 · m3-log #17), D90 ≈ 1.5·d50 가정.
+	// -ks= (m) 직접 · -zonefric: c7 구역 Manning (진단용)
+	if (!FParse::Param(Cmd, TEXT("zonefric"))) { G.Ks = (float)(3.0 * 1.5 * D50); }
 	FParse::Value(Cmd, TEXT("ks="), G.Ks);
 	if (G.Ks > 0.f) { G.FricX = 0.f; }
 	G.bOpenEast = true; G.SeaLevel = 0.f; G.BoundaryDepth = H0;
