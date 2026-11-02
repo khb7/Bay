@@ -445,7 +445,7 @@ int32 RunWaveMeasure(const FString& Params)
 	Csv += Sc.bNest ? TEXT("t,R0,R1,R2,R3,eta_b,u_b,A2,Rlo,Rhi,eta_nest,eta_ob\n") : TEXT("t,R0,R1,R2,R3,eta_b,u_b,A2,Rlo,Rhi\n");
 	TArray<double> ProfW, ProfW2, ProfN, ProfG; ProfW.Init(0.0, NX); ProfW2.Init(0.0, NX); ProfN.Init(0.0, NX); ProfG.Init(0.0, NX); double ProfT = 0.0, ProfGn = 0.0;
 	TArray<FVector2f> Gw;
-	TArray<float> NuO; TArray<double> NuFrac, NuMean; double NuN = 0.0;
+	TArray<float> NuO; TArray<double> NuFrac, NuMean; double NuN = 0.0; TArray<float> RowNuO;
 	TArray<float> RowTs, RowTsO, WoPrev, HUoPrev, HVoPrev; bool bNanSaved = false;   // _row.bin: 0.1 s 마다 [x = 4i·Dx (i 0..), 가운데 줄 j = NY/2] 수위
 	TArray<float> W, HU, HV, Wo, HUo, HVo;
 	// 물가 판정 수심 (기본 2cm) — 침투가 없어 되돌림 뒤 얇은 막이 남는다 (m3-log #7). Stockdon 은 비디오로 본 물가
@@ -524,6 +524,7 @@ int32 RunWaveMeasure(const FString& Params)
 				if (NuFrac.Num() != NXo) { NuFrac.Init(0.0, NXo); NuMean.Init(0.0, NXo); }
 				for (int32 j = 0; j < Sc.GO.NY; ++j) for (int32 i = 0; i < NXo; ++i) { const float v = NuO[j * NXo + i]; if (v > 0.f) { NuFrac[i] += 1.0; } NuMean[i] += v; }
 				NuN += Sc.GO.NY;
+				for (int32 i = 0; i < NXo; i += 2) { RowNuO.Add(NuO[Jo * NXo + i]); }   // _nurowo.bin: _rowo 와 같은 칸 ν (m3-log #24 고조파 · 점성 영역 진단)
 			}   // _rowo.bin: 바깥 격자 줄 (2 칸마다, D-M3-18 진단)
 		}
 		Csv += TEXT("\n");
@@ -554,6 +555,7 @@ int32 RunWaveMeasure(const FString& Params)
 		for (int32 i = 0; i < NuFrac.Num(); ++i) { Nf += FString::Printf(TEXT("%.3f,%.5f,%.5f\n"), (i + 0.5f) * Sc.GO.Dx, NuFrac[i] / NuN, NuMean[i] / NuN); }
 		FFileHelper::SaveStringToFile(Nf, *Path.Replace(TEXT(".csv"), TEXT("_nuo.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 	}
+	if (RowNuO.Num() > 0) { FFileHelper::SaveArrayToFile(TArrayView<const uint8>((const uint8*)RowNuO.GetData(), RowNuO.Num() * sizeof(float)), *Path.Replace(TEXT(".csv"), TEXT("_nurowo.bin"))); }
 	if (RowTsO.Num() > 0) { FFileHelper::SaveArrayToFile(TArrayView<const uint8>((const uint8*)RowTsO.GetData(), RowTsO.Num() * sizeof(float)), *Path.Replace(TEXT(".csv"), TEXT("_rowo.bin"))); }
 	{
 		FString Pf = TEXT("x,B,eta_mean,wet_frac,gw_mean,eta_std\n");   // eta_std: 젖은 시간 수위 표준편차 — H_rms ≈ 2√2·σ (D-M3-16)

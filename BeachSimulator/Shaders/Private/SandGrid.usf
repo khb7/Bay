@@ -493,7 +493,7 @@ void BreakCS(uint3 Tid : SV_DispatchThreadID)
 		BrkRW[Idx(i, j)] = float2(Age, w);
 	}
 	NuRW[Idx(i, j)] = NuV;
-	if (h > HDry && H0s > HDry) { const float2 Dg = BrkDiagRW[Idx(i, j)]; BrkDiagRW[Idx(i, j)] = float2(max(Dg.x, bBrk ? 1.f + NuV : 0.f), max(Dg.y, Eps)); }   // 진단: x = 쇄파면 1 + ν, y = ε
+	if (h > HDry && H0s > HDry) { const float2 Dg = BrkDiagRW[Idx(i, j)]; BrkDiagRW[Idx(i, j)] = float2(Dg.x + (NuV > 0.f ? Dt : 0.f), max(Dg.y, Eps)); }   // 진단: x = ν > 0 누적 시간 (s, m3-log #24), y = 최대 ε
 	if (BreakMode >= 2u)
 	{
 		const float TpE = bOpenEast != 0u && DispTaper > 0u ? saturate((float)(NX - 1u - i) / (float)DispTaper) : 1.f;
