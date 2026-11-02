@@ -64,7 +64,7 @@ public:
 	void ResetBreakDiag();   // 칸별 (최대 |∇η|, 최대 η_t/√(gH)) — 시작부터 누적 (진단)   // 쇄파 와점성 ν (진단, D-M3-20)
 	/** 마지막 Step 의 GPU 시간 (타임스탬프, ms) */
 	void DownloadTime(float* OutSimTime) const;   // 시간 · 최대 파속만 (16 B) — 서브스텝 수 갱신용
-	float LastGpuMs() const { return GpuMs; }
+	float LastGpuMs() const;   // 비동기 타임스탬프 (1~3 프레임 전 Run, ms)
 	int32 GetLastSubsteps() const { return LastSubsteps; }
 
 	int32 GetNX() const { return Params.NX; }

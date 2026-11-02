@@ -1,4 +1,5 @@
 #include "SandGridGpu.h"
+#include <atomic>
 
 #include "DataDrivenShaderPlatformInfo.h"
 #include "GlobalShader.h"
@@ -143,6 +144,12 @@ struct FSandGridGpu::FState
 	bool bNestPrimed = false;
 	FRHIGPUBufferReadback DlU{ TEXT("SandGrid.DlU") }, DlTime{ TEXT("SandGrid.DlTime") };
 	FRenderQueryRHIRef Ts[2];
+	// 비동기 readback 링 (m3-plan p1): 매 Run 끝에 시간 버퍼 (16 B) 복사 · 타임스탬프 — 다음 Run 시작에 준비된 것만 읽는다 (기다리지 않음)
+	static constexpr int32 NumRb = 3;
+	TUniquePtr<FRHIGPUBufferReadback> Rb[NumRb];
+	FRenderQueryRHIRef RbTs[NumRb][2];
+	int32 RbHead = 0, RbCount = 0;   // 가장 오래된 진행 중 칸 · 진행 중 개수 (렌더 스레드만)
+	std::atomic<float> AMaxSeen{ 0.f }, GpuMsSeen{ 0.f }, SimTimeSeen{ 0.f };   // 게임 스레드가 읽음
 };
 
 namespace
@@ -267,16 +274,25 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 		S->GwQ = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.GwQ"));
 		GraphBuilder.Execute();
 		if (!S->Ts[0].IsValid()) { for (FRenderQueryRHIRef& Q : S->Ts) { Q = RHICreateRenderQuery(RQT_AbsoluteTime); } }
+		for (int32 r = 0; r < FState::NumRb; ++r)
+		{
+			if (!S->Rb[r].IsValid()) { S->Rb[r] = MakeUnique<FRHIGPUBufferReadback>(TEXT("SandGrid.RbTime")); }
+			for (FRenderQueryRHIRef& Q : S->RbTs[r]) { if (!Q.IsValid()) { Q = RHICreateRenderQuery(RQT_AbsoluteTime); } }
+		}
 	});
 	FlushRenderingCommands();
 	Params.BCorner.Empty(); Params.W.Empty(); Params.HU.Empty(); Params.HV.Empty(); Params.GwInit.Empty();   // Waves 는 둔다 (NumWaves)
 }
+
+float FSandGridGpu::LastGpuMs() const { return State ? State->GpuMsSeen.load(std::memory_order_relaxed) : 0.f; }
 
 void FSandGridGpu::StepFixed(float Dt, int32 NumSteps) { Run(true, Dt, NumSteps); }
 void FSandGridGpu::Advance(float FrameTime, int32 MaxSub)
 {
 	// 서브스텝 수 = 지난 Advance 의 최대 파속으로 CFL 에 맞춰 (+25% · +1). 모자라면 시뮬 시간이 프레임보다 조금 늦을 뿐 (GPU 가 Δt 를 CFL 로 자른다)
 	int32 K = MaxSub;
+	const float AMax = State->AMaxSeen.load(std::memory_order_relaxed);   // 비동기 readback (1~3 프레임 전) 또는 동기 Download
+	if (AMax > 0.f) { LastAMax = AMax; }
 	if (LastAMax > 0.f) { K = FMath::Clamp(FMath::CeilToInt(FrameTime * LastAMax / Params.Cfl * 1.25f) + 1, 1, MaxSub); }
 	LastSubsteps = K;
 	Run(false, FrameTime, K);
@@ -288,10 +304,22 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 	const FSandGridGpuInit P = Params;
 	FState* OS = P.NestOuter ? P.NestOuter->State : nullptr;
 	const FSandGridGpuInit OP = P.NestOuter ? P.NestOuter->Params : FSandGridGpuInit();
-	float Ms = 0.f;
-	ENQUEUE_RENDER_COMMAND(SandGridRun)([S, P, OS, OP, bFixed, DtOrFrame, NumSub, &Ms](FRHICommandListImmediate& RHICmdList)
+	ENQUEUE_RENDER_COMMAND(SandGridRun)([S, P, OS, OP, bFixed, DtOrFrame, NumSub](FRHICommandListImmediate& RHICmdList)
 	{
 		const FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+		// 지난 Run 들의 readback 중 준비된 것 (오래된 순) 만 읽는다 — GPU 를 기다리지 않음 (m3-plan p1)
+		while (S->RbCount > 0 && S->Rb[S->RbHead]->IsReady())
+		{
+			const int32 h = S->RbHead;
+			float Tv[4] = {};
+			if (const void* Src = S->Rb[h]->Lock(4 * sizeof(float))) { FMemory::Memcpy(Tv, Src, 4 * sizeof(float)); }
+			S->Rb[h]->Unlock();
+			S->AMaxSeen.store(Tv[3], std::memory_order_relaxed); S->SimTimeSeen.store(Tv[2], std::memory_order_relaxed);
+			uint64 A = 0, Bt = 0;
+			if (RHIGetRenderQueryResult(S->RbTs[h][0].GetReference(), A, false) && RHIGetRenderQueryResult(S->RbTs[h][1].GetReference(), Bt, false)) { S->GpuMsSeen.store((float)(Bt - A) * 0.001f, std::memory_order_relaxed); }
+			S->RbHead = (h + 1) % FState::NumRb; --S->RbCount;
+		}
+		const int32 Wr = S->RbCount < FState::NumRb ? (S->RbHead + S->RbCount) % FState::NumRb : -1;   // 링이 차면 이번엔 readback 안 함
 		{
 			FRDGBuilder GraphBuilder(RHICmdList, RDG_EVENT_NAME("SandGridRun"));
 			FRDGBufferRef BC = GraphBuilder.RegisterExternalBuffer(S->BCorner);
@@ -323,7 +351,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 				AddGridPass<FSandGridNestCS>(GraphBuilder, RDG_EVENT_NAME("SandGridNest"), ShaderMap, X, FIntVector(FMath::DivideAndRoundUp(OP.NY, 64), 1, 1));
 				if (!S->bNestPrimed) { AddCopyBufferPass(GraphBuilder, NA, NB); S->bNestPrimed = true; }
 			}
-			GraphBuilder.AddPass(RDG_EVENT_NAME("SandGridTs0"), ERDGPassFlags::NeverCull, [Q = S->Ts[0].GetReference()](FRHICommandListImmediate& Cmd) { Cmd.EndRenderQuery(Q); });
+			GraphBuilder.AddPass(RDG_EVENT_NAME("SandGridTs0"), ERDGPassFlags::NeverCull, [Q = (Wr >= 0 ? S->RbTs[Wr][0] : S->Ts[0]).GetReference()](FRHICommandListImmediate& Cmd) { Cmd.EndRenderQuery(Q); });
 
 			FSandGridParams B;
 			B.NX = P.NX; B.NY = P.NY; B.Dx = P.Dx; B.Dy = P.Dy; B.Gravity = P.Gravity; B.Theta = P.Theta; B.Cfl = P.Cfl; B.HDry = P.HDry;
@@ -459,17 +487,14 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 					AddGridPass<FSandGridGwApplyCS>(GraphBuilder, RDG_EVENT_NAME("SandGridGwApply"), ShaderMap, Y, GC);
 				}
 			}
-			GraphBuilder.AddPass(RDG_EVENT_NAME("SandGridTs1"), ERDGPassFlags::NeverCull, [Q = S->Ts[1].GetReference()](FRHICommandListImmediate& Cmd) { Cmd.EndRenderQuery(Q); });
+			GraphBuilder.AddPass(RDG_EVENT_NAME("SandGridTs1"), ERDGPassFlags::NeverCull, [Q = (Wr >= 0 ? S->RbTs[Wr][1] : S->Ts[1]).GetReference()](FRHICommandListImmediate& Cmd) { Cmd.EndRenderQuery(Q); });
+			if (Wr >= 0) { AddEnqueueCopyPass(GraphBuilder, S->Rb[Wr].Get(), Tm, 4 * sizeof(float)); }
 			GraphBuilder.Execute();
 		}
-		RHICmdList.SubmitAndBlockUntilGPUIdle();
-		uint64 A = 0, Bt = 0;
-		if (RHIGetRenderQueryResult(S->Ts[0].GetReference(), A, true) && RHIGetRenderQueryResult(S->Ts[1].GetReference(), Bt, true)) { Ms = (float)(Bt - A) * 0.001f; }
+		if (Wr >= 0) { ++S->RbCount; }
 		FRDGBuilder::TickPoolElements();
 		RHICmdList.EndFrame();
 	});
-	FlushRenderingCommands();
-	GpuMs = Ms;
 }
 
 void FSandGridGpu::ResetBreakDiag()
@@ -560,6 +585,7 @@ void FSandGridGpu::DownloadTime(float* OutSimTime) const
 	FlushRenderingCommands();
 	if (OutSimTime) { *OutSimTime = T[2]; }
 	const_cast<FSandGridGpu*>(this)->LastAMax = T[3];
+	S->AMaxSeen.store(T[3], std::memory_order_relaxed);
 }
 
 void FSandGridGpu::Download(TArray<float>& OutW, TArray<float>& OutHU, TArray<float>& OutHV, float* OutSimTime) const
@@ -587,4 +613,5 @@ void FSandGridGpu::Download(TArray<float>& OutW, TArray<float>& OutHU, TArray<fl
 	for (int32 k = 0; k < N; ++k) { OutW[k] = U[k].X; OutHU[k] = U[k].Y; OutHV[k] = U[k].Z; }
 	if (OutSimTime) { *OutSimTime = T[2]; }
 	const_cast<FSandGridGpu*>(this)->LastAMax = T[3];
+	S->AMaxSeen.store(T[3], std::memory_order_relaxed);
 }

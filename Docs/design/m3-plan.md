@@ -122,6 +122,13 @@ B 안 측정 (m3-log #7): R2% Stockdon 의 30% — 경계가 쇄파대 안이라
 - 결과 (f32): setup 1.01 · S_IG 0.92 · R2% 0.90 — Stockdon 오차 안. **S_inc 0.63** 은 남음.
 - **남은 문제 (보류)**: 바깥 격자 소산 부족 → 안쪽 경계 입사 Hs/h 1.18 (문헌 기대 ~0.74, Raubenheimer 1996 회귀 계수 원문 미확인). 원인: MS92 덜 천수로 앞면이 충격파가 안 돼 TVD 수치 소산 몫이 없음, 정적 ν 만으로 부족. 다시 열 때 후보: (1) 하이브리드 전환 재시도 — FUNWAVE `masks.F` · `etauv_solver.F` 줄 대조 (FUNWAVE 기본, #20 · #21 2D 붕괴 원인부터) · (2) 완전비선형 (Wei 1995 / SGN) · (3) TKE 1 방정식 (Kazolea 2018, κ · σ 경우별).
 
+#### p1 최적화 — 동기 대기 제거 (사용자 결정 2026-11-03, m3-log #30 · #31)
+- 문제: 매 `Run` 이 `SubmitAndBlockUntilGPUIdle` + `FlushRenderingCommands` → CPU 가 격자마다 GPU 끝까지 대기 (~6 ms/프레임). 서브스텝 수의 최대 파속을 동기 `Download` 로만 받아, 게임 경로의 바깥 격자는 늘 최대 64 서브스텝 (읽지 않음).
+- 근거 (논문 아닌 엔진 API): RDG 제출 뒤 기다리지 않음 · `FRHIGPUBufferReadback` 링 (3 개) 에 시간 버퍼 (16 B) 를 매 Run 끝에 복사, 다음 Run 시작에 `IsReady()` 인 것만 읽음 · 타임스탬프 쿼리도 링, `RHIGetRenderQueryResult(…, bWait=false)`.
+- 영향: 서브스텝 수가 1~3 프레임 전 최대 파속으로 정해짐. 안정성은 그대로 (GPU 가 서브스텝마다 Δt 를 그 순간 CFL 로 자름). 파속이 갑자기 커지면 그 프레임 시뮬 시간이 조금 늦을 뿐 — 지금도 있는 동작.
+- 검증: `-puretime` 프레임 시간 · 기본 900 s 통계 (setup · S_inc · S_IG · R2% · 경계 Hs/h) 가 #28 f32 와 같은지.
+- 남김: 게임 `UpdateWaterMesh` 의 매 프레임 전체 `Download` (CPU 메시) — 렌더 경로를 GPU 로 옮길 때 (별도 단계).
+
 ## 하지 않는 것
 - 입자 ↔ 격자 결합 (파도 하중 · 장애물 · 파괴 환원) — M4. 참고 문헌은 D-M3-1 (Chentanez & Müller 2010).
 - `W` · 증발 · 표면 수분 — M5 (F · E 절). 지하수면 · 침투는 c6 에서 앞당김. 침투가 둔덕을 만드는 효과는 M5 (지형 결합).
