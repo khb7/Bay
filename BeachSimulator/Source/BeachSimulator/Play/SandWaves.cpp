@@ -519,7 +519,7 @@ int32 RunWaveMeasure(const FString& Params)
 			const float En = FMath::Lerp(Wo[Jo * NXo + Io], Wo[Jo * NXo + Io + 1], FoX);
 			Csv += FString::Printf(TEXT(",%.4f,%.4f"), En, Wo[Jo * NXo + IoB]);
 			if (T > 120.f) { EnS.Add(En); }   // 안쪽 경계에 실제로 들어오는 바깥 수위 (m3-log #25)
-			if (T > 120.f) { for (int32 i = 0; i < NXo; i += 2) { RowTsO.Add(Wo[Jo * NXo + i]); } }
+			if (T > 120.f) { for (int32 i = 0; i < NXo; ++i) { RowTsO.Add(Wo[Jo * NXo + i]); } }   // 모든 칸 (m3-log #27: 앞면 폭)
 			if (T > 120.f && Sc.GO.BreakMode >= 2)
 			{
 				// 바깥 격자 쇄파 진단 (D-M3-20): x 별 ν > 0 비율 · 평균 ν (모든 j)
@@ -527,7 +527,7 @@ int32 RunWaveMeasure(const FString& Params)
 				if (NuFrac.Num() != NXo) { NuFrac.Init(0.0, NXo); NuMean.Init(0.0, NXo); }
 				for (int32 j = 0; j < Sc.GO.NY; ++j) for (int32 i = 0; i < NXo; ++i) { const float v = NuO[j * NXo + i]; if (v > 0.f) { NuFrac[i] += 1.0; } NuMean[i] += v; }
 				NuN += Sc.GO.NY;
-				for (int32 i = 0; i < NXo; i += 2) { RowNuO.Add(NuO[Jo * NXo + i]); }   // _nurowo.bin: _rowo 와 같은 칸 ν (m3-log #24 고조파 · 점성 영역 진단)
+				for (int32 i = 0; i < NXo; ++i) { RowNuO.Add(NuO[Jo * NXo + i]); }   // _nurowo.bin: _rowo 와 같은 칸 ν (m3-log #24 고조파 · 점성 영역 진단)
 			}   // _rowo.bin: 바깥 격자 줄 (2 칸마다, D-M3-18 진단)
 		}
 		Csv += TEXT("\n");
@@ -540,12 +540,14 @@ int32 RunWaveMeasure(const FString& Params)
 		auto DumpDiag = [&](FSandGridGpu& Gd, const FSandGridGpuInit& Pi, const TCHAR* Suffix)
 		{
 			TArray<FVector2f> Dg; Gd.DownloadBreakDiag(Dg);
-			FString Df = TEXT("x,slope_mean,slope_max,etat_mean,etat_max\n");
+			FString Df = TEXT("x,on_mean,on_max,etat_mean,etat_max,bed\n");   // on: ν > 0 누적 시간 (s, 120 s 뒤) · bed: 가운데 줄 바닥 (m3-log #27)
 			for (int32 i = 0; i < Pi.NX; ++i)
 			{
 				double Sm = 0, Sx = 0, Em = 0, Ex = 0;
 				for (int32 j = 0; j < Pi.NY; ++j) { const FVector2f v = Dg[j * Pi.NX + i]; Sm += v.X; Em += v.Y; Sx = FMath::Max(Sx, (double)v.X); Ex = FMath::Max(Ex, (double)v.Y); }
-				Df += FString::Printf(TEXT("%.3f,%.4f,%.4f,%.4f,%.4f\n"), (i + 0.5f) * Pi.Dx, Sm / Pi.NY, Sx, Em / Pi.NY, Ex);
+				const int32 Jm = Pi.NY / 2, W1 = Pi.NX + 1;
+				const float Bd = 0.25f * (Pi.BCorner[Jm * W1 + i] + Pi.BCorner[Jm * W1 + i + 1] + Pi.BCorner[(Jm + 1) * W1 + i] + Pi.BCorner[(Jm + 1) * W1 + i + 1]);
+				Df += FString::Printf(TEXT("%.3f,%.4f,%.4f,%.4f,%.4f,%.4f\n"), (i + 0.5f) * Pi.Dx, Sm / Pi.NY, Sx, Em / Pi.NY, Ex, Bd);
 			}
 			FFileHelper::SaveStringToFile(Df, *Path.Replace(TEXT(".csv"), Suffix), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 		};
