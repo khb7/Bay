@@ -59,6 +59,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER(float, EddyDelta)
 	SHADER_PARAMETER(float, BreakSlope)
 	SHADER_PARAMETER(float, BreakTbrk)
+	SHADER_PARAMETER(uint32, BreakRoller)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float2>, BrkDiagRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, NuRW)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, NuRO)
@@ -117,6 +118,7 @@ GRID_SHADER(FSandGridDrainCS,  "DrainCS")
 GRID_SHADER(FSandGridUpdateCS, "UpdateCS")
 GRID_SHADER(FSandGridBreakCS,  "BreakCS")
 GRID_SHADER(FSandGridEddyCS,   "EddyCS")
+GRID_SHADER(FSandGridRollerCS, "RollerCS")
 GRID_SHADER(FSandGridToUCS,    "ToUCS")
 GRID_SHADER(FSandGridDispCS,   "DispCS")
 GRID_SHADER(FSandGridSolveCS,  "SolveCS")
@@ -329,7 +331,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 			B.BCorner = GraphBuilder.CreateSRV(BC);
 			B.bOpenEast = P.bOpenEast ? 1u : 0u; B.SeaLevel = P.SeaLevel; B.BoundaryDepth = P.BoundaryDepth; B.NumWaves = P.Waves.Num(); B.bPeriodicY = P.bPeriodicY ? 1u : 0u; B.IgGain = P.IgGain;
 			B.Waves = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Waves));
-			B.bDispersive = P.bDispersive ? 1u : 0u; B.BreakRatio = P.BreakRatio; B.BreakStop = P.BreakStop; B.BreakMode = P.BreakMode; B.EddyDelta = P.EddyDelta; B.BreakSlope = P.BreakSlope; B.BreakTbrk = P.BreakTbrk; B.DispTaper = (uint32)FMath::Max(0, P.DispTaper);
+			B.bDispersive = P.bDispersive ? 1u : 0u; B.BreakRatio = P.BreakRatio; B.BreakStop = P.BreakStop; B.BreakMode = P.BreakMode; B.EddyDelta = P.EddyDelta; B.BreakSlope = P.BreakSlope; B.BreakTbrk = P.BreakTbrk; B.BreakRoller = P.bBreakRoller ? 1u : 0u; B.DispTaper = (uint32)FMath::Max(0, P.DispTaper);
 			B.NumIg = S->NumIg;
 			B.bGround = P.bGround ? 1u : 0u; B.GwK = P.GwK; B.GwPsi = P.GwPsi; B.GwNe = P.GwNe; B.GwZaq = S->GwZaq;
 			FRDGBufferRef GwB = GraphBuilder.RegisterExternalBuffer(S->Gw), GwQB = GraphBuilder.RegisterExternalBuffer(S->GwQ);
@@ -368,6 +370,11 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 					X.NuRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->Nu)); X.BrkDiagRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->BrkDiag));
 					Swap(S->Brk, S->BrkB);   // 다음 판정은 이번 결과를 읽는다
 					AddGridPass<FSandGridBreakCS>(GraphBuilder, RDG_EVENT_NAME("SandGridBreak"), ShaderMap, X, GC);
+					if (P.bBreakRoller && P.BreakMode >= 2)
+					{
+						FSandGridParams Rl = B; Rl.URO = GraphBuilder.CreateSRV(U0); Rl.NuRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->Nu)); Rl.TimeRO = GraphBuilder.CreateSRV(Tm); Rl.BrkDiagRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->BrkDiag));
+						AddGridPass<FSandGridRollerCS>(GraphBuilder, RDG_EVENT_NAME("SandGridRoller"), ShaderMap, Rl, FIntVector(FMath::DivideAndRoundUp(P.NY, 64), 1, 1));
+					}
 					FSandGridParams Y = B; Y.URO = GraphBuilder.CreateSRV(U0); Y.DstRO = GraphBuilder.CreateSRV(Ds); Y.UVRW = GraphBuilder.CreateUAV(UV0);
 					AddGridPass<FSandGridToUCS>(GraphBuilder, RDG_EVENT_NAME("SandGridToU"), ShaderMap, Y, GC);
 					AddDisp(U0, 1);

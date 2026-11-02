@@ -90,6 +90,7 @@ float BreakStop;         // 쇄파 종료 ε (Tonelli & Petti 지속, papers D-M
 RWStructuredBuffer<float2> BrkRW;  // 칸별 (쇄파 상태 0/1, 지난 판정 때 수위 w) — 서브스텝 · 프레임을 넘어 유지 (이번 판정 쓰기)
 StructuredBuffer<float2> BrkRO;    // 지난 판정 (핑퐁 — 이웃 상태를 경쟁 없이 읽는다)
 float BreakSlope;
+uint  BreakRoller;       // 1: 쇄파 칸을 묶어 roller 길이로 넓힘 (Kazolea & Ricchiuto 2018 · Bacigaluppi 2019, papers D-M3-22)
 float BreakTbrk;         // 3 (FUNWAVE 나이): 쇄파 지속 시간 T_brk (s) — FUNWAVE 는 입사 주기
 RWStructuredBuffer<float2> BrkDiagRW;   // 진단: 칸별 (최대 |∇η|, 최대 η_t/√(gH)) 누적 (m3-log #23)        // tan φ_c (기울기 쇄파 조건, 0 이면 끔)
 float EddyDelta;         // Kennedy et al. (2000) δ_b (1.2) — ν = δ_b² (h+η) η_t (FUNWAVE-TVD 문서 식 (3), papers D-M3-19)
@@ -493,7 +494,7 @@ void BreakCS(uint3 Tid : SV_DispatchThreadID)
 		BrkRW[Idx(i, j)] = float2(Age, w);
 	}
 	NuRW[Idx(i, j)] = NuV;
-	if (h > HDry && H0s > HDry) { const float2 Dg = BrkDiagRW[Idx(i, j)]; BrkDiagRW[Idx(i, j)] = float2(Dg.x + (NuV > 0.f ? Dt : 0.f), max(Dg.y, Eps)); }   // 진단: x = ν > 0 누적 시간 (s, m3-log #24), y = 최대 ε
+	if (h > HDry && H0s > HDry) { const float2 Dg = BrkDiagRW[Idx(i, j)]; BrkDiagRW[Idx(i, j)] = float2(Dg.x + (NuV > 0.f && BreakRoller == 0u ? Dt : 0.f), max(Dg.y, Eps)); }   // 진단: x = ν > 0 누적 시간 (s, m3-log #24), y = 최대 ε
 	if (BreakMode >= 2u)
 	{
 		const float TpE = bOpenEast != 0u && DispTaper > 0u ? saturate((float)(NX - 1u - i) / (float)DispTaper) : 1.f;
@@ -756,6 +757,54 @@ void GwApplyCS(uint3 Tid : SV_DispatchThreadID)
 // Kennedy 와점성 확산 (papers D-M3-19 · m3-plan c9): ∂P/∂t = ∂x(ν ∂x P) + ∂y(ν ∂y P) (FUNWAVE-TVD 식 (1)(2), 교차 미분 없음).
 // 5 cm 칸에선 명시적 안정 한계 (Δt ≤ Δx²/4ν ~ 0.6 ms) 가 Δt 보다 작다 → 줄마다 암시적 (후진 오일러, Thomas). x 줄 → y 줄 (Lie 분리).
 // 면 ν = 두 칸 평균 (마른 칸은 ν = 0). 줄 끝은 유속 기울기 0.
+// Roller 영역 (papers D-M3-22): x 줄마다 ν > 0 칸을 이어진 묶음으로 → 묶음 안 최대 · 최소 수심 H_max · H_min,
+// Fr² = H_max(H_max + H_min)/(2H_min²) (Kazolea & Ricchiuto 2018). Fr < 1.3 (Fr² < 1.69) 이면 끔, 아니면
+// l_r = 2.9(η_max − η_min), 수치 roller l = 2.5·l_r, |2x − (x_max + x_min)| < l 인 젖은 칸에 ν = h·C2·√(gh) (Bacigaluppi 2019 §4.2).
+// x 줄만 (파가 거의 해안 수직) — 줄 하나에 스레드 하나
+#define ROLLER_MAX 32
+[numthreads(64, 1, 1)]
+void RollerCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint j = Tid.x;
+	if (j >= NY) { return; }
+	float Xa[ROLLER_MAX], Xb[ROLLER_MAX], Lr[ROLLER_MAX], Fz[ROLLER_MAX];
+	uint Nc = 0u;
+	uint i = 0u;
+	while (i < NX && Nc < ROLLER_MAX)
+	{
+		if (NuRW[Idx(i, j)] <= 0.f) { ++i; continue; }
+		float Hx = 0.f, Hn = 1e9f, Ex = -1e9f, En = 1e9f; uint Ix = i, In = i;
+		const uint a = i;
+		while (i < NX && NuRW[Idx(i, j)] > 0.f)
+		{
+			const float w = URO[Idx(i, j)].x, h = w - BCell(i, j);
+			Hx = max(Hx, h); Hn = min(Hn, h);
+			if (w > Ex) { Ex = w; Ix = i; }
+			if (w < En) { En = w; In = i; }
+			++i;
+		}
+		Hn = max(Hn, HDry);
+		Xa[Nc] = (float)Ix; Xb[Nc] = (float)In; Lr[Nc] = 2.5f * 2.9f * (Ex - En) / Dx;   // 칸 단위
+		Fz[Nc] = Hx * (Hx + Hn) / (2.f * Hn * Hn) >= 1.69f ? 1.f : 0.f;
+		if (Fz[Nc] == 0.f) { for (uint k = a; k < i; ++k) { NuRW[Idx(k, j)] = 0.f; } }
+		++Nc;
+	}
+	for (uint c = 0u; c < Nc; ++c)
+	{
+		if (Fz[c] == 0.f) { continue; }
+		const float S = Xa[c] + Xb[c], L = max(Lr[c], 1.f);
+		const int k0 = max((int)floor(0.5f * (S - L)), 0), k1 = min((int)ceil(0.5f * (S + L)), (int)NX - 1);
+		for (int k = k0; k <= k1; ++k)
+		{
+			if (abs(2.f * (float)k - S) >= L) { continue; }
+			const float h = URO[Idx((uint)k, j)].x - BCell((uint)k, j);
+			if (h > HDry && SeaLevel - BCell((uint)k, j) > HDry) { NuRW[Idx((uint)k, j)] = max(NuRW[Idx((uint)k, j)], h * BreakStop * sqrt(Gravity * h)); }
+		}
+	}
+	const float Dt = TimeRO[0];
+	for (uint k = 0u; k < NX; ++k) { if (NuRW[Idx(k, j)] > 0.f) { BrkDiagRW[Idx(k, j)].x += Dt; } }   // 진단: ν > 0 누적 시간 (roller 포함)
+}
+
 uint EddyNext(uint L, uint s) { return LineAxis == 0u ? Idx(s, L) : Idx(L, s); }
 float EddyFace(float A, float B) { return 0.5f * (A + B); }   // FUNWAVE 와 같이 칸 ν 평균 — "양쪽 다 > 0" 이면 1~2 칸 폭 앞면 띠에서 확산이 0 이 됐다 (m3-log #23)
 [numthreads(64, 1, 1)]
