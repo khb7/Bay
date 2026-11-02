@@ -2015,7 +2015,17 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
   - 와점성 (TKE): **수치 소산의 기여가 아주 작고 격자에 거의 둔감.** 비용은 더 들지만 "견고함 때문에 정당하다".
   - **판정 (두 방법 공통)**: (a) \|η_t\| ≥ γ√(gH), **γ ∈ [0.3, 0.65] — 쇄파 형태에 따라** · (b) **\|∇η\| ≥ tan φ_c, φ_c ∈ [15°, 30°]** (느리거나 멈춘 도수를 잡음, (a) 를 보완). 표시된 칸을 묶어 영역 → **roller 길이만큼 넓히거나**, Fr² = H_max(H_max+H_min)/(2H_min²) 로 끔. ν_t = C_ν √k ℓ_t, C_ν = 0.09^¼ ≈ 0.55, ℓ_t = κH (κ 경우마다), k 는 1 방정식 (생성 · 확산 · 소멸).
 - **우리 Kennedy 구현과 차이**: (1) 판정이 η_t 하나 · 칸 단위 — 기울기 조건 · 영역 넓힘 없음 · (2) γ 0.65 는 범위의 **위 끝** (가장 늦게 켜짐) · (3) ν 가 η_t > 0 인 앞면 칸에만 (TKE 는 수송 · 확산으로 퍼짐).
-- **판정**: 와점성 방향 자체는 문헌이 지지 (격자 둔감, 하이브리드보다 견고). 바깥 격자에서 약한 건 격자 탓이라기보다 **판정이 늦고 좁은 것** 이 후보 — 원문 근거 있는 보완: 기울기 조건 (φ_c) 추가 · γ 를 쇄파 형태 (우리 ξ₀ ≈ 1.0, plunging 쪽) 에 맞게 범위 안에서 · 영역 넓힘. γ · φ_c 를 쇄파 형태로 고르는 기준은 Kazolea et al. 2014 ([12]) · Roeber 계 ([37]) 원문 필요 (미확인). 더 나아가면 TKE 1 방정식 (Nwogu · Zhang 2014).
+- **판정 (D-M3-20)**: 와점성 방향 자체는 문헌이 지지 (격자 둔감, 하이브리드보다 견고). 바깥 격자에서 약한 건 격자 탓이라기보다 **판정이 늦고 좁은 것** 이 후보 — 원문 근거 있는 보완: 기울기 조건 (φ_c) 추가 · γ 를 쇄파 형태 (우리 ξ₀ ≈ 1.0, plunging 쪽) 에 맞게 범위 안에서 · 영역 넓힘. γ · φ_c 를 쇄파 형태로 고르는 기준은 Kazolea et al. 2014 ([12]) · Roeber 계 ([37]) 원문 필요 (미확인). 더 나아가면 TKE 1 방정식 (Nwogu · Zhang 2014).
+
+### D-M3-21. ★ MS92 는 덜 천수된다 — 쇄파 시작이 늦는 원인 (m3-log #27 뒤, 2026-11-03)
+- **FUNWAVE-TVD 원본 소스 (GitHub master ✓)**: `mod_global.F` `Cbrk1=0.65,Cbrk2=0.35`, `VISCOSITY_BREAKING = .FALSE.`, `SWE_ETA_DEP=0.7`; `init.F` `T_brk=20.0`. 기본 쇄파는 하이브리드 (|η|/h > 0.7), 와점성은 선택. `breaker.F` 주석: 정적 ν 면 "we should re-calibrate Cbrk2". (m3-log #26 에서 0.35 · 20 s 시험 — 개선 없음)
+- **Bacigaluppi, Ricchiuto & Bonneton (2019, arXiv:1902.03021 ✓ 원문 ar5iv)** — **우리와 같은 Madsen & Sørensen 1992 Boussinesq** 에 쇄파 판정 셋을 비교.
+  - "the Boussinesq model (1) under-shoals compared both to fully non-linear models and to other weakly non-linear models" — "This is a known phenomenon". 파형이 "shorter and less steep".
+  - 운동학 판정 (Fr_s = 1) 은 "a late onset of breaking… a consequence of the undershoaling properties of the Madsen and Sørensen model, that provide waves with reduced steepness" → 늦게 부서져 파가 더 커짐. 보정으로 Fr_s 0.75 를 씀 ("to compensate for the shoaling behaviour").
+  - 하이브리드 판정 (Kazolea 2014 [23]): |∂_x η| ≥ tan φ (φ ∈ [14°, 33°]) **또는** η_t/√(g|h|) > γ (0.35 ≤ γ ≤ 0.65), "[23] 에서 γ = 0.6 이 기본". 막대 위 주기파 (어려운 경우) 는 [23] 을 따라 **γ = 0.3 · φ 30°**. 이 판정이 막대 경우에서 "the only one capturing the correct magnitude and phase". 지역 판정 (η/h > 0.8) 은 경사 고립파에선 가장 일찍 켜지나 막대에선 "essentially fails".
+- 다른 근거 (원문 미확인 — 2 차 · 기억): Wei, Kirby, Grilli & Subramanya 1995 (JFM 294:71) 완전비선형이 쇄파 근처 파고 · 위상속도 더 정확 · Bonneton et al. 2011 (JCP 230:1479) "fully nonlinear models are required" (마지막 천수 단계) · Filippini et al. 2016 (CE) 향상 Boussinesq 의 비선형 천수 성질 · Kennedy 2000 문턱 0.65 는 완전비선형 FUNWAVE 로 정함.
+- **우리 진단 (#27) 과 맞음**: 앞면 10 칸 넘게 해상되는데 Hs/h 0.73 에서 기울기 24°, η_t/√(gh) 최대 0.62 → Kennedy 0.65 · Kazolea 30° 둘 다 늦게 켜짐.
+- **판정 — 문헌 근거 있는 선택지**: (1) MS92 를 쓰는 Bacigaluppi 처럼 하이브리드 판정 범위 안에서 낮은 쪽 (γ 0.3 · φ 30°, Kazolea 2014 를 따른 값) — 다만 γ 를 경우마다 고르는 기준은 원문 미확인 · (2) 완전비선형 식 (Wei 1995 · SGN) 으로 바꾸면 0.65 를 보정 없이 — 큰 공사 · (3) 지역 η/h 판정 OR 보조 (Tonelli-Petti · Shi) — 막대 · 얕은 곳에서 실패 보고.
 
 ### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
 - Epic 의 얕은 물은 있다: `Engine/Plugins/FX/NiagaraFluids/Content/Modules/Grid2D/ShallowWater/` (`Grid2D_SW_Advect · UpdateDepthGrid · FilterOvershoot · ExtrapolateVelocities · MovingWindow_*` …) · `Plugins/Experimental/WaterAdvanced` 의 `ShallowWaterRiverActor.cpp:339` 가 `Grid2D_SW_River` 를 쓴다. 바닥은 **SceneCapture 깊이로 찍어 읽기만** (`:107`) — 단방향 시각 효과. 침식 · 모래 · 수분 채널 없음. 모듈 이름으로 보아 이류 + 넘침 거르기 계열 (uasset 그래프라 알고리즘 세부는 미확인).
