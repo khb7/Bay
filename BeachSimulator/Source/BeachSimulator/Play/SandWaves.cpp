@@ -135,6 +135,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	if (FParse::Param(Cmd, TEXT("breakdedt"))) { G.BreakMode = 1; G.BreakRatio = 0.6f; G.BreakStop = 0.3f; }
 	FParse::Value(Cmd, TEXT("breakratio="), G.BreakRatio);
 	FParse::Value(Cmd, TEXT("eddydelta="), G.EddyDelta);
+	FParse::Value(Cmd, TEXT("breaktbrk="), G.BreakTbrk);   // T_brk (s). FUNWAVE-TVD init.F 기본 20 s
 	FParse::Value(Cmd, TEXT("breakstop="), G.BreakStop);   // 쇄파 지속 종료 ε (0.3, D-M3-17 · m3-plan c8). 0 이면 이전 순간 판정
 	G.bOpenEast = true; G.SeaLevel = 0.f; G.BoundaryDepth = H0;
 	// T3c c6 지하수 · 침투 (m3-plan c6): -groundoff 로 끔 · -gwk= (5e-4 m/s)

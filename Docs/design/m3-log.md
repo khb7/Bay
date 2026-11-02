@@ -374,3 +374,9 @@
 - f26nu (900 s, FFT): 안쪽 경계 (h 0.58 m) **입사파 대역 Hm0 0.74 m (Hs/h 1.28)**, IG 0.46 m. 바깥 경계 (h 3.29 m) 입사파 1.03 m. f28bnd (240 s, 새 로그 줄): 0.72 m (Hs/h 1.25) — 일치.
 - 문헌 기대값: Raubenheimer, Guza & Elgar 1996 — γs = Hs/h 는 β/kh 에 비례 (초록 확인). 이 경계 β/kh ≈ 0.52 (T 12 s, h 0.58 m). 회귀식 계수는 원문 미확인 (기억으로 γs ≈ 0.19 + 1.05·β/kh → 0.74, Hs ≈ 0.43 m). 실측 0.72~0.74 m 는 그 약 1.7 배.
 - 결론: 안쪽 SS 과대는 **바깥 격자가 h 0.58 m 까지 거의 소산 못 한 파가 그대로 들어오는 것** — 안쪽 NSWE 문제 아님.
+
+## 실행 #26 — FUNWAVE-TVD 실제 기본 계수 (2026-11-02)
+- 원문 소스 확인 (GitHub master): `mod_global.F` `Cbrk1=0.65,Cbrk2=0.35`, `VISCOSITY_BREAKING = .FALSE.`, `SWE_ETA_DEP=0.7`; `init.F` `T_brk=20.0`. 우리 기본 (Cbrk2 0.15 = Kennedy 2000 η_t^(F), T_brk 12 s) 은 FUNWAVE 기본이 아님. FUNWAVE 의 진짜 기본 쇄파는 하이브리드 전환 (|η|/h > 0.7 → NSWE, TVD 소산), 와점성은 선택. `breaker.F` 주석: 정적 ν 면 "we should re-calibrate Cbrk2".
+- 새 옵션 `-breaktbrk=`.
+- `f29fwdef` (900 s, `-breakstop=0.35 -breaktbrk=20`): setup **1.14** · S_inc 0.64 · S_IG 0.75 · R2% 0.90. 안쪽 경계 입사파 Hm0 **0.76 m (Hs/h 1.31)** — 나아지지 않음. ν 켜진 시간 비율 최대 4.2 % (x 35 m), 구간 x 20~65 m 그대로 (지속 문턱이 엄격해져 오히려 줄어듦).
+- 결론: ν 크기 · 지속 계수는 한계 요인이 아님. **쇄파가 켜지는 위치 (h < ~1.2 m) 가 너무 얕다** — 경계 h 0.58 m 에서 Hs/h 1.3 이면 이미 훨씬 바깥에서 부서졌어야 함.
