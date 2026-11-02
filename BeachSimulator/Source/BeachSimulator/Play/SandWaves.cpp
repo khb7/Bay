@@ -214,8 +214,8 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	Out.Tp = SwellFrac >= 0.5 ? SwellTp : WindTp;
 	const FString NestInfo = Out.bNest ? FString::Printf(TEXT(" · nesting 바깥 %d×%d (칸 %.0fcm, %.0fm, 경계 수심 %.2fm, Hs %.2fm, 묶인 IG %s)"),
 		Out.GO.NX, Out.GO.NY, Out.GO.Dx * 100, Out.GO.NX * Out.GO.Dx, Out.GO.BoundaryDepth, DeepH0, Out.GO.bBoundIg ? TEXT("켬") : TEXT("끔")) : FString();
-	Out.Info = FString::Printf(TEXT("T3 파도 — 격자 %d×%d (칸 %.0fcm, %.1f×%.1fm) · 해변 1:%.0f · 경계 수심 %.2fm · 경계 Hs %.2fm · 먼바다 H0 %.2fm · 너울 %.0f%% Tp %.0fs · 풍파 Tp %.0fs · Manning %.3f · IG 계수 %.2f (이득 %.2f)"),
-		NX, NY, Dx * 100, NX * Dx, NY * Dx, 1.0 / Slope, H0, Hs, DeepH0, SwellFrac * 100, SwellTp, WindTp, Manning, IgCoef, G.IgGain) + NestInfo
+	Out.Info = FString::Printf(TEXT("T3 파도 — 격자 %d×%d (칸 %.0fcm, %.1f×%.1fm) · 해변 1:%.0f · 경계 수심 %.2fm · 경계 Hs %.2fm%s · 먼바다 H0 %.2fm · 너울 %.0f%% Tp %.0fs · 풍파 Tp %.0fs · Manning %.3f · IG 계수 %.2f (이득 %.2f)"),
+		NX, NY, Dx * 100, NX * Dx, NY * Dx, 1.0 / Slope, H0, Hs, Out.bNest ? TEXT(" (포화 가정값 — nesting 이면 안 씀)") : TEXT(""), DeepH0, SwellFrac * 100, SwellTp, WindTp, Manning, IgCoef, G.IgGain) + NestInfo
 		+ (G.bGround ? FString::Printf(TEXT(" · 지하수 K %.1e m/s"), G.GwK) : FString());
 }
 
@@ -446,6 +446,7 @@ int32 RunWaveMeasure(const FString& Params)
 	TArray<double> ProfW, ProfW2, ProfN, ProfG; ProfW.Init(0.0, NX); ProfW2.Init(0.0, NX); ProfN.Init(0.0, NX); ProfG.Init(0.0, NX); double ProfT = 0.0, ProfGn = 0.0;
 	TArray<FVector2f> Gw;
 	TArray<float> NuO; TArray<double> NuFrac, NuMean; double NuN = 0.0; TArray<float> RowNuO;
+	TArray<float> EnS;
 	TArray<float> RowTs, RowTsO, WoPrev, HUoPrev, HVoPrev; bool bNanSaved = false;   // _row.bin: 0.1 s 마다 [x = 4i·Dx (i 0..), 가운데 줄 j = NY/2] 수위
 	TArray<float> W, HU, HV, Wo, HUo, HVo;
 	// 물가 판정 수심 (기본 2cm) — 침투가 없어 되돌림 뒤 얇은 막이 남는다 (m3-log #7). Stockdon 은 비디오로 본 물가
@@ -516,6 +517,7 @@ int32 RunWaveMeasure(const FString& Params)
 			}
 			const float En = FMath::Lerp(Wo[Jo * NXo + Io], Wo[Jo * NXo + Io + 1], FoX);
 			Csv += FString::Printf(TEXT(",%.4f,%.4f"), En, Wo[Jo * NXo + IoB]);
+			if (T > 120.f) { EnS.Add(En); }   // 안쪽 경계에 실제로 들어오는 바깥 수위 (m3-log #25)
 			if (T > 120.f) { for (int32 i = 0; i < NXo; i += 2) { RowTsO.Add(Wo[Jo * NXo + i]); } }
 			if (T > 120.f && Sc.GO.BreakMode >= 2)
 			{
@@ -562,6 +564,17 @@ int32 RunWaveMeasure(const FString& Params)
 		for (int32 i = 0; i < NX; ++i) { Pf += FString::Printf(TEXT("%.3f,%.4f,%.4f,%.4f,%.4f,%.4f\n"), (i + 0.5f) * Sc.Dx, Sc.BCellV[Jb * NX + i], ProfN[i] > 0 ? ProfW[i] / ProfN[i] : 0.0, ProfT > 0 ? ProfN[i] / ProfT : 0.0, ProfGn > 0 ? ProfG[i] / ProfGn : 0.0,
 			ProfN[i] > 1 ? FMath::Sqrt(FMath::Max(0.0, ProfW2[i] / ProfN[i] - FMath::Square(ProfW[i] / ProfN[i]))) : 0.0); }
 		FFileHelper::SaveStringToFile(Pf, *Path.Replace(TEXT(".csv"), TEXT("_prof.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	}
+	if (EnS.Num() > 64)
+	{
+		// 안쪽 경계 실측 Hm0 (m3-log #25): 전체 · 입사파 대역 (> 0.05 Hz) — 로그의 "경계 Hs" 는 nesting 때 안 쓰는 포화 가정값
+		const int32 Nn = EnS.Num(); double Mn = 0; for (const float v : EnS) { Mn += v; } Mn /= Nn;
+		double Vt = 0; for (const float v : EnS) { Vt += FMath::Square(v - Mn); } Vt /= Nn;
+		const int32 Wn = FMath::RoundToInt(20.0 / 0.1);   // 20 s 이동 평균 = IG (< 0.05 Hz) 근사
+		TArray<double> Cs; Cs.SetNumZeroed(Nn + 1); for (int32 k = 0; k < Nn; ++k) { Cs[k + 1] = Cs[k] + EnS[k]; }
+		double Vs = 0; int32 Ns = 0;
+		for (int32 k = Wn / 2; k < Nn - Wn / 2; ++k) { const double Lo = (Cs[k + Wn / 2] - Cs[k - Wn / 2]) / Wn; Vs += FMath::Square(EnS[k] - Lo); ++Ns; }
+		UE_LOG(LogSandWaves, Display, TEXT("안쪽 경계 실측 (수심 %.2f m): Hm0 전체 %.3f m · 입사파 (> 0.05 Hz) %.3f m · Hs/h %.2f"), Sc.H0, 4.0 * FMath::Sqrt(Vt), 4.0 * FMath::Sqrt(Vs / FMath::Max(Ns, 1)), 4.0 * FMath::Sqrt(Vs / FMath::Max(Ns, 1)) / Sc.H0);
 	}
 	UE_LOG(LogSandWaves, Display, TEXT("T3b 측정 끝 → %s (벽시계 %.0fs) · swash 마찰 경계 x %.2f m"), *Path, FPlatformTime::Seconds() - T0, FricX);
 	return 0;
