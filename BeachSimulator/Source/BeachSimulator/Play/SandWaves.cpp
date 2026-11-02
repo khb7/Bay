@@ -456,6 +456,22 @@ int32 RunWaveMeasure(const FString& Params)
 	float T = 0.f, NextRec = 0.f, FricX = Sc.G.FricX;
 	FSwashZone Zone;
 	const double T0 = FPlatformTime::Seconds();
+	if (FParse::Param(*Params, TEXT("puretime")))
+	{
+		// 순수 계산 시간 (최적화 기준): 진단 · 상태 다운로드 없이 프레임 (1/60 s) 만. 시간 · 최대 파속 (16 B) 만 읽어 서브스텝 수를 갱신
+		// (Advance 는 지난 최대 파속으로 서브스텝 수를 정하는데, 읽지 않으면 늘 최대 64 가 된다)
+		const int32 Nf = FMath::RoundToInt(Secs * 60.f);
+		double GpuO = 0, GpuI = 0, SubO = 0, SubI = 0;
+		for (int32 f = 0; f < Nf; ++f)
+		{
+			if (Sc.bNest) { Outer.Advance(1.f / 60.f, 64); Outer.DownloadTime(nullptr); GpuO += Outer.LastGpuMs(); SubO += Outer.GetLastSubsteps(); }
+			Grid.Advance(1.f / 60.f, 64); Grid.DownloadTime(&T); GpuI += Grid.LastGpuMs(); SubI += Grid.GetLastSubsteps();
+		}
+		const double Wall = FPlatformTime::Seconds() - T0;
+		UE_LOG(LogSandWaves, Display, TEXT("순수 계산: 시뮬 %.1f s · 벽시계 %.1f s · 실시간 배수 %.2f · 프레임당 벽시계 %.2f ms · GPU 안쪽 %.2f ms (서브스텝 %.1f) · 바깥 %.2f ms (서브스텝 %.1f)"),
+			T, Wall, T / Wall, 1000.0 * Wall / Nf, GpuI / Nf, SubI / Nf, GpuO / Nf, SubO / Nf);
+		return 0;
+	}
 	while (T < Secs)
 	{
 		if (Sc.bNest) { Outer.Advance(1.f / 60.f, 64); }

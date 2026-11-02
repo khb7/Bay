@@ -542,6 +542,26 @@ void FSandGridGpu::DownloadGround(TArray<FVector2f>& OutGw, float* OutZaq) const
 	if (OutZaq) { *OutZaq = State->GwZaq; }
 }
 
+void FSandGridGpu::DownloadTime(float* OutSimTime) const
+{
+	float T[4] = {};
+	FState* S = State;
+	ENQUEUE_RENDER_COMMAND(SandGridDownloadTime)([S, &T](FRHICommandListImmediate& RHICmdList)
+	{
+		{
+			FRDGBuilder GraphBuilder(RHICmdList, RDG_EVENT_NAME("SandGridDownloadTime"));
+			AddEnqueueCopyPass(GraphBuilder, &S->DlTime, GraphBuilder.RegisterExternalBuffer(S->Time), 4 * sizeof(float));
+			GraphBuilder.Execute();
+		}
+		RHICmdList.SubmitAndBlockUntilGPUIdle();
+		if (const void* Src = S->DlTime.Lock(4 * sizeof(float))) { FMemory::Memcpy(T, Src, 4 * sizeof(float)); }
+		S->DlTime.Unlock();
+	});
+	FlushRenderingCommands();
+	if (OutSimTime) { *OutSimTime = T[2]; }
+	const_cast<FSandGridGpu*>(this)->LastAMax = T[3];
+}
+
 void FSandGridGpu::Download(TArray<float>& OutW, TArray<float>& OutHU, TArray<float>& OutHV, float* OutSimTime) const
 {
 	const int32 N = Params.NX * Params.NY;
