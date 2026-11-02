@@ -438,3 +438,18 @@
 
 - 바깥 격자 (837×51 = 43 k 칸, 분산 켬) 가 서브스텝당 1.33 ms — 안쪽 (172 k 칸, 비분산) 0.36 ms 의 3.7 배, 칸당 ~15 배. 의심: 분산 · 와점성 줄 풀이 (Thomas) 가 줄마다 한 스레드 — x 줄은 51 스레드가 837 칸을 직렬로.
 - 동기 오버헤드: 13.2 − (2.5 + 5.3) ≈ 5.4 ms/프레임 (Run · DownloadTime 각 격자마다 GPU 대기).
+
+## 실행 #31 — Unreal Insights 패스별 GPU 시간 (2026-11-03)
+- 방법: `-puretime -trace=cpu,gpu,frame -statnamedevents -dpcvars=r.RDG.Events=3,r.GPUStatsEnabled=1` (30 s) → `UnrealInsights.exe -OpenTraceFile=… -ExecOnAnalysisCompleteCmd="TimingInsights.ExportTimingEvents … -threads=GPU* -columns=*" -NoUI -AutoQuit`. CSV 에는 패스 이름이 "RDGEvent" 로만 나와 (이름은 메타데이터) 코드의 패스 순서로 대응 (scratch c4 f29.ps1 · p5_ev.csv).
+- 바깥 격자 프레임 5.07 ms = 서브스텝 4 × ~1.22 ms, 서브스텝당 패스 24 개. 큰 것 (µs, 서브스텝당):
+
+| 패스 (순서 대응) | µs | 비율 | 의심 |
+|---|---|---|---|
+| EddyCS x 줄 | ~330 | 27 % | 줄마다 스레드 1 개 → 51 스레드가 837 칸 직렬 Thomas |
+| SolveCS y 줄 × 2 | ~156 × 2 | 26 % | y 줄 길이 51 에 그룹 LINE_MAX 스레드 (837 그룹) — 대부분 놂 |
+| FaceXCS × 2 | ~127 × 2 | 21 % | FaceY (~7) 의 18 배. 바다 경계 열의 입사파 합 (IncidentWave: 32 성분 + 묶인 IG 496 쌍, 칸마다 cos · sin) 이 긴 꼬리로 의심 |
+| Update × 2 | ~76 × 2 | 12 % | |
+| Disp · SolveX · 나머지 | ~150 | 14 % | |
+
+- 안쪽 격자 프레임 2.25 ms = 서브스텝 6 × ~0.37 ms. FaceX (~93) 가 서브스텝의 ~25 % — 여기도 FaceY (~20) 의 4~5 배.
+- CPU: 프레임 13.2 ms − GPU 7.3 ms ≈ 6 ms 가 동기 대기 (격자마다 Run · DownloadTime 의 SubmitAndBlockUntilGPUIdle).
