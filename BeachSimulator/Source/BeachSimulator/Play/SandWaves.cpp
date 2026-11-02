@@ -125,7 +125,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	// 쇄파 판정 (papers D-M3-18): 기본 Tonelli-Petti |η|/h 0.8. -breakdedt: SWASH HFA (∂η/∂t)/√(gh) > 0.6 · 지속 0.3 — 바깥 격자가 40~60 s 에 무너짐 (m3-log #20), 실험용
 	// 기본: Kennedy et al. (2000) 와점성 (전환 없음, 900 s 안정) — 시작 η_t > 0.65√(gH), 종료 0.15√(gH), δ_b 1.2 (D-M3-19 · m3-plan c9 · m3-log #21).
 	// -breakeps: Tonelli-Petti 전환 (정지 수심 ε 0.8 — 바깥 격자 ~375 s 붕괴, 실험용) · -breakdedt: SWASH 식 (붕괴, 실험용)
-	G.BreakMode = 3; G.BreakRatio = 0.65f; G.BreakStop = 0.15f; G.BreakTbrk = (float)SwellTp;   // 기본 = FUNWAVE-TVD breaker.F 기본 (m3-log #23). -breakkennedy: 이전 칸별 Kennedy ν = δ²Hη_t
+	G.BreakMode = 3; G.BreakRatio = 0.3f; G.BreakStop = 0.15f; G.BreakTbrk = (float)SwellTp;   // 시작 γ 0.3: MS92 는 덜 천수돼 앞면이 덜 섬 — 같은 MS92 의 Bacigaluppi 2019 · Kazolea 2018 막대 경우 값 (papers D-M3-21, m3-log #28). 기본 = FUNWAVE-TVD breaker.F 기본 (m3-log #23). -breakkennedy: 이전 칸별 Kennedy ν = δ²Hη_t
 	if (FParse::Param(Cmd, TEXT("breakkennedy"))) { G.BreakMode = 2; }
 	// -breakkr: Kazolea & Ricchiuto (2018) 판정 — γ 0.6 + 기울기 φ_c 30° (경사면 · reef 시험 값, D-M3-20). 종료는 Kennedy 0.15
 	if (FParse::Param(Cmd, TEXT("breakkr"))) { G.BreakRatio = 0.6f; G.BreakSlope = FMath::Tan(FMath::DegreesToRadians(30.f)); }
