@@ -204,6 +204,42 @@ float3 IncidentWave(float t, float y, float h0)
 	return E;
 }
 
+// 바다 쪽 입사파 캐시 (m3-plan p2): FaceX 전에 경계 줄 j 마다 한 번 — 그룹 하나 (64 스레드) 가 성분 합을 나눠 더한다.
+// 전엔 유령 칸 Fetch 마다 (면당 최대 6 번) 528 성분 cos · sin — 경계 열 스레드만 길어 패스를 붙잡았다 (m3-log #31)
+RWStructuredBuffer<float4> IncRW;
+StructuredBuffer<float4>   IncRO;
+uint bIncCached;
+groupshared float4 IncS[64];
+[numthreads(64, 1, 1)]
+void IncCS(uint3 Gid : SV_GroupID, uint3 Gt : SV_GroupThreadID)
+{
+	const uint j = Gid.x, l = Gt.x;
+	const float t = TimeRO[2], y = (j + 0.5f) * Dy, h0 = max(BoundaryDepth, 1e-3f);
+	float3 E = 0; float Re = 0.f, Im = 0.f, A2m = 0.f;
+	for (uint n = l; n < NumWaves + NumIg; n += 64u)
+	{
+		const float4 W = Waves[2 * n], F = Waves[2 * n + 1];
+		const float Ph = W.z + W.w * y - W.y * t;
+		const float e = W.x * cos(Ph);
+		E += float3(e, e * F.x, e * F.y);
+		if (n < NumWaves) { Re += W.x * cos(Ph); Im += W.x * sin(Ph); A2m += W.x * W.x; }
+	}
+	IncS[l] = float4(E, A2m);
+	GroupMemoryBarrierWithGroupSync();
+	for (uint s = 32u; s > 0u; s >>= 1u) { if (l < s) { IncS[l] += IncS[l + s]; } GroupMemoryBarrierWithGroupSync(); }
+	const float4 Es = IncS[0];
+	GroupMemoryBarrierWithGroupSync();
+	IncS[l] = float4(Re, Im, 0.f, 0.f);   // Re · Im 은 제곱 전에 합해야 하므로 따로 줄인다
+	GroupMemoryBarrierWithGroupSync();
+	for (uint s = 32u; s > 0u; s >>= 1u) { if (l < s) { IncS[l] += IncS[l + s]; } GroupMemoryBarrierWithGroupSync(); }
+	if (l == 0u)
+	{
+		const float Rs = IncS[0].x, Is = IncS[0].y;
+		const float Eig = IgGain * (Rs * Rs + Is * Is - Es.w);
+		IncRW[j] = float4(Es.xyz + float3(Eig, Eig * sqrt(Gravity / h0), 0.f), 0.f);
+	}
+}
+
 float3 NestWave(float t, float y)
 {
 	const float yo = y / NestDy - 0.5f, j0f = floor(yo), f = yo - j0f;
@@ -227,7 +263,7 @@ void Fetch(uint Axis, int c, uint m, out float w, out float q, out float r, out 
 		float vIn;
 		const float h0 = max(BoundaryDepth, 1e-3f);
 		const int jj = Axis == 0 ? (int)m : j;
-		const float3 Inc = bNest != 0u ? NestWave(TimeRO[2], (jj + 0.5f) * Dy) : IncidentWave(TimeRO[2], (jj + 0.5f) * Dy, h0);
+		const float3 Inc = bNest != 0u ? NestWave(TimeRO[2], (jj + 0.5f) * Dy) : (bIncCached != 0u ? IncRO[WJ(jj)].xyz : IncidentWave(TimeRO[2], (jj + 0.5f) * Dy, h0));
 		const float Eta = Inc.x;
 		const float Rp = uIn + 2.f * sqrt(Gravity * hIn);
 		const float Rm = -Inc.y - 2.f * sqrt(Gravity * max(0.f, h0 + Eta));   // 들어오는 불변량 — 법선 성분만 (van Dongeren & Svendsen 1997)

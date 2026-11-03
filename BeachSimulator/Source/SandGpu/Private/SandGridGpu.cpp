@@ -42,6 +42,9 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float2>, LevelRW)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float2>, LevelRO)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, FaceXRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, IncRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, IncRO)
+	SHADER_PARAMETER(uint32, bIncCached)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, FaceYRW)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, FaceXRO)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, FaceYRO)
@@ -113,6 +116,7 @@ END_SHADER_PARAMETER_STRUCT()
 
 GRID_SHADER(FSandGridLevelCS,  "LevelCS")
 GRID_SHADER(FSandGridFaceXCS,  "FaceXCS")
+GRID_SHADER(FSandGridIncCS,    "IncCS")
 GRID_SHADER(FSandGridFaceYCS,  "FaceYCS")
 GRID_SHADER(FSandGridDtCS,     "DtCS")
 GRID_SHADER(FSandGridDrainCS,  "DrainCS")
@@ -134,7 +138,7 @@ struct FSandGridGpu::FState
 	TRefCountPtr<FRDGPooledBuffer> Dst, UV0, UV1, FsPrev, FsT, Disp;   // T3c 분산
 	TRefCountPtr<FRDGPooledBuffer> Nu, EdC, EdD, BrkDiag;                      // Kennedy 와점성 (D-M3-19)
 	TRefCountPtr<FRDGPooledBuffer> Brk, BrkB;                         // 쇄파 상태 (지속, D-M3-17/18) — 핑퐁
-	TRefCountPtr<FRDGPooledBuffer> NestA, NestB;                      // T3c c4 nesting 스냅샷 (앞 · 뒤)
+	TRefCountPtr<FRDGPooledBuffer> NestA, NestB, Inc;   // Inc: 바다 쪽 입사파 캐시 (줄마다, m3-plan p2)                      // T3c c4 nesting 스냅샷 (앞 · 뒤)
 	TRefCountPtr<FRDGPooledBuffer> Gw, GwQ;                           // T3c c6 지하수 (η_gw, δ) · Darcy 순유입
 	float GwZaq = 0.f;
 	FRHIGPUBufferReadback DlGw{ TEXT("SandGrid.DlGw") };
@@ -270,6 +274,7 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 		S->Waves = MakeBuffer(GraphBuilder, sizeof(FVector4f), Wv.Num(), TEXT("SandGrid.Waves"), Wv.GetData());
 		S->NestA = MakeBuffer(GraphBuilder, sizeof(FVector4f), NestNY, TEXT("SandGrid.NestA"));
 		S->NestB = MakeBuffer(GraphBuilder, sizeof(FVector4f), NestNY, TEXT("SandGrid.NestB"));
+		S->Inc = MakeBuffer(GraphBuilder, sizeof(FVector4f), NY, TEXT("SandGrid.Inc"));
 		S->Gw = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.Gw"), Gw.GetData());
 		S->GwQ = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.GwQ"));
 		GraphBuilder.Execute();
@@ -307,7 +312,10 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 	ENQUEUE_RENDER_COMMAND(SandGridRun)([S, P, OS, OP, bFixed, DtOrFrame, NumSub](FRHICommandListImmediate& RHICmdList)
 	{
 		const FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
-		// 지난 Run 들의 readback 중 준비된 것 (오래된 순) 만 읽는다 — GPU 를 기다리지 않음 (m3-plan p1)
+		// 지난 Run 들의 readback 중 준비된 것 (오래된 순) 만 읽는다 — GPU 를 기다리지 않음 (m3-plan p1).
+		// 다만 링이 차면 (GPU 가 NumRb 프레임 뒤처짐) 가장 오래된 것이 끝날 때까지 기다린다 — 프레임 속도 제한. 안 그러면 CPU 가
+		// 수백 프레임 앞서 나가 임시 버퍼가 쌓여 GPU 메모리가 바닥난다 (p8, E_OUTOFMEMORY)
+		if (S->RbCount == FState::NumRb) { RHICmdList.SubmitCommandsHint(); while (!S->Rb[S->RbHead]->IsReady()) { FPlatformProcess::SleepNoStats(0.f); } }
 		while (S->RbCount > 0 && S->Rb[S->RbHead]->IsReady())
 		{
 			const int32 h = S->RbHead;
@@ -359,6 +367,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 			B.BCorner = GraphBuilder.CreateSRV(BC);
 			B.bOpenEast = P.bOpenEast ? 1u : 0u; B.SeaLevel = P.SeaLevel; B.BoundaryDepth = P.BoundaryDepth; B.NumWaves = P.Waves.Num(); B.bPeriodicY = P.bPeriodicY ? 1u : 0u; B.IgGain = P.IgGain;
 			B.Waves = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Waves));
+			B.IncRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Inc)); B.bIncCached = 0u;   // 캐시는 FaceX 에서만 켬 (그 단계 시각으로 채운 직후)
 			B.bDispersive = P.bDispersive ? 1u : 0u; B.BreakRatio = P.BreakRatio; B.BreakStop = P.BreakStop; B.BreakMode = P.BreakMode; B.EddyDelta = P.EddyDelta; B.BreakSlope = P.BreakSlope; B.BreakTbrk = P.BreakTbrk; B.BreakRoller = P.bBreakRoller ? 1u : 0u; B.DispTaper = (uint32)FMath::Max(0, P.DispTaper);
 			B.NumIg = S->NumIg;
 			B.bGround = P.bGround ? 1u : 0u; B.GwK = P.GwK; B.GwPsi = P.GwPsi; B.GwNe = P.GwNe; B.GwZaq = S->GwZaq;
@@ -423,6 +432,13 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 					F.AMaxRW = GraphBuilder.CreateUAV(AM);
 					F.TimeRO = GraphBuilder.CreateSRV(Tm);   // 유령 칸 입사파 시각
 					F.FaceXRW = GraphBuilder.CreateUAV(FX);
+					if (P.bOpenEast && !OS)
+					{
+						// 입사파 캐시 — 이 단계의 시각으로 줄마다 한 번 (m3-plan p2)
+						FSandGridParams Ic = B; Ic.IncRO = nullptr; Ic.TimeRO = GraphBuilder.CreateSRV(Tm); Ic.IncRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->Inc));
+						AddGridPass<FSandGridIncCS>(GraphBuilder, RDG_EVENT_NAME("SandGridInc"), ShaderMap, Ic, FIntVector(P.NY, 1, 1));
+						F.bIncCached = 1u;
+					}
 					AddGridPass<FSandGridFaceXCS>(GraphBuilder, RDG_EVENT_NAME("SandGridFaceX"), ShaderMap, F, GX);
 					FSandGridParams FYp = F; FYp.FaceXRW = nullptr; FYp.FaceYRW = GraphBuilder.CreateUAV(FY);
 					AddGridPass<FSandGridFaceYCS>(GraphBuilder, RDG_EVENT_NAME("SandGridFaceY"), ShaderMap, FYp, GY);
