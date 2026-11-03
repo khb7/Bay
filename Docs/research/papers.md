@@ -2027,6 +2027,9 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
 - **우리 진단 (#27) 과 맞음**: 앞면 10 칸 넘게 해상되는데 Hs/h 0.73 에서 기울기 24°, η_t/√(gh) 최대 0.62 → Kennedy 0.65 · Kazolea 30° 둘 다 늦게 켜짐.
 - **판정 — 문헌 근거 있는 선택지**: (1) MS92 를 쓰는 Bacigaluppi 처럼 하이브리드 판정 범위 안에서 낮은 쪽 (γ 0.3 · φ 30°, Kazolea 2014 를 따른 값) — 다만 γ 를 경우마다 고르는 기준은 원문 미확인 · (2) 완전비선형 식 (Wei 1995 · SGN) 으로 바꾸면 0.65 를 보정 없이 — 큰 공사 · (3) 지역 η/h 판정 OR 보조 (Tonelli-Petti · Shi) — 막대 · 얕은 곳에서 실패 보고.
 
+- **경계 기대값 근거 재확인 (2026-11-03) — Raubenheimer, Guza & Elgar 1996 (JGR 101(C11), doi 10.1029/96JC02433 △ 초록)**: 원문 못 읽음 (WHOI · Wiley 403, VLIZ 비공개). 초록: γs (sea-swell Hs, 0.05–0.18 Hz / 평균 수심) 는 β 가 클수록 · kh 가 작을수록 커지고 β/kh 와 상관, 개별 예측 오차 < 20 %. **센서 수심 0.80–2.10 m (물가에서 50–120 m)**. Zhang et al. 2021 (arXiv 2104.00208 ✓) 도 계수 없이 "Hs/h 는 kh 가 작을수록 커진다 · Raubenheimer 는 포화 쇄파대" 로만 인용.
+  - **판정**: 계수 0.19 · 1.05 는 기억값 그대로 미확인. 더 중요한 건 **우리 경계 h 0.58 m 는 자료 범위 (≥ 0.80 m) 밖, β/kh 0.52 도 외삽** — 추세상 더 얕으면 γs 는 더 크다. 그래서 "기대 0.74 → 실측 1.18 은 1.6 배 과대" 는 근거가 약하다. 경계 Hs/h 는 판정 기준에서 빼고, 쇄파 소산 판단은 자료 범위 안 지표 (Stockdon setup · swash) 로 한다.
+
 ### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
 - Epic 의 얕은 물은 있다: `Engine/Plugins/FX/NiagaraFluids/Content/Modules/Grid2D/ShallowWater/` (`Grid2D_SW_Advect · UpdateDepthGrid · FilterOvershoot · ExtrapolateVelocities · MovingWindow_*` …) · `Plugins/Experimental/WaterAdvanced` 의 `ShallowWaterRiverActor.cpp:339` 가 `Grid2D_SW_River` 를 쓴다. 바닥은 **SceneCapture 깊이로 찍어 읽기만** (`:107`) — 단방향 시각 효과. 침식 · 모래 · 수분 채널 없음. 모듈 이름으로 보아 이류 + 넘침 거르기 계열 (uasset 그래프라 알고리즘 세부는 미확인).
 - Niagara GPU 틱은 정해진 세 시점에만 돈다: `ENiagaraGpuComputeTickStage { PreInitViews, PostInitViews, PostOpaqueRender }` (`Niagara/Public/NiagaraCommon.h:1924-1926`). 우리 입자 시뮬 RDG 패스 사이에 끼울 수 없다 → M4 의 **같은 프레임 양방향 결합**(격자 → 입자 하중 · 수분, 입자 → 장애물 · 파괴 환원)이 막히거나 1 프레임 늦는다. 외부 RDG 버퍼를 읽히려면 사용자 정의 DI 를 C++ 로 써야 한다.
