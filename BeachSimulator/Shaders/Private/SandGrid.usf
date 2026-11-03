@@ -96,8 +96,6 @@ RWStructuredBuffer<float2> BrkDiagRW;   // 진단: 칸별 (최대 |∇η|, 최�
 float EddyDelta;         // Kennedy et al. (2000) δ_b (1.2) — ν = δ_b² (h+η) η_t (FUNWAVE-TVD 문서 식 (3), papers D-M3-19)
 RWStructuredBuffer<float>  NuRW;   // 칸별 와점성 ν (m²/s) — BreakCS 가 쓰고 EddyCS 가 읽는다
 StructuredBuffer<float>    NuRO;
-RWStructuredBuffer<float>  EdCRW;  // 삼중대각 Thomas 앞 소거 c' (줄마다)
-RWStructuredBuffer<float2> EdDRW;  // d' (P, Q 두 우변)
 uint  BreakMode;         // 0: ε = |η − SeaLevel|/h (Tonelli & Petti) · 1: ε = (∂η/∂t)/√(gh) (SWASH HFA Smit 2013 · Kazolea 2014, papers D-M3-18)
 uint  DispMode;          // DispCS — 1: 서브스텝 처음 (F*_t 외삽 · F* 저장도) · 2: 2 단계 입력
 uint  LineAxis;          // SolveCS — 0: 행 (P ← U) · 1: 열 (Q ← V)
@@ -613,8 +611,11 @@ void DispCS(uint3 Tid : SV_DispatchThreadID)
 }
 
 // 삼중대각 — 행 · 열 하나를 그룹 하나가 병렬 순환 축소 (PCR, Zhang et al. 2010) 로. 줄 길이 ≤ 1024, 벽 경계 (바깥 칸 = −안쪽)
+// LINE_MAX = 그룹 크기 (C++ 이 줄 길이 ≤ 64 면 64 로 컴파일한 변형을 고른다 — 51 칸 y 줄에 1024 스레드 · 10 단계는 낭비, m3-plan p3)
+#ifndef LINE_MAX
 #define LINE_MAX 1024
-groupshared float SA[LINE_MAX], SB[LINE_MAX], SC[LINE_MAX], SD[LINE_MAX], SE[LINE_MAX];   // SE = Sherman–Morrison 두 번째 우변
+#endif
+groupshared float SA[LINE_MAX], SB[LINE_MAX], SC[LINE_MAX], SD[LINE_MAX], SE[LINE_MAX];   // SE = Sherman–Morrison 두 번째 우변 (EddyCS 는 우변 y 성분)
 
 [numthreads(LINE_MAX, 1, 1)]
 void SolveCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
@@ -648,7 +649,7 @@ void SolveCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
 	GroupMemoryBarrierWithGroupSync();
 	SA[t] = a; SB[t] = b; SC[t] = c; SD[t] = r; SE[t] = e;
 	GroupMemoryBarrierWithGroupSync();
-	for (uint s = 1; s < LINE_MAX; s <<= 1)
+	for (uint s = 1; s < N; s <<= 1)   // s ≥ N 단계는 단위 행끼리만 — 그대로
 	{
 		float am = 0.f, bm = 1.f, cm = 0.f, dm = 0.f, em = 0.f, ap = 0.f, bp = 1.f, cp = 0.f, dp = 0.f, ep = 0.f;
 		if (t >= s) { am = SA[t - s]; bm = SB[t - s]; cm = SC[t - s]; dm = SD[t - s]; em = SE[t - s]; }
@@ -843,29 +844,39 @@ void RollerCS(uint3 Tid : SV_DispatchThreadID)
 
 uint EddyNext(uint L, uint s) { return LineAxis == 0u ? Idx(s, L) : Idx(L, s); }
 float EddyFace(float A, float B) { return 0.5f * (A + B); }   // FUNWAVE 와 같이 칸 ν 평균 — "양쪽 다 > 0" 이면 1~2 칸 폭 앞면 띠에서 확산이 0 이 됐다 (m3-log #23)
-[numthreads(64, 1, 1)]
-void EddyCS(uint3 Tid : SV_DispatchThreadID)
+// 줄 하나 = 그룹 하나, PCR (SolveCS 와 같은 방식, 우변 두 개 = hu, hv). 예전엔 스레드 하나가 줄 전체를 Thomas 로 (m3-plan p3)
+[numthreads(LINE_MAX, 1, 1)]
+void EddyCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
 {
-	const uint L = Tid.x, Len = LineAxis == 0u ? NX : NY, Cnt = LineAxis == 0u ? NY : NX;
-	if (L >= Cnt) { return; }
-	const float D = LineAxis == 0u ? Dx : Dy, r = TimeRO[0] / (D * D);
-	float Cp = 0.f; float2 Dp = 0.f;
-	for (uint s = 0u; s < Len; ++s)
+	const uint L = Gid.x, t = Gtid.x, Len = LineAxis == 0u ? NX : NY;
+	const float D = LineAxis == 0u ? Dx : Dy, rr = TimeRO[0] / (D * D);
+	float a = 0.f, b = 1.f, c = 0.f; float2 r = 0.f;
+	if (t < Len)
 	{
-		const uint k = EddyNext(L, s);
+		const uint k = EddyNext(L, t);
 		const float Nc = NuRO[k];
-		const float Nl = s > 0u ? EddyFace(Nc, NuRO[EddyNext(L, s - 1u)]) : 0.f;
-		const float Nr = s + 1u < Len ? EddyFace(Nc, NuRO[EddyNext(L, s + 1u)]) : 0.f;
-		const float a = -r * Nl, c = -r * Nr, b = 1.f + r * (Nl + Nr);
-		const float m = b - a * Cp;
-		Cp = c / m; Dp = (UOutRW[k].yz - a * Dp) / m;
-		EdCRW[k] = Cp; EdDRW[k] = Dp;
+		const float Nl = t > 0u ? EddyFace(Nc, NuRO[EddyNext(L, t - 1u)]) : 0.f;
+		const float Nr = t + 1u < Len ? EddyFace(Nc, NuRO[EddyNext(L, t + 1u)]) : 0.f;
+		a = -rr * Nl; c = -rr * Nr; b = 1.f + rr * (Nl + Nr);
+		r = UOutRW[k].yz;
 	}
-	float2 X = 0.f;
-	for (int t = (int)Len - 1; t >= 0; --t)
+	SA[t] = a; SB[t] = b; SC[t] = c; SD[t] = r.x; SE[t] = r.y;
+	GroupMemoryBarrierWithGroupSync();
+	for (uint s = 1; s < Len; s <<= 1)
 	{
-		const uint k = EddyNext(L, (uint)t);
-		X = EdDRW[k] - EdCRW[k] * X;
-		float4 U = UOutRW[k]; U.yz = X; UOutRW[k] = U;
+		float am = 0.f, bm = 1.f, cm = 0.f, ap = 0.f, bp = 1.f, cp = 0.f; float2 dm = 0.f, dp = 0.f;
+		if (t >= s) { am = SA[t - s]; bm = SB[t - s]; cm = SC[t - s]; dm = float2(SD[t - s], SE[t - s]); }
+		if (t + s < LINE_MAX) { ap = SA[t + s]; bp = SB[t + s]; cp = SC[t + s]; dp = float2(SD[t + s], SE[t + s]); }
+		const float k1 = a / bm, k2 = c / bp;
+		const float nb = b - cm * k1 - ap * k2;
+		r = r - dm * k1 - dp * k2; a = -am * k1; c = -cp * k2; b = nb;
+		GroupMemoryBarrierWithGroupSync();
+		SA[t] = a; SB[t] = b; SC[t] = c; SD[t] = r.x; SE[t] = r.y;
+		GroupMemoryBarrierWithGroupSync();
+	}
+	if (t < Len)
+	{
+		const uint k = EddyNext(L, t);
+		float4 U = UOutRW[k]; U.yz = r / b; UOutRW[k] = U;
 	}
 }
