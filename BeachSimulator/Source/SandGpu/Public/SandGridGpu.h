@@ -38,6 +38,13 @@ struct FSandGridGpuInit
 	float GwK = 5e-4f;              // 투수 계수 m/s (중사, papers D-M3-12)
 	float GwPsi = 0.05f;            // 습윤 전선 흡인 m (Rawls 1983 모래)
 	float GwNe = 0.3f;              // 유효 공극률
+	// T4a 모래 (m3-plan T4, papers D-M3-23): MPM 소류사 + Exner (꼭짓점 바닥) + 사태. 서브스텝 끝 약결합
+	bool  bMorph = false;
+	float SedD50 = 2.5e-4f;         // m
+	float SedS = 2.65f;             // 상대 밀도 (석영)
+	float SedPor = 0.4f;            // 공극률 (XBeach por)
+	float Morfac = 1.f;             // 지형 과장 배수 (XBeach morfac)
+	float AvalDry = 1.f, AvalWet = 0.3f;   // 사태 임계 기울기 (XBeach dryslp · wetslp)
 	TArray<float> GwInit;           // 처음 지하수면 NX·NY (비면 min(B, SeaLevel)) — 시험용
 	TArray<float> BCorner;          // (NX+1)·(NY+1)
 	TArray<float> W, HU, HV;        // NX·NY
@@ -60,6 +67,7 @@ public:
 	/** 지하수 (η_gw, δ) 동기 내려받기 · 대수층 바닥 */
 	void DownloadGround(TArray<FVector2f>& OutGw, float* OutZaq = nullptr) const;
 	void DownloadNu(TArray<float>& OutNu) const;
+	void DownloadBed(TArray<float>& OutBCorner) const;   // 꼭짓점 바닥 (NX+1)·(NY+1), 동기
 	void DownloadBreakDiag(TArray<FVector2f>& Out) const;
 	void ResetBreakDiag();   // 칸별 (최대 |∇η|, 최대 η_t/√(gH)) — 시작부터 누적 (진단)   // 쇄파 와점성 ν (진단, D-M3-20)
 	/** 마지막 Step 의 GPU 시간 (타임스탬프, ms) */

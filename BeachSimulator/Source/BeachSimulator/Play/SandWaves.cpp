@@ -142,6 +142,10 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	// T3c c6 지하수 · 침투 (m3-plan c6): -groundoff 로 끔 · -gwk= (5e-4 m/s)
 	G.bGround = !FParse::Param(Cmd, TEXT("groundoff"));   // 기본 켬 (m3-log #14)
 	FParse::Value(Cmd, TEXT("gwk="), G.GwK);
+	// T4a 모래 (m3-plan T4): -morph 로 켬 · -morfac= (1) · -sedd= (D50 m, 2.5e-4)
+	G.bMorph = FParse::Param(Cmd, TEXT("morph"));
+	FParse::Value(Cmd, TEXT("morfac="), G.Morfac);
+	FParse::Value(Cmd, TEXT("sedd="), G.SedD50);
 	double MeanDeg = 10.0, SwellSpread = 15.0, WindSpread = 40.0;
 	FParse::Value(Cmd, TEXT("wavedir="), MeanDeg);
 	FParse::Value(Cmd, TEXT("swellspread="), SwellSpread);
@@ -429,6 +433,8 @@ int32 RunWaveMeasure(const FString& Params)
 	if (Sc.bNest) { Outer.Init(Sc.GO); Sc.G.NestOuter = &Outer; }
 	Grid.Init(Sc.G);
 	float Secs = 1500.f; FParse::Value(*Params, TEXT("wavesecs="), Secs);
+	TArray<float> Bed0;
+	if (Sc.G.bMorph) { Grid.DownloadBed(Bed0); }
 	FString Tag = TEXT("run"); FParse::Value(*Params, TEXT("wavetag="), Tag);
 	const FString Path = FPaths::ProjectSavedDir() / TEXT("MeshRuns") / FString::Printf(TEXT("waves_%s.csv"), *Tag);
 	const int32 NX = Sc.NX, NY = Sc.NY;
@@ -480,6 +486,12 @@ int32 RunWaveMeasure(const FString& Params)
 		Grid.Download(W, HU, HV, &T);   // 동기 — 측정용
 		if (T + 1e-4f < NextRec) { continue; }
 		NextRec += 0.1f;
+		if (Sc.G.bMorph && FMath::FloorToInt(T) != FMath::FloorToInt(T - 0.1f))
+		{
+			// T4a: 바닥이 움직이면 물가 판정 · 처오름도 지금 바닥으로 (1 s 마다 내려받기)
+			TArray<float> Bc; Grid.DownloadBed(Bc);
+			for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i < NX; ++i) { const int32 c = j * (NX + 1) + i; Sc.BCellV[j * NX + i] = 0.25f * (Bc[c] + Bc[c + 1] + Bc[c + NX + 1] + Bc[c + NX + 2]); }
+		}
 		if (T > 120.f && T - 0.1f <= 120.f) { Grid.ResetBreakDiag(); if (Sc.bNest) { Outer.ResetBreakDiag(); } }   // 판정량 진단은 시작 충격 뒤부터
 		if (T > 120.f)
 		{
@@ -596,6 +608,25 @@ int32 RunWaveMeasure(const FString& Params)
 		double Vs = 0; int32 Ns = 0;
 		for (int32 k = Wn / 2; k < Nn - Wn / 2; ++k) { const double Lo = (Cs[k + Wn / 2] - Cs[k - Wn / 2]) / Wn; Vs += FMath::Square(EnS[k] - Lo); ++Ns; }
 		UE_LOG(LogSandWaves, Display, TEXT("안쪽 경계 실측 (수심 %.2f m): Hm0 전체 %.3f m · 입사파 (> 0.05 Hz) %.3f m · Hs/h %.2f"), Sc.H0, 4.0 * FMath::Sqrt(Vt), 4.0 * FMath::Sqrt(Vs / FMath::Max(Ns, 1)), 4.0 * FMath::Sqrt(Vs / FMath::Max(Ns, 1)) / Sc.H0);
+	}
+	if (Sc.G.bMorph)
+	{
+		// T4a: 모래 질량 (주기 y 라 꼭짓점 줄 NY 는 줄 0 과 같음 — 뺀다) · 단면 평균 Δb
+		TArray<float> Bed1; Grid.DownloadBed(Bed1);
+		double S0 = 0, S1 = 0, Abs = 0;
+		FString Bf = TEXT("x,b0,b1,db_mean,db_min,db_max\n");
+		for (int32 i = 0; i <= NX; ++i)
+		{
+			double M0 = 0, M1 = 0, Mn = 1e9, Mx = -1e9;
+			for (int32 j = 0; j < NY; ++j)
+			{
+				const int32 c = j * (NX + 1) + i; const double d = Bed1[c] - Bed0[c];
+				S0 += Bed0[c]; S1 += Bed1[c]; Abs += FMath::Abs(d); M0 += Bed0[c]; M1 += Bed1[c]; Mn = FMath::Min(Mn, d); Mx = FMath::Max(Mx, d);
+			}
+			Bf += FString::Printf(TEXT("%.3f,%.5f,%.5f,%.6f,%.6f,%.6f\n"), i * Sc.Dx, M0 / NY, M1 / NY, (M1 - M0) / NY, Mn, Mx);
+		}
+		FFileHelper::SaveStringToFile(Bf, *Path.Replace(TEXT(".csv"), TEXT("_bed.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		UE_LOG(LogSandWaves, Display, TEXT("T4 모래: Σb 변화 %.3e m·칸 (|Δb| 합 %.3e, 비 %.2e) · 평균 |Δb| %.2f mm"), S1 - S0, Abs, Abs > 0 ? (S1 - S0) / Abs : 0.0, 1000.0 * Abs / ((NX + 1) * NY));
 	}
 	UE_LOG(LogSandWaves, Display, TEXT("T3b 측정 끝 → %s (벽시계 %.0fs) · swash 마찰 경계 x %.2f m"), *Path, FPlatformTime::Seconds() - T0, FricX);
 	return 0;

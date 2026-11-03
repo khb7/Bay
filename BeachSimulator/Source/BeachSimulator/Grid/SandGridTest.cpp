@@ -602,6 +602,32 @@ namespace
 		}
 	}
 
+	void GpuMorph()
+	{
+		// T4a ③ 사태 (m3-plan T4): 기울기 2 의 삼각 둔덕 → 마름 1.0 · 젖음 0.3 까지 무너지고 Σb 보존
+		for (const bool bWet : { false, true })
+		{
+			const int32 NX = 80, NY = 4; const double Dx = 0.05, Xc = 2.0;
+			auto Bof = [&](double x) { return FMath::Max(0.0, 0.4 - 2.0 * FMath::Abs(x - Xc)); };
+			FSandGridGpuInit In = GroundGrid(NX, NY, Dx, Bof);
+			In.bGround = false; In.bMorph = true; In.bPeriodicY = true;
+			if (bWet) { for (int32 k = 0; k < NX * NY; ++k) { In.W[k] = 0.6f; } }   // 고인 물 (흐름 거의 0 → 소류사 0, 사태만)
+			FSandGridGpu G; G.Init(In);
+			TArray<float> B0; G.DownloadBed(B0);
+			G.StepFixed(2e-3f, 2000);
+			TArray<float> B1; G.DownloadBed(B1);
+			double S0 = 0, S1 = 0, Smax = 0;
+			for (int32 j = 0; j < NY; ++j)
+			for (int32 i = 0; i <= NX; ++i)
+			{
+				const int32 c = j * (NX + 1) + i; S0 += B0[c]; S1 += B1[c];
+				if (i < NX) { Smax = FMath::Max(Smax, FMath::Abs((double)B1[c + 1] - B1[c]) / Dx); }
+			}
+			UE_LOG(LogSandGrid, Display, TEXT("T4 ③ 사태 (%s, 처음 기울기 2): 최대 기울기 %.3f (기준 ≤ %.2f + 2%%) · 꼭대기 %.3f → %.3f m · Σb 상대 변화 %.2e (기준 < 1e-3)"),
+				bWet ? TEXT("젖음") : TEXT("마름"), Smax, bWet ? In.AvalWet : In.AvalDry, B0[NX / 2 + 0], B1[NX / 2], (S1 - S0) / FMath::Max(S0, 1e-9));
+		}
+	}
+
 	void GpuCost(int32 Size, bool bDisp = false)
 	{
 		FSandGridCpu C; Apply(C);   // 지형 · 초기값만 (CPU 로 풀지 않는다)
@@ -622,6 +648,7 @@ int32 RunSandGridGpuTest(const FString& Params)
 	GOpt = FOpt();
 	FParse::Value(*Params, TEXT("gridmanning="), GOpt.N);
 	if (FParse::Param(*Params, TEXT("gridground"))) { GpuGround(); return 0; }
+	if (FParse::Param(*Params, TEXT("gridmorph"))) { GpuMorph(); return 0; }
 	if (FParse::Param(*Params, TEXT("gridbous")))
 	{
 		CompareDynamic(true);

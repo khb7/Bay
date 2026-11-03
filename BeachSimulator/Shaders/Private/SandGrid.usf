@@ -882,3 +882,124 @@ void EddyCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
 		float4 U = UOutRW[k]; U.yz = r / b; UOutRW[k] = U;
 	}
 }
+
+// ---------------------------------------------------------------------------------------------
+// T4a 모래 (m3-plan T4, papers D-M3-23): 소류사 MPM + Exner (바닥 = 꼭짓점) + 사태. 서브스텝 끝, 약결합 (Postacchini 2014).
+// SedQCS (칸 q) → SedBedCS (꼭짓점 Δb = Exner + 사태) → SedApplyCS (꼭짓점 b += Δb) · SedCellCS (칸 w += 평균 Δb — 물 깊이 유지, BSort 다시)
+uint  bMorph;
+float SedThc;            // θc (Soulsby–Whitehouse 1997, CPU 가 D 로 계산)
+float SedS;              // 모래 상대 밀도 s
+float SedD;              // D50 (m)
+float SedPor;            // 공극률 p
+float Morfac;            // 지형 과장 배수 (XBeach morfac, 기본 1)
+float AvalDry;           // 사태 임계 기울기 — 마름 1.0 · 젖음 0.3 (XBeach dryslp · wetslp)
+float AvalWet;
+RWStructuredBuffer<float2> SedQRW;  // 칸 소류사 q (m²/s)
+StructuredBuffer<float2>   SedQRO;
+RWStructuredBuffer<float>  DBRW;    // 꼭짓점 Δb
+StructuredBuffer<float>    DBRO;
+RWStructuredBuffer<float>  BCornerRW;
+StructuredBuffer<float>    B0RO;     // 처음 바닥 (고정)
+RWStructuredBuffer<float>  BDelRW;   // 누적 Δb — b ~ 0.5 m 에 서브스텝 Δb (~1e-7) 를 바로 더하면 반 ulp 아래가 사라져 질량이 샌다 (m3-log #36)
+RWStructuredBuffer<float>  BSortRW;
+
+[numthreads(8, 8, 1)]
+void SedQCS(uint3 Tid : SV_DispatchThreadID)
+{
+	// θ = c_f|u|²/((s−1)gD), q = 8(θ − θc)^1.5 √((s−1)gD³) · u/|u| (MPM, Postacchini 2014)
+	const uint i = Tid.x, j = Tid.y;
+	if (i >= NX || j >= NY) { return; }
+	const float4 U = URO[Idx(i, j)];
+	const float h = U.x - BCell(i, j);
+	float2 Q = 0.f;
+	if (h > HDry)
+	{
+		const float2 V = U.yz / h;
+		const float Sp = length(V);
+		const float Rg = (SedS - 1.f) * Gravity * SedD;
+		const float Th = CfAt(i, h) * Sp * Sp / Rg;
+		if (Th > SedThc && Sp > 0.f) { Q = 8.f * pow(Th - SedThc, 1.5f) * sqrt(Rg * SedD * SedD) * V / Sp; }
+	}
+	SedQRW[Idx(i, j)] = Q;
+}
+
+float2 SedQAt(int i, int j)
+{
+	// 영역 밖 칸 = 0 (무유량). y 주기면 감싼다
+	if (i < 0 || i >= (int)NX) { return 0.f; }
+	if (j < 0 || j >= (int)NY) { if (bPeriodicY == 0u) { return 0.f; } j = WJ(j); }
+	return SedQRO[Idx((uint)i, (uint)j)];
+}
+bool SedWet(int i, int j)
+{
+	if (i < 0 || i >= (int)NX) { return false; }
+	if (j < 0 || j >= (int)NY) { if (bPeriodicY == 0u) { return false; } j = WJ(j); }
+	return URO[Idx((uint)i, (uint)j)].x - BCell((uint)i, (uint)j) > HDry;
+}
+float SedBc(int ci, int cj)
+{
+	if (bPeriodicY != 0u) { cj = ((cj % (int)NY) + (int)NY) % (int)NY; }
+	return Bc((uint)ci, (uint)cj);
+}
+// 사태: 꼭짓점 a → 이웃 n 으로 넘기는 양 (+ 면 a 가 잃음). 양쪽이 같은 입력으로 같은 값을 계산 → 반대 부호로 더해져 보존.
+// 넘친 높이 (|Δb| − m_cr·Δ) 의 ¼ (한 꼭짓점이 네 이웃에 동시에 주므로 과보정 방지)
+float AvalOut(float Ba, float Bn, float D, bool bWet)
+{
+	const float Ex = abs(Ba - Bn) - (bWet ? AvalWet : AvalDry) * D;
+	return Ex > 0.f ? 0.25f * Ex * sign(Ba - Bn) : 0.f;
+}
+
+[numthreads(8, 8, 1)]
+void SedBedCS(uint3 Tid : SV_DispatchThreadID)
+{
+	// 꼭짓점 (ci, cj) 쌍대 칸: x 면 플럭스 = 둘레 두 칸 평균. (1−p)Δb = −Δt·morfac·∇·q (망원 합 → Σb 보존)
+	const int ci = (int)Tid.x, cj = (int)Tid.y;
+	if (ci > (int)NX || cj > (int)NY) { return; }
+	const float Dt = TimeRO[0];
+	const float Fe = 0.5f * (SedQAt(ci, cj - 1).x + SedQAt(ci, cj).x), Fw = 0.5f * (SedQAt(ci - 1, cj - 1).x + SedQAt(ci - 1, cj).x);
+	const float Fn = 0.5f * (SedQAt(ci - 1, cj).y + SedQAt(ci, cj).y), Fs = 0.5f * (SedQAt(ci - 1, cj - 1).y + SedQAt(ci, cj - 1).y);
+	float dB = -Dt * Morfac / (1.f - SedPor) * ((Fe - Fw) / Dx + (Fn - Fs) / Dy);
+	// 사태 — 이웃 꼭짓점 넷. 젖음 = 그 변에 붙은 칸 중 하나라도 젖음
+	const float Ba = SedBc(ci, cj);
+	if (ci + 1 <= (int)NX) { dB -= AvalOut(Ba, SedBc(ci + 1, cj), Dx, SedWet(ci, cj - 1) || SedWet(ci, cj)); }
+	if (ci - 1 >= 0)       { dB -= AvalOut(Ba, SedBc(ci - 1, cj), Dx, SedWet(ci - 1, cj - 1) || SedWet(ci - 1, cj)); }
+	if (cj + 1 <= (int)NY || bPeriodicY != 0u) { dB -= AvalOut(Ba, SedBc(ci, cj + 1), Dy, SedWet(ci - 1, cj) || SedWet(ci, cj)); }
+	if (cj - 1 >= 0 || bPeriodicY != 0u)       { dB -= AvalOut(Ba, SedBc(ci, cj - 1), Dy, SedWet(ci - 1, cj - 1) || SedWet(ci, cj - 1)); }
+	DBRW[cj * (NX + 1) + ci] = dB;
+}
+
+[numthreads(8, 8, 1)]
+void SedApplyCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint ci = Tid.x, cj = Tid.y;
+	if (ci > NX || cj > NY) { return; }
+	const uint c = cj * (NX + 1) + ci;
+	const float Dl = BDelRW[c] + DBRO[c];
+	BDelRW[c] = Dl;
+	BCornerRW[c] = B0RO[c] + Dl;
+}
+
+[numthreads(8, 8, 1)]
+void SedCellCS(uint3 Tid : SV_DispatchThreadID)
+{
+	// 칸 w 를 평균 Δb 만큼 (물 깊이 h̄ 그대로 — 물 보존). 바닥이 바뀐 칸만 BSort 다시 (LevelCS 와 같은 64 표본, 삽입 정렬)
+	const uint i = Tid.x, j = Tid.y;
+	if (i >= NX || j >= NY) { return; }
+	const float d00 = DBRO[j * (NX + 1) + i], d10 = DBRO[j * (NX + 1) + i + 1], d01 = DBRO[(j + 1) * (NX + 1) + i], d11 = DBRO[(j + 1) * (NX + 1) + i + 1];
+	if (d00 == 0.f && d10 == 0.f && d01 == 0.f && d11 == 0.f) { return; }
+	const uint k = Idx(i, j);
+	float4 U = UOutRW[k];
+	U.x += 0.25f * (d00 + d10 + d01 + d11);
+	UOutRW[k] = U;
+	if (bWetDry == 0u) { return; }
+	const float b00 = BCornerRW[j * (NX + 1) + i], b10 = BCornerRW[j * (NX + 1) + i + 1], b01 = BCornerRW[(j + 1) * (NX + 1) + i], b11 = BCornerRW[(j + 1) * (NX + 1) + i + 1];
+	const uint k0 = k * 64u;
+	for (uint n = 0; n < 64u; ++n)
+	{
+		const float u = ((n & 7u) + 0.5f) / 8.f, v = ((n >> 3) + 0.5f) / 8.f;
+		const float z = (1 - u) * (1 - v) * b00 + u * (1 - v) * b10 + (1 - u) * v * b01 + u * v * b11;
+		uint m = n;
+		while (m > 0u && BSortRW[k0 + m - 1u] > z) { BSortRW[k0 + m] = BSortRW[k0 + m - 1u]; --m; }
+		BSortRW[k0 + m] = z;
+	}
+}
