@@ -2030,6 +2030,19 @@ backwash가 실어 내려가 아래쪽에 쌓음 / uprush가 실어 올라가 �
 - **경계 기대값 근거 재확인 (2026-11-03) — Raubenheimer, Guza & Elgar 1996 (JGR 101(C11), doi 10.1029/96JC02433 △ 초록)**: 원문 못 읽음 (WHOI · Wiley 403, VLIZ 비공개). 초록: γs (sea-swell Hs, 0.05–0.18 Hz / 평균 수심) 는 β 가 클수록 · kh 가 작을수록 커지고 β/kh 와 상관, 개별 예측 오차 < 20 %. **센서 수심 0.80–2.10 m (물가에서 50–120 m)**. Zhang et al. 2021 (arXiv 2104.00208 ✓) 도 계수 없이 "Hs/h 는 kh 가 작을수록 커진다 · Raubenheimer 는 포화 쇄파대" 로만 인용.
   - **판정**: 계수 0.19 · 1.05 는 기억값 그대로 미확인. 더 중요한 건 **우리 경계 h 0.58 m 는 자료 범위 (≥ 0.80 m) 밖, β/kh 0.52 도 외삽** — 추세상 더 얕으면 γs 는 더 크다. 그래서 "기대 0.74 → 실측 1.18 은 1.6 배 과대" 는 근거가 약하다. 경계 Hs/h 는 판정 기준에서 빼고, 쇄파 소산 판단은 자료 범위 안 지표 (Stockdon setup · swash) 로 한다.
 
+### D-M3-23. ★ T4 모래 — 소류사 식 · 계수 (2026-11-03)
+- **소류사 = MPM 형 (입경만으로 정해짐)** — Postacchini et al. (2014), *Coastal Eng.* 89, 99–105 △ (원문 PDF 읽음, 식 기호는 추출이 깨짐; [PDF](https://research.utm.my/wp-content/uploads/sites/62/2017/12/Sediment-transport-and-morphodynamics-generated-by-a-dam-break-swash-uprush-Coupled-vs-uncouple-modelling.pdf)): swash 댐 붕괴에 "the modified Meyer–Peter–Müller formula (see Besio et al., 2003)", θ = C_f·v²/((s−1)g·d₅₀), Exner 를 수리 풀이와 같은 유한체적으로. → q* = 8(θ − θc)^1.5, q = q*·√((s−1)g·D³) · u/|u|.
+  - Grass q = A·u³ 의 A 는 실험 맞춤 (같은 논문: "A = 0.0014 s²m⁻¹ … and A = 0.0026 s²m⁻¹ … respectively for fine and coarse sands") → **튜닝 금지 원칙으로 쓰지 않는다.** Kelly & Dodd 2010 · Pritchard & Hogg 2005 의 A 값은 못 찾음.
+  - C_f 는 우리 마찰 (c7 구역 마찰, `CfAt`) 그대로 — 수리와 같은 바닥 응력.
+- **θc — Soulsby & Whitehouse (1997)** △ (강의노트 · SCHISM 코드): θc = 0.30/(1 + 1.2D*) + 0.055[1 − exp(−0.020D*)], D* = (g(s−1)/ν²)^(1/3)·D. D 0.25 mm → θc ≈ 0.042.
+- **침강속도 — Soulsby (1997)** △: w_s = (ν/D)[√(10.36² + 1.049D*³) − 10.36] → 0.2 / 0.25 / 0.3 mm 에서 0.026 / 0.036 / 0.045 m/s. (부유사 단계에서 씀)
+- **공극률 p = 0.4** ✓ (XBeach `por` 기본, 범위 0.3–0.5).
+- **사태 (avalanching)** ✓ XBeach 매뉴얼: |∂z_b/∂x| > m_cr 이면 넘친 만큼 아래로, "The default values are 1 and 0.3 respectively" (dryslp · wetslp — 순서 문맥상 마른 1 · 젖은 0.3). → 열침식 문턱 = 마른 칸 1.0, 젖은 칸 0.3.
+- **경사 보정** ✓ XBeach 선택지 (Roelvink · Soulsby · Fredsøe θ' = θcosβ(1 ± tanβ/tanφ)) — 계수 기본값 못 찾음 → 첫 판은 빼고 사태로만.
+- **결합**: 약결합 (수리 스텝 → Exner → 새 바닥을 다음 스텝에) 로 충분 (Postacchini: 결합 · 비결합 차 선단 속도 2 % · 운반량 11 %, 단 비결합은 댐 위치 세굴 2.5–5 배 — 새 바닥은 반드시 되먹임). Zhu & Dodd 2015 △: 비결합은 침식 과대.
+- **부유사 (뒤 단계)**: XBeach 평형 농도 C_eq + 적응 시간 T_s = max(tsfac·h/w_s, T_s,min) ✓(요약). Pritchard & Hogg pickup 계수 못 찾음.
+- **벤치마크 후보** △: 침식 바닥 댐 붕괴 정확 Riemann 해 · Louvain 실험 (Fraccarollo & Capart 2002) — Postacchini 2012/2014.
+
 ### D-M3-4. 격자 구현 — Niagara Grid2D 가 아니라 자체 RDG (엔진 소스 ✓)
 - Epic 의 얕은 물은 있다: `Engine/Plugins/FX/NiagaraFluids/Content/Modules/Grid2D/ShallowWater/` (`Grid2D_SW_Advect · UpdateDepthGrid · FilterOvershoot · ExtrapolateVelocities · MovingWindow_*` …) · `Plugins/Experimental/WaterAdvanced` 의 `ShallowWaterRiverActor.cpp:339` 가 `Grid2D_SW_River` 를 쓴다. 바닥은 **SceneCapture 깊이로 찍어 읽기만** (`:107`) — 단방향 시각 효과. 침식 · 모래 · 수분 채널 없음. 모듈 이름으로 보아 이류 + 넘침 거르기 계열 (uasset 그래프라 알고리즘 세부는 미확인).
 - Niagara GPU 틱은 정해진 세 시점에만 돈다: `ENiagaraGpuComputeTickStage { PreInitViews, PostInitViews, PostOpaqueRender }` (`Niagara/Public/NiagaraCommon.h:1924-1926`). 우리 입자 시뮬 RDG 패스 사이에 끼울 수 없다 → M4 의 **같은 프레임 양방향 결합**(격자 → 입자 하중 · 수분, 입자 → 장애물 · 파괴 환원)이 막히거나 1 프레임 늦는다. 외부 RDG 버퍼를 읽히려면 사용자 정의 DI 를 C++ 로 써야 한다.
