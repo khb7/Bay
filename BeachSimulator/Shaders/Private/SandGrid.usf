@@ -925,8 +925,9 @@ void SedQCS(uint3 Tid : SV_DispatchThreadID)
 
 float2 SedQAt(int i, int j)
 {
-	// 영역 밖 칸 = 0 (무유량). y 주기면 감싼다
-	if (i < 0 || i >= (int)NX) { return 0.f; }
+	// 육지 쪽 밖 = 0 (무유량). 바다 쪽 밖 = 끝 칸 (영구배 — 모래가 드나듦, papers D-M3-24). y 주기면 감싼다
+	if (i < 0) { return 0.f; }
+	i = min(i, (int)NX - 1);
 	if (j < 0 || j >= (int)NY) { if (bPeriodicY == 0u) { return 0.f; } j = WJ(j); }
 	return SedQRO[Idx((uint)i, (uint)j)];
 }
