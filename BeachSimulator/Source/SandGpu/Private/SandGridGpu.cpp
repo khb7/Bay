@@ -1,5 +1,6 @@
 #include "SandGridGpu.h"
 #include <atomic>
+#include <algorithm>
 
 #include "DataDrivenShaderPlatformInfo.h"
 #include "GlobalShader.h"
@@ -36,6 +37,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER(float, IgGain)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, Waves)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, BCorner)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, BSort)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, URO)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, U0RO)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, UOutRW)
@@ -137,7 +139,7 @@ GRID_SHADER(FSandGridGwApplyCS, "GwApplyCS")
 
 struct FSandGridGpu::FState
 {
-	TRefCountPtr<FRDGPooledBuffer> BCorner, U0, U1, Level, FX, FY, Drain, AMax, Time, Waves;
+	TRefCountPtr<FRDGPooledBuffer> BCorner, BSort, U0, U1, Level, FX, FY, Drain, AMax, Time, Waves;
 	TRefCountPtr<FRDGPooledBuffer> Dst, UV0, UV1, FsPrev, FsT, Disp;   // T3c 분산
 	TRefCountPtr<FRDGPooledBuffer> Nu, BrkDiag;                                // Kennedy 와점성 (D-M3-19)
 	TRefCountPtr<FRDGPooledBuffer> Brk, BrkB;                         // 쇄파 상태 (지속, D-M3-17/18) — 핑퐁
@@ -197,6 +199,26 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 	TArray<FVector4f> U; U.SetNum(N);
 	for (int32 k = 0; k < N; ++k) { U[k] = FVector4f(In.W[k], In.HU[k], In.HV[k], 0.f); }
 	TArray<float> BC = In.BCorner;
+	// 물가 칸 수면 표 (m3-plan p4): 칸마다 LevelCS 와 같은 8×8 이선형 바닥 표본을 정렬 — 바닥은 Init 뒤 고정
+	TArray<float> BS;
+	if (Params.bWetDry)
+	{
+		BS.SetNumUninitialized(N * 64);
+		for (int32 j = 0; j < In.NY; ++j)
+		for (int32 i = 0; i < In.NX; ++i)
+		{
+			const float b00 = BC[j * (In.NX + 1) + i], b10 = BC[j * (In.NX + 1) + i + 1], b01 = BC[(j + 1) * (In.NX + 1) + i], b11 = BC[(j + 1) * (In.NX + 1) + i + 1];
+			float* Q = &BS[(j * In.NX + i) * 64];
+			for (int32 b = 0; b < 8; ++b)
+			for (int32 a = 0; a < 8; ++a)
+			{
+				const float u = (a + 0.5f) / 8.f, v = (b + 0.5f) / 8.f;
+				Q[b * 8 + a] = (1 - u) * (1 - v) * b00 + u * (1 - v) * b10 + (1 - u) * v * b01 + u * v * b11;
+			}
+			std::sort(Q, Q + 64);
+		}
+	}
+	else { BS.Init(0.f, 1); }
 	// 입사 성분 표 — 성분마다 (a, ω, φ, k_y) · (u_n/η, v/η) (m3-plan c4). 위상속도: 분산이면 ω/k (Vasarmidis 2021), 아니면 √(gh₀)
 	TArray<FVector4f> Wv;
 	uint32 NumIg = 0;
@@ -253,10 +275,11 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 			Gw[j * NX + i] = FVector2f(In.GwInit.Num() == N ? In.GwInit[j * NX + i] : FMath::Min(Bm, In.SeaLevel), 0.f);
 		}
 	}
-	ENQUEUE_RENDER_COMMAND(SandGridInit)([S, U = MoveTemp(U), BC = MoveTemp(BC), Wv = MoveTemp(Wv), Gw = MoveTemp(Gw), N, NX, NY, NestNY](FRHICommandListImmediate& RHICmdList)
+	ENQUEUE_RENDER_COMMAND(SandGridInit)([S, U = MoveTemp(U), BC = MoveTemp(BC), BS = MoveTemp(BS), Wv = MoveTemp(Wv), Gw = MoveTemp(Gw), N, NX, NY, NestNY](FRHICommandListImmediate& RHICmdList)
 	{
 		FRDGBuilder GraphBuilder(RHICmdList, RDG_EVENT_NAME("SandGridInit"));
 		S->BCorner = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.BCorner"), BC.GetData());
+		S->BSort = MakeBuffer(GraphBuilder, sizeof(float), BS.Num(), TEXT("SandGrid.BSort"), BS.GetData());
 		S->U0 = MakeBuffer(GraphBuilder, sizeof(FVector4f), N, TEXT("SandGrid.U0"), U.GetData());
 		S->U1 = MakeBuffer(GraphBuilder, sizeof(FVector4f), N, TEXT("SandGrid.U1"));
 		S->Level = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.Level"));
@@ -367,7 +390,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 			FSandGridParams B;
 			B.NX = P.NX; B.NY = P.NY; B.Dx = P.Dx; B.Dy = P.Dy; B.Gravity = P.Gravity; B.Theta = P.Theta; B.Cfl = P.Cfl; B.HDry = P.HDry;
 			B.EpsDesing = P.EpsDesing; B.bWetDry = P.bWetDry ? 1u : 0u; B.bFixedDt = bFixed ? 1u : 0u; B.FixedDt = bFixed ? DtOrFrame : 0.f; B.Manning = P.Manning; B.ManningSwash = P.ManningSwash; B.FricX = P.FricX; B.Ks = P.Ks;
-			B.BCorner = GraphBuilder.CreateSRV(BC);
+			B.BCorner = GraphBuilder.CreateSRV(BC); B.BSort = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->BSort));
 			B.bOpenEast = P.bOpenEast ? 1u : 0u; B.SeaLevel = P.SeaLevel; B.BoundaryDepth = P.BoundaryDepth; B.NumWaves = P.Waves.Num(); B.bPeriodicY = P.bPeriodicY ? 1u : 0u; B.IgGain = P.IgGain;
 			B.Waves = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Waves));
 			B.IncRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Inc)); B.bIncCached = 0u;   // 캐시는 FaceX 에서만 켬 (그 단계 시각으로 채운 직후)

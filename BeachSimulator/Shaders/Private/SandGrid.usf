@@ -68,6 +68,7 @@ RWStructuredBuffer<float>  GwQRW;
 uint  bPeriodicY;        // 해안선 방향(y) 주기 경계 — 비스듬한 파도가 옆 벽에서 튕기지 않게 (k_y 는 2π m / L_y 로 맞춘다)          // 바닥 마찰 n (s/m^⅓) — CPU FixDry 와 같은 암시적 꼴
 
 StructuredBuffer<float>    BCorner;
+StructuredBuffer<float>    BSort;     // 칸마다 정렬한 8×8 바닥 표본 (LevelCS)
 StructuredBuffer<float4>   URO;      // 이 단계 입력 (1 단계: U0, 2 단계: U1)
 StructuredBuffer<float4>   U0RO;     // 2 단계에서 U0
 RWStructuredBuffer<float4> UOutRW;   // 1 단계: U1, 2 단계: U0
@@ -141,19 +142,7 @@ void Mirror(int i, int j, out uint oi, out uint oj, out float SgnU, out float Sg
 }
 
 // ---------------------------------------------------------------------------------------------
-// 물가 칸 수면 — 이선형 칸 위 max(0, L − B) 평균이 h̄ 가 되는 L (CPU CellLevel 과 같은 8×8 표본 · 이분법)
-float CellVolume(float b00, float b10, float b01, float b11, float L)
-{
-	float V = 0.f;
-	for (uint b = 0; b < 8; ++b)
-	for (uint a = 0; a < 8; ++a)
-	{
-		const float u = (a + 0.5f) / 8.f, v = (b + 0.5f) / 8.f;
-		V += max(0.f, L - ((1 - u) * (1 - v) * b00 + u * (1 - v) * b10 + (1 - u) * v * b01 + u * v * b11));
-	}
-	return V / 64.f;
-}
-
+// 물가 칸 수면 — 이선형 칸 위 max(0, L − B) 평균 (8×8 표본) 이 h̄ 가 되는 L (CPU CellLevel 은 이분법 — 같은 근)
 [numthreads(8, 8, 1)]
 void LevelCS(uint3 Tid : SV_DispatchThreadID)
 {
@@ -169,10 +158,23 @@ void LevelCS(uint3 Tid : SV_DispatchThreadID)
 		const float Hbar = w - Bm;
 		if (Hbar < Hi - Bm && Hi - Lo > 1e-7f)
 		{
-			float A = Lo, B = Hi;
+			// V(L) = 표본 평균 max(0, L − b) 는 조각별 선형 → 정렬 표본 (BSort, Init 에서) 을 한 번 훑어 잠긴 표본 m 개를 찾으면
+			// L = (64 h̄ + Σ_{<m} b)/m 정확. 예전 이분법 24 회 × 64 표본 · Newton 은 느린 칸 하나가 워프를 붙잡았다 (m3-log #35, m3-plan p4). h̄ = 0 이면 이분법과 같이 Lo
 			const float Hb = max(0.f, Hbar);
-			for (uint n = 0; n < 24; ++n) { const float M = 0.5f * (A + B); if (CellVolume(b00, b10, b01, b11, M) < Hb) { A = M; } else { B = M; } }
-			R = float2(0.5f * (A + B), 1.f);
+			float L = Lo;
+			if (Hb > 0.f)
+			{
+				const uint k0 = Idx(i, j) * 64u;
+				float Sm = 0.f, m = 0.f;
+				for (uint n = 0; n < 64u; ++n)
+				{
+					const float sb = BSort[k0 + n];
+					if (m * sb - Sm >= 64.f * Hb) { break; }   // 64·V(s_n) ≥ 64 h̄ → 근은 s_{n−1} … s_n 사이
+					Sm += sb; m += 1.f;
+				}
+				L = (64.f * Hb + Sm) / m;
+			}
+			R = float2(L, 1.f);
 		}
 	}
 	LevelRW[Idx(i, j)] = R;
