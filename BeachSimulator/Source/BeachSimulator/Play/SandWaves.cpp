@@ -1,4 +1,4 @@
-#include "SandWaves.h"
+﻿#include "SandWaves.h"
 
 #include "Camera/CameraActor.h"
 #include "Components/LightComponent.h"
@@ -22,6 +22,8 @@
 #include "SandGridGpu.h"
 #include "../Grid/SandGridCpu.h"
 #include "../Mesh/SandMaterialBuilder.h"
+#include "../Spike/SandSpike.h"
+#include "DrawDebugHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSandWaves, Log, All);
 
@@ -244,6 +246,11 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 	NX = Sc.NX; NY = Sc.NY; BCorner = Sc.BCorner; BCellV = Sc.BCellV; H0 = Sc.H0; Hs = Sc.Hs; bZone = Sc.G.FricX > 0.f; Xs0 = (float)Sc.Xs;
 	FSandGridGpuInit& G = Sc.G;
 	const double Xs = Sc.Xs;
+	// T6: 게임은 모래 켬 — 판 구덩이가 사태로 무너져야 한다. 측정 경로 기본은 그대로 (BuildWaveScene). -nomorph 로 끔
+	if (!FParse::Param(Cmd, TEXT("nomorph"))) { G.bMorph = true; G.bSus = FParse::Param(Cmd, TEXT("sus")); }
+	FParse::Value(Cmd, TEXT("handcap="), HandCapM3);
+	bToolTest = FParse::Param(Cmd, TEXT("wavetooltest"));
+	Xs1 = (float)Xs;
 	// 맵에 놓인 예전 입자 시험 액터는 끈다 (프레임마다 14ms — 이 화면과 무관)
 	for (TActorIterator<AActor> It(&World); It; ++It)
 	{
@@ -261,6 +268,7 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 	Actor->SetRootComponent(Mesh);
 	Mesh->RegisterComponent();
 	Actor->SetActorLocation(FVector(300.0, -NY * Dx * 50.0, H0 * 100.0 + 2.0));   // 가장 깊은 곳이 바닥판(z = 0) 위로
+	GridBase = Actor->GetActorLocation();
 	TArray<FVector> TV; TArray<int32> Tri; TArray<FVector> Nrm; TArray<FVector2D> UV; TArray<FProcMeshTangent> Tan;
 	auto Corner = [&](int32 vi, int32 vj) { return BCorner[FMath::Min(vj * Step, NY) * (NX + 1) + FMath::Min(vi * Step, NX)]; };
 	for (int32 vj = 0; vj < VY; ++vj)
@@ -364,6 +372,104 @@ void USandWavesSubsystem::UpdateCamera(APlayerController* PC, float Dt)
 	Cam->SetActorLocationAndRotation(Cam->GetActorLocation() + Move.GetSafeNormal() * Speed * Dt, Rot);
 }
 
+bool USandWavesSubsystem::PickBed(const FVector& O, const FVector& Dir, FVector2f& OutXY, float& OutZ) const
+{
+	// 처음 바닥과 광선 교차 (칸 크기 행진). 스탬프는 (x, y) 만 쓰므로 그 뒤 바뀐 바닥 높이 차는 커서 위치의 작은 오차로만 남는다
+	const FVector P0 = (O - GridBase) / 100.0;
+	const double Step1 = Dx * 0.5;
+	for (double T = 0.0; T < 200.0; T += Step1)
+	{
+		const FVector P = P0 + Dir * T;
+		const int32 i = FMath::RoundToInt(P.X / Dx), j = FMath::RoundToInt(P.Y / Dx);
+		if (i < 0 || j < 0 || i > NX || j > NY) { continue; }
+		const float B = BCorner[j * (NX + 1) + i];
+		if (P.Z <= B) { OutXY = FVector2f((float)P.X, (float)P.Y); OutZ = B; return true; }
+	}
+	return false;
+}
+
+void USandWavesSubsystem::ApplyStamp(const FSandToolStamp& T)
+{
+	// M2 스탬프와 같은 구조체 · 같은 뜻 (m3-plan T6), 단위 m. 파기 Strength = 구 아래 반쪽을 퍼 담는 비율 · 쌓기 Strength = 입자 수 · 물 WetAdd = 포화도 증가 × 공극
+	const float Hemi = 2.f / 3.f * UE_PI * T.Radius * T.Radius * T.Radius;
+	if (T.Kind == ESandTool::Dig)
+	{
+		const float V = FMath::Min(T.Strength * Hemi, HandCapM3 - HandM3);   // 손이 차면 더 못 판다 (M2 와 같음)
+		if (V <= 0.f) { return; }
+		Grid->QueueBedStamp(T.Center.X, T.Center.Y, T.Radius, -V);
+		HandM3 += V; DugM3 += V;
+	}
+	else if (T.Kind == ESandTool::Pile)
+	{
+		const float V = FMath::Min(T.Strength * 4.19e-3f / 600.f, HandM3);   // 입자 하나 = 손 용량 600 입자 ≈ 반지름 10 cm 구 (m2-plan)
+		if (V <= 0.f) { return; }
+		Grid->QueueBedStamp(T.Center.X, T.Center.Y, T.Radius, V);
+		HandM3 -= V; PiledM3 += V;
+	}
+	else
+	{
+		const float V = T.WetAdd * 0.4f * Hemi;
+		Grid->QueueWaterStamp(T.Center.X, T.Center.Y, T.Radius, V);
+		ToolWaterM3 += V;
+	}
+}
+
+void USandWavesSubsystem::UpdateTools(APlayerController* PC, float Mul)
+{
+	if (PC->WasInputKeyJustPressed(EKeys::MouseScrollUp)) { BrushR = FMath::Min(0.8f, BrushR * 1.15f); }
+	if (PC->WasInputKeyJustPressed(EKeys::MouseScrollDown)) { BrushR = FMath::Max(2.f * Dx, BrushR / 1.15f); }   // 칸 두 개 아래는 격자가 못 그린다
+	int32 Tool = -1;
+	FVector2f XY = FVector2f::ZeroVector;
+	float Z = 0.f;
+	bool bHit = false;
+	if (bToolTest)
+	{
+		// 자동 시험: 물가 위 마른 땅 — 20~25 s 파기 · 25~30 s 옆에 쌓기 · 30~33 s 구덩이에 물
+		XY = FVector2f(Xs1 - 2.5f, NY * Dx * (SimTime < 25.f || SimTime >= 30.f ? 0.5f : 0.56f));
+		Tool = SimTime >= 20.f && SimTime < 25.f ? 0 : SimTime >= 25.f && SimTime < 30.f ? 1 : SimTime >= 30.f && SimTime < 33.f ? 2 : -1;
+		Z = BCorner[FMath::RoundToInt(XY.Y / Dx) * (NX + 1) + FMath::RoundToInt(XY.X / Dx)];
+		bHit = true;
+	}
+	else
+	{
+		FVector O, Dir;
+		if (PC->DeprojectMousePositionToWorld(O, Dir)) { bHit = PickBed(O, Dir, XY, Z); }
+		if (PC->IsInputKeyDown(EKeys::LeftMouseButton)) { Tool = 0; }
+		else if (PC->IsInputKeyDown(EKeys::RightMouseButton)) { Tool = 1; }
+		else if (PC->IsInputKeyDown(EKeys::F)) { Tool = 2; }
+	}
+	if (bHit && Tool >= 0)
+	{
+		// 연속 브러시 (M2 ApplyStroke): 같은 도구로 끌면 지난 점 → 지금 점을 반지름 0.4 배 간격으로. 한 프레임 양을 나눠 놓는다. 너무 먼 점프는 잇지 않는다
+		const float Len = FVector2f::Distance(LastToolXY, XY), Gap = 0.4f * BrushR;
+		const int32 K = (Tool == LastTool && Len > Gap && Len < 1.5f) ? FMath::Min(32, FMath::CeilToInt(Len / Gap)) : 1;
+		for (int32 k = 1; k <= K; ++k)
+		{
+			FSandToolStamp T;
+			const FVector2f C = K == 1 ? XY : FMath::Lerp(LastToolXY, XY, (float)k / K);
+			T.Center = FVector3f(C.X, C.Y, 0.f);
+			T.Radius = BrushR;
+			// 세기는 격자 손맛 임시값 — 사용자 화면 판정 (M2 세기 0.15 는 5 cm 칸에서 프레임당 3 cm 로 너무 빠름)
+			if (Tool == 0) { T.Kind = ESandTool::Dig; T.Strength = 0.02f * Mul / K; }
+			else if (Tool == 1) { T.Kind = ESandTool::Pile; T.Radius = FMath::Max(2.f * Dx, 0.4f * BrushR); T.Strength = 40.f * Mul / K; }
+			else { T.Kind = ESandTool::Pour; T.WetAdd = 0.02f * Mul / K; }
+			ApplyStamp(T);
+		}
+	}
+	LastTool = bHit ? Tool : -1;
+	LastToolXY = XY;
+	if (bHit)
+	{
+		const FColor C = Tool == 0 ? FColor::Red : Tool == 1 ? FColor::Green : Tool == 2 ? FColor::Cyan : FColor::White;
+		DrawDebugCircle(GetWorld(), GridBase + FVector(XY.X * 100.0, XY.Y * 100.0, Z * 100.0 + 1.0), BrushR * 100.f, 48, C, false, -1.f, SDPG_Foreground, 0.5f, FVector(1, 0, 0), FVector(0, 1, 0), false);
+	}
+	if (GEngine)
+	{
+		const int32 Fill = FMath::Clamp(FMath::RoundToInt(20.f * HandM3 / HandCapM3), 0, 20);
+		GEngine->AddOnScreenDebugMessage(2, 0.f, FColor::Green, FString::Printf(TEXT("좌 파기 · 우 쌓기 · F 물붓기 · 휠 반지름 %.0f cm · Shift ×3 · 손 [%s%s] %.1f L"), BrushR * 100.f, *FString::ChrN(Fill, TEXT('#')), *FString::ChrN(20 - Fill, TEXT('.')), HandM3 * 1e3f));
+	}
+}
+
 void USandWavesSubsystem::UpdateSwash()
 {
 	// T5: 렌더는 GPU 안에서 끝남 — CPU 는 swash 마찰 구역 · 진단용 수면만 1 s 마다 비동기로
@@ -397,6 +503,7 @@ bool USandWavesSubsystem::Tick(float DeltaTime)
 	const bool bAuto = !ShotPath.IsEmpty();
 	const float Dt = bAuto ? 1.f / 60.f : FMath::Min(DeltaTime, 1.f / 30.f);   // 자동 시험은 고정 (프레임 속도와 무관하게 같은 장면)
 	if (!bAuto) { UpdateCamera(PC, Dt); }
+	UpdateTools(PC, PC->IsInputKeyDown(EKeys::LeftShift) ? 3.f : 1.f);
 	if (GridOuter.IsValid()) { GridOuter->Advance(Dt, 64); }   // 바깥 먼저 (안쪽 경계가 이 프레임 끝 값을 쓴다)
 	Grid->Advance(Dt, 64);
 	UpdateSwash();
@@ -411,7 +518,7 @@ bool USandWavesSubsystem::Tick(float DeltaTime)
 		UE_LOG(LogSandWaves, Display, TEXT("T3 %.1fs: 스크린샷 %s · 격자 GPU %.2f ms · 서브스텝 %d"), SimTime, *Path, Grid->LastGpuMs(), Grid->GetLastSubsteps());
 		++NextShot;
 	}
-	if (bAuto && NextShot >= ShotTimes.Num() && SimTime > ShotTimes.Last() + 1.f) { UE_LOG(LogSandWaves, Display, TEXT("T5 프레임: 평균 %.2f ms (%d 프레임, 10 s 뒤) · 격자 GPU %.2f ms"), 1000.0 * WallSum / FMath::Max(WallN, 1), WallN, Grid->LastGpuMs()); FPlatformMisc::RequestExit(false); return false; }   // 마지막 스크린샷이 찍힐 프레임을 남긴다
+	if (bAuto && NextShot >= ShotTimes.Num() && SimTime > ShotTimes.Last() + 1.f) { UE_LOG(LogSandWaves, Display, TEXT("T5 프레임: 평균 %.2f ms (%d 프레임, 10 s 뒤) · 격자 GPU %.2f ms"), 1000.0 * WallSum / FMath::Max(WallN, 1), WallN, Grid->LastGpuMs()); UE_LOG(LogSandWaves, Display, TEXT("T6 도구: 파냄 %.1f L · 쌓음 %.1f L · 손 %.1f L · 부은 물 %.1f L"), DugM3 * 1e3, PiledM3 * 1e3, HandM3 * 1e3f, ToolWaterM3 * 1e3f); FPlatformMisc::RequestExit(false); return false; }   // 마지막 스크린샷이 찍힐 프레임을 남긴다
 	return true;
 }
 

@@ -646,6 +646,39 @@ namespace
 		UE_LOG(LogSandGrid, Display, TEXT("T4b ① 부유사 보존: ΣhC %.3e · (1−p)ΣΔb %.3e · 합 %.3e · 비 (합 / (1−p)Σ|Δb|) %.2e (기준 < 1e-3)"), Sm, (1.0 - In.SedPor) * Db, Tot, Tot / FMath::Max((1.0 - In.SedPor) * Ab, 1e-12));
 	}
 
+	void GpuTool()
+	{
+		// T6 (m3-plan): 스탬프 부피가 요청과 같은가 · 파내고 되쌓으면 Σb 제자리 · 물 깊이 유지 · 물붓기 = h 증가. 물 0.2 m, 사태만 동작
+		const int32 NX = 160, NY = 64; const double Dx = 0.05;
+		FSandGridGpuInit In = GroundGrid(NX, NY, Dx, [](double) { return 0.0; });
+		In.bGround = false; In.bMorph = true; In.bPeriodicY = true;
+		for (float& V : In.W) { V = 0.2f; }
+		FSandGridGpu G; G.Init(In);
+		auto Measure = [&](double& Sb, double& Sh, double& Bmin)
+		{
+			TArray<float> Bc, W, Hu, Hv; G.DownloadBed(Bc); G.Download(W, Hu, Hv);
+			Sb = 0; Sh = 0; Bmin = 1e9;
+			for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i <= NX; ++i) { const float B = Bc[j * (NX + 1) + i]; Sb += B; Bmin = FMath::Min<double>(Bmin, B); }
+			for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i < NX; ++i)
+			{
+				const int32 c = j * (NX + 1) + i;
+				Sh += W[j * NX + i] - 0.25 * ((double)Bc[c] + Bc[c + 1] + Bc[c + NX + 1] + Bc[c + NX + 2]);
+			}
+			Sb *= Dx * Dx; Sh *= Dx * Dx;
+		};
+		double B0, H0, M, B1, H1, M1, B2, H2, M2, B3, H3, M3;
+		Measure(B0, H0, M);
+		const float Vd = 2e-3f;   // 2 L
+		G.QueueBedStamp(4.f, 1.6f, 0.2f, -Vd); G.StepFixed(1e-3f, 1); Measure(B1, H1, M1);
+		G.QueueBedStamp(4.f, 1.6f, 0.2f, Vd); G.StepFixed(1e-3f, 1); Measure(B2, H2, M2);
+		G.QueueWaterStamp(4.f, 1.6f, 0.2f, Vd); G.StepFixed(1e-3f, 1); Measure(B3, H3, M3);
+		UE_LOG(LogSandGrid, Display, TEXT("T6 파기: ΔΣb %.6f L (요청 -2) · 최저 b %.4f m · Σh 변화 %.3e L"), (B1 - B0) * 1e3, M1, (H1 - H0) * 1e3);
+		UE_LOG(LogSandGrid, Display, TEXT("T6 되쌓기: Σb 원래와 차 %.3e L (기준 < 2e-3 = 0.1%%) · Σh 변화 %.3e L"), (B2 - B0) * 1e3, (H2 - H0) * 1e3);
+		UE_LOG(LogSandGrid, Display, TEXT("T6 물붓기: ΔΣh %.6f L (요청 2) · Σb 변화 %.3e L"), (H3 - H2) * 1e3, (B3 - B2) * 1e3);
+		G.StepFixed(1e-3f, 3000); double B4, H4, M4; Measure(B4, H4, M4);
+		UE_LOG(LogSandGrid, Display, TEXT("T6 3 s 뒤: Σb 차 %.3e L · Σh 차 %.3e L · 유한 %d"), (B4 - B3) * 1e3, (H4 - H3) * 1e3, FMath::IsFinite(B4 + H4) ? 1 : 0);
+	}
+
 	void GpuCost(int32 Size, bool bDisp = false)
 	{
 		FSandGridCpu C; Apply(C);   // 지형 · 초기값만 (CPU 로 풀지 않는다)
@@ -666,6 +699,7 @@ int32 RunSandGridGpuTest(const FString& Params)
 	GOpt = FOpt();
 	FParse::Value(*Params, TEXT("gridmanning="), GOpt.N);
 	if (FParse::Param(*Params, TEXT("gridground"))) { GpuGround(); return 0; }
+	if (FParse::Param(*Params, TEXT("gridtool"))) { GpuTool(); return 0; }
 	if (FParse::Param(*Params, TEXT("gridmorph"))) { GpuMorph(); GpuSus(); return 0; }
 	if (FParse::Param(*Params, TEXT("gridbous")))
 	{

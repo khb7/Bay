@@ -13,6 +13,9 @@
 
 BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER(uint32, NX)
+	SHADER_PARAMETER(uint32, NumStamps)
+	SHADER_PARAMETER(float, StampFloor)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, StampsRO)
 	SHADER_PARAMETER(uint32, NY)
 	SHADER_PARAMETER(float, Dx)
 	SHADER_PARAMETER(float, Dy)
@@ -173,6 +176,8 @@ GRID_SHADER(FSandGridSusCS,       "SusCS")
 GRID_SHADER(FSandGridSedBedCS,   "SedBedCS")
 GRID_SHADER(FSandGridSedApplyCS, "SedApplyCS")
 GRID_SHADER(FSandGridSedCellCS,  "SedCellCS")
+GRID_SHADER(FSandGridStampBedCS, "StampBedCS")
+GRID_SHADER(FSandGridStampWaterCS, "StampWaterCS")
 
 struct FSandGridGpu::FState
 {
@@ -378,6 +383,32 @@ bool FSandGridGpu::PollW(TArray<float>& OutW)
 float FSandGridGpu::LastSimTime() const { return State->SimTimeSeen.load(std::memory_order_relaxed); }
 float FSandGridGpu::LastGpuMs() const { return State ? State->GpuMsSeen.load(std::memory_order_relaxed) : 0.f; }
 
+void FSandGridGpu::QueueStamp(float X, float Y, float Radius, float Volume, bool bWater)
+{
+	// 정규화: 셰이더와 같은 표본 (바닥 = 꼭짓점, 물 = 칸 중심) 의 √(R² − r²) 합. 주기 y 면 꼭짓점 줄 NY 는 줄 0 과 같아 뺀다
+	const float Off = bWater ? 0.5f : 0.f;
+	const int32 Imax = bWater ? Params.NX - 1 : Params.NX, Jmax = (bWater || Params.bPeriodicY) ? Params.NY - 1 : Params.NY;
+	const float Ly = Params.NY * Params.Dy;
+	double Sum = 0.0;
+	for (int32 j = 0; j <= Jmax; ++j)
+	{
+		float Ry = FMath::Abs((j + Off) * Params.Dy - Y);
+		if (Params.bPeriodicY) { Ry = FMath::Min(Ry, Ly - Ry); }
+		if (Ry >= Radius) { continue; }
+		const int32 I0 = FMath::Max(0, FMath::FloorToInt((X - Radius) / Params.Dx - Off)), I1 = FMath::Min(Imax, FMath::CeilToInt((X + Radius) / Params.Dx - Off));
+		for (int32 i = I0; i <= I1; ++i)
+		{
+			const float Rx = (i + Off) * Params.Dx - X, Q = Radius * Radius - Rx * Rx - Ry * Ry;
+			if (Q > 0.f) { Sum += FMath::Sqrt(Q); }
+		}
+	}
+	if (Sum <= 0.0) { return; }
+	PendingStamps.Add(FVector4f(X, Y, Radius, bWater ? 1.f : 0.f));
+	PendingStamps.Add(FVector4f((float)(Volume / (Sum * Params.Dx * Params.Dy)), 0.f, 0.f, 0.f));
+}
+void FSandGridGpu::QueueBedStamp(float X, float Y, float Radius, float Volume) { QueueStamp(X, Y, Radius, Volume, false); }
+void FSandGridGpu::QueueWaterStamp(float X, float Y, float Radius, float Volume) { QueueStamp(X, Y, Radius, Volume, true); }
+
 void FSandGridGpu::StepFixed(float Dt, int32 NumSteps) { Run(true, Dt, NumSteps); }
 void FSandGridGpu::Advance(float FrameTime, int32 MaxSub)
 {
@@ -396,7 +427,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 	const FSandGridGpuInit P = Params;
 	FState* OS = P.NestOuter ? P.NestOuter->State : nullptr;
 	const FSandGridGpuInit OP = P.NestOuter ? P.NestOuter->Params : FSandGridGpuInit();
-	ENQUEUE_RENDER_COMMAND(SandGridRun)([S, P, OS, OP, bFixed, DtOrFrame, NumSub](FRHICommandListImmediate& RHICmdList)
+	ENQUEUE_RENDER_COMMAND(SandGridRun)([S, P, OS, OP, bFixed, DtOrFrame, NumSub, Stamps = MoveTemp(PendingStamps)](FRHICommandListImmediate& RHICmdList)
 	{
 		const FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 		// 지난 Run 들의 readback 중 준비된 것 (오래된 순) 만 읽는다 — GPU 를 기다리지 않음 (m3-plan p1).
@@ -513,6 +544,22 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 			const FIntVector GC(FMath::DivideAndRoundUp(P.NX, 8), FMath::DivideAndRoundUp(P.NY, 8), 1);
 			const FIntVector GX(FMath::DivideAndRoundUp(P.NX + 1, 8), FMath::DivideAndRoundUp(P.NY, 8), 1);
 			const FIntVector GY(FMath::DivideAndRoundUp(P.NX, 8), FMath::DivideAndRoundUp(P.NY + 1, 8), 1);
+			if (Stamps.Num() > 0)
+			{
+				// T6 도구 (패스 0): 바닥 = 스탬프 → DB → 모래 패스와 같은 적용 · 물 = 칸 w
+				FRDGBufferRef Sb = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), Stamps.Num()), TEXT("SandGrid.Stamps"));
+				GraphBuilder.QueueBufferUpload(Sb, Stamps.GetData(), Stamps.Num() * sizeof(FVector4f), ERDGInitialDataFlags::None);
+				FRDGBufferRef Db = GraphBuilder.RegisterExternalBuffer(S->SedDB), Bs = GraphBuilder.RegisterExternalBuffer(S->BSort);
+				const FIntVector GK(FMath::DivideAndRoundUp(P.NX + 1, 8), FMath::DivideAndRoundUp(P.NY + 1, 8), 1);
+				FSandGridParams X = B; X.NumStamps = Stamps.Num() / 2; X.StampFloor = S->GwZaq + 0.1f; X.StampsRO = GraphBuilder.CreateSRV(Sb); X.DBRW = GraphBuilder.CreateUAV(Db);
+				AddGridPass<FSandGridStampBedCS>(GraphBuilder, RDG_EVENT_NAME("SandGridStampBed"), ShaderMap, X, GK);
+				FSandGridParams Z = B; Z.BCorner = nullptr; Z.DBRO = GraphBuilder.CreateSRV(Db); Z.BCornerRW = GraphBuilder.CreateUAV(BC); Z.B0RO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->SedB0)); Z.BDelRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SedDel));
+				AddGridPass<FSandGridSedApplyCS>(GraphBuilder, RDG_EVENT_NAME("SandGridStampApply"), ShaderMap, Z, GK);
+				FSandGridParams C = Z; C.B0RO = nullptr; C.BDelRW = nullptr; C.BSort = nullptr; C.UOutRW = GraphBuilder.CreateUAV(U0); C.BSortRW = GraphBuilder.CreateUAV(Bs); C.SedAccRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SedAcc));
+				AddGridPass<FSandGridSedCellCS>(GraphBuilder, RDG_EVENT_NAME("SandGridStampCell"), ShaderMap, C, GC);
+				FSandGridParams W = B; W.NumStamps = Stamps.Num() / 2; W.StampsRO = GraphBuilder.CreateSRV(Sb); W.UOutRW = GraphBuilder.CreateUAV(U0);
+				AddGridPass<FSandGridStampWaterCS>(GraphBuilder, RDG_EVENT_NAME("SandGridStampWater"), ShaderMap, W, GC);
+			}
 			for (int32 n = 0; n < NumSub; ++n)
 			{
 				if (P.bDispersive)

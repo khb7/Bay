@@ -53,6 +53,9 @@ private:
 	bool Tick(float DeltaTime);
 	void UpdateCamera(class APlayerController* PC, float Dt);
 	void UpdateSwash();
+	void UpdateTools(class APlayerController* PC, float Mul);
+	void ApplyStamp(const struct FSandToolStamp& T);
+	bool PickBed(const FVector& O, const FVector& Dir, FVector2f& OutXY, float& OutZ) const;
 
 	TUniquePtr<class FSandGridGpu> Grid;
 	TUniquePtr<class FSandGridGpu> GridOuter;   // -nest
@@ -70,6 +73,13 @@ private:
 	UPROPERTY()
 	TObjectPtr<class UTextureRenderTarget2D> GridRt = nullptr;   // T5: (w, h, b, 젖음)
 	float SimTime = 0.f, Hs = 0.f, H0 = 0.f;
+	// T6 도구 (m3-plan): 좌 파기 · 우 쌓기 · F 물붓기. 손 재고 = 벌크 부피 m³
+	FVector GridBase = FVector::ZeroVector;
+	float BrushR = 0.2f, HandM3 = 0.f, HandCapM3 = 0.05f, Xs1 = 0.f, ToolWaterM3 = 0.f;
+	double DugM3 = 0.0, PiledM3 = 0.0;
+	FVector2f LastToolXY = FVector2f::ZeroVector;
+	int32 LastTool = -1;
+	bool bToolTest = false;
 	float Yaw = 0.f, Pitch = -20.f;
 	FVector2D LastMouse = FVector2D::ZeroVector;
 	bool bLooking = false;

@@ -1095,3 +1095,44 @@ void SedCellCS(uint3 Tid : SV_DispatchThreadID)
 		BSortRW[k0 + m] = z;
 	}
 }
+
+// ---------------------------------------------------------------------------------------------
+// T6 도구 스탬프 (m3-plan 패스 0): 프레임 맨 앞에 한 번. 스탬프마다 float4 둘 — (x, y, R, 종류 0 바닥 / 1 물) · (A, 0, 0, 0). 높이 = A·√(R² − r²) (반구, 부호 있음)
+// 바닥은 DB 에 모아 SedApplyCS · SedCellCS 로 넘긴다 (w 도 같이 — 물 깊이 유지 · 물 보존, BSort 갱신)
+uint  NumStamps;
+float StampFloor;        // 바닥 하한 — 대수층 바닥 위 (여기서 잘리면 파낸 양이 요청보다 적다)
+StructuredBuffer<float4> StampsRO;
+float StampHeight(float x, float y, uint Kind)
+{
+	float H = 0.f;
+	for (uint n = 0u; n < NumStamps; ++n)
+	{
+		const float4 S = StampsRO[n * 2u];
+		if ((uint)S.w != Kind) { continue; }
+		const float Rx = x - S.x;
+		float Ry = abs(y - S.y);
+		if (bPeriodicY != 0u) { Ry = min(Ry, NY * Dy - Ry); }
+		const float Q = S.z * S.z - Rx * Rx - Ry * Ry;
+		if (Q > 0.f) { H += StampsRO[n * 2u + 1u].x * sqrt(Q); }
+	}
+	return H;
+}
+[numthreads(8, 8, 1)]
+void StampBedCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint ci = Tid.x, cj = Tid.y;
+	if (ci > NX || cj > NY) { return; }
+	const float Dh = StampHeight(ci * Dx, cj * Dy, 0u);
+	DBRW[cj * (NX + 1) + ci] = max(Dh, min(0.f, StampFloor - BCorner[cj * (NX + 1) + ci]));
+}
+[numthreads(8, 8, 1)]
+void StampWaterCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x, j = Tid.y;
+	if (i >= NX || j >= NY) { return; }
+	const float Dh = StampHeight((i + 0.5f) * Dx, (j + 0.5f) * Dy, 1u);
+	if (Dh == 0.f) { return; }
+	float4 U = UOutRW[Idx(i, j)];
+	U.x += Dh;
+	UOutRW[Idx(i, j)] = U;
+}

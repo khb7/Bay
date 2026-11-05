@@ -60,6 +60,9 @@ public:
 	~FSandGridGpu();
 
 	void Init(const FSandGridGpuInit& In);
+	/** T6 도구: 다음 Advance / StepFixed 맨 앞에 반영. (X, Y) m · 반지름 m · 바닥 부피 m³ (+ 쌓기, − 파기) 또는 물 부피 m³ (+). 칸 합으로 정규화해 요청 부피가 격자에 정확히 들어간다 */
+	void QueueBedStamp(float X, float Y, float Radius, float Volume);
+	void QueueWaterStamp(float X, float Y, float Radius, float Volume);
 	void SetFricX(float X) { Params.FricX = X; }   // swash 구역 경계 갱신 (FSwashZone)
 	/** 고정 Δt 로 NumSteps 서브스텝 (CPU 대조용) */
 	void StepFixed(float Dt, int32 NumSteps);
@@ -90,6 +93,8 @@ public:
 
 private:
 	void Run(bool bFixed, float DtOrFrame, int32 NumSub);
+	void QueueStamp(float X, float Y, float Radius, float Volume, bool bWater);
+	TArray<FVector4f> PendingStamps;
 
 	struct FState;
 	FState* State = nullptr;

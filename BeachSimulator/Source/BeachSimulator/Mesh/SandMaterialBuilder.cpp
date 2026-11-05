@@ -180,7 +180,23 @@ bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage, bool b
 	UMaterialExpressionMultiply* GrainHW = AddExpr<UMaterialExpressionMultiply>(M, -450, 120);
 	GrainHW->A.Connect(0, GrainH); GrainHW->B.Connect(0, GrainScale);
 	Call->FunctionInputs[0].Input.Connect(0, GrainHW);
-	Ed->Normal.Connect(0, Call);
+	if (bGrid)
+	{
+		// T6: 메시 법선은 처음 바닥에 고정이고 PerturbNormalLQ 의 화면 미분은 WPO 로 솟은 면에서 튄다 (쌓은 더미가 까맣게) — 경사는 b 의 중앙 차분, 알갱이 요철만 얹는다 (±0.3 로 자름)
+		UMaterialExpressionScalarParameter* CellP = AddExpr<UMaterialExpressionScalarParameter>(M, -700, 300);
+		CellP->ParameterName = TEXT("CellCm"); CellP->DefaultValue = 5.f;
+		UMaterialExpressionCustom* Nb = AddGridCustom(M, GridTex, CMOT_Float3, TEXT(
+			"float Wd, Ht; Tex.GetDimensions(Wd, Ht);\n"
+			"const float2 d = 1.0 / float2(Wd, Ht);\n"
+			"const float zx = Tex.SampleLevel(TexSampler, Uv + float2(d.x, 0), 0).z - Tex.SampleLevel(TexSampler, Uv - float2(d.x, 0), 0).z;\n"
+			"const float zy = Tex.SampleLevel(TexSampler, Uv + float2(0, d.y), 0).z - Tex.SampleLevel(TexSampler, Uv - float2(0, d.y), 0).z;\n"
+			"return normalize(float3(-zx * 100.0 / (2.0 * Cell) + clamp(Grain.x, -0.3, 0.3), -zy * 100.0 / (2.0 * Cell) + clamp(Grain.y, -0.3, 0.3), 1.0));"), 700);
+		Nb->Inputs.SetNum(4);
+		Nb->Inputs[2].InputName = TEXT("Cell"); Nb->Inputs[2].Input.Connect(0, CellP);
+		Nb->Inputs[3].InputName = TEXT("Grain"); Nb->Inputs[3].Input.Connect(0, Call);
+		Ed->Normal.Connect(0, Nb);
+	}
+	else { Ed->Normal.Connect(0, Call); }
 	M->bTangentSpaceNormal = false;   // PerturbNormalLQ 는 월드 노멀을 낸다
 
 	UMaterialExpressionConstant* RoughDry = AddExpr<UMaterialExpressionConstant>(M, -300, 250);
