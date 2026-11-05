@@ -144,6 +144,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	FParse::Value(Cmd, TEXT("gwk="), G.GwK);
 	// T4a 모래 (m3-plan T4): -morph 로 켬 · -morfac= (1) · -sedd= (D50 m, 2.5e-4)
 	G.bMorph = FParse::Param(Cmd, TEXT("morph"));
+	G.bSus = G.bMorph && FParse::Param(Cmd, TEXT("sus"));   // T4b 부유사
 	FParse::Value(Cmd, TEXT("morfac="), G.Morfac);
 	FParse::Value(Cmd, TEXT("sedd="), G.SedD50);
 	double MeanDeg = 10.0, SwellSpread = 15.0, WindSpread = 40.0;
@@ -626,6 +627,7 @@ int32 RunWaveMeasure(const FString& Params)
 			Bf += FString::Printf(TEXT("%.3f,%.5f,%.5f,%.6f,%.6f,%.6f\n"), i * Sc.Dx, M0 / NY, M1 / NY, (M1 - M0) / NY, Mn, Mx);
 		}
 		FFileHelper::SaveStringToFile(Bf, *Path.Replace(TEXT(".csv"), TEXT("_bed.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		if (Sc.G.bSus) { TArray<float> Su; Grid.DownloadSus(Su); double Sm = 0, Mx = 0; for (float V : Su) { Sm += V; Mx = FMath::Max<double>(Mx, V); } UE_LOG(LogSandWaves, Display, TEXT("T4b 부유사: 물속 ΣhC %.3e m·칸 · 최대 hC %.3e m"), Sm, Mx); }
 		UE_LOG(LogSandWaves, Display, TEXT("T4 모래: Σb 변화 %.3e m·칸 (|Δb| 합 %.3e, 비 %.2e) · 평균 |Δb| %.2f mm"), S1 - S0, Abs, Abs > 0 ? (S1 - S0) / Abs : 0.0, 1000.0 * Abs / ((NX + 1) * NY));
 	}
 	UE_LOG(LogSandWaves, Display, TEXT("T3b 측정 끝 → %s (벽시계 %.0fs) · swash 마찰 경계 x %.2f m"), *Path, FPlatformTime::Seconds() - T0, FricX);

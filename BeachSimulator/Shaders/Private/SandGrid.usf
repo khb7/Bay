@@ -902,6 +902,18 @@ RWStructuredBuffer<float>  BCornerRW;
 StructuredBuffer<float>    B0RO;     // 처음 바닥 (고정)
 RWStructuredBuffer<float>  BDelRW;   // 누적 Δb — b ~ 0.5 m 에 서브스텝 Δb (~1e-7) 를 바로 더하면 반 ulp 아래가 사라져 질량이 샌다 (m3-log #36)
 RWStructuredBuffer<float>  BSortRW;
+RWStructuredBuffer<float>  SedAccRW;  // 칸마다 지난 정렬 뒤 쌓인 |Δb| — 0.1 mm 넘을 때만 BSort 다시 (부유사는 거의 모든 칸이 매 서브스텝 조금씩 바뀐다, m3-log #38)
+uint  bSus;              // T4b 부유사
+float SusAss;            // A_ss (식 101, CPU 계산)
+float SusWs;             // 침강속도 w_s (Soulsby 1997)
+float SusD90;
+float SusTsfac;
+float SusTsmin;
+float SusCmax;
+StructuredBuffer<float>    SusCRO;   // S = hC (m)
+RWStructuredBuffer<float>  SusCRW;
+StructuredBuffer<float>    SusERO;   // 이번 서브스텝 순 침식 (m)
+RWStructuredBuffer<float>  SusERW;
 
 [numthreads(8, 8, 1)]
 void SedQCS(uint3 Tid : SV_DispatchThreadID)
@@ -937,6 +949,65 @@ bool SedWet(int i, int j)
 	if (j < 0 || j >= (int)NY) { if (bPeriodicY == 0u) { return false; } j = WJ(j); }
 	return URO[Idx((uint)i, (uint)j)].x - BCell((uint)i, (uint)j) > HDry;
 }
+
+// ---------------------------------------------------------------------------------------------
+// T4b 부유사 (m3-plan T4b, papers D-M3-25): S = hC. 풍상 이류 + 원천 (hC_eq − hC)/T_s (암시적). XBeach 식 87–88 · Soulsby–van Rijn 부유 성분 — 파 평균 u_rms · 쇄파 k_b 항은 뺌.
+float SusC(int i, int j)
+{
+	const uint k = Idx((uint)i, (uint)j);
+	const float h = URO[k].x - BCell((uint)i, (uint)j);
+	return h > HDry ? SusCRO[k] / h : 0.f;
+}
+// 면 플럭스: 유량은 두 칸 평균, 농도는 풍상. 한 면으로 나가는 양 ≤ 칸 S 의 ¼ (네 면 합쳐도 S ≥ 0)
+float SusFlux(int ia, int ja, int ib, int jb, uint Axis, float Dt, float Dl)
+{
+	const uint ka = Idx((uint)ia, (uint)ja), kb = Idx((uint)ib, (uint)jb);
+	const float F = 0.5f * (Axis == 0u ? URO[ka].y + URO[kb].y : URO[ka].z + URO[kb].z);
+	const uint up = F > 0.f ? ka : kb;
+	const int iu = F > 0.f ? ia : ib, ju = F > 0.f ? ja : jb;
+	return sign(F) * min(abs(F) * SusC(iu, ju), SusCRO[up] * Dl / (4.f * Dt));
+}
+float SusFx(int i, int j, float Dt)
+{
+	if (i < 0) { return 0.f; }                                                   // 육지 쪽 벽
+	if (i >= (int)NX - 1) { return bOpenEast != 0u ? SusFlux(i, j, i, j, 0u, Dt, Dx) : 0.f; }   // 바다 쪽: 영구배 (매뉴얼 Neumann)
+	return SusFlux(i, j, i + 1, j, 0u, Dt, Dx);
+}
+float SusFy(int i, int j, float Dt)
+{
+	if (bPeriodicY != 0u) { return SusFlux(i, WJ(j), i, WJ(j + 1), 1u, Dt, Dy); }
+	if (j < 0 || j >= (int)NY - 1) { return 0.f; }
+	return SusFlux(i, j, i, j + 1, 1u, Dt, Dy);
+}
+
+[numthreads(8, 8, 1)]
+void SusCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const int i = (int)Tid.x, j = (int)Tid.y;
+	if (i >= (int)NX || j >= (int)NY) { return; }
+	const uint k = Idx((uint)i, (uint)j);
+	const float Dt = TimeRO[0];
+	const float Sa = SusCRO[k] - Dt * ((SusFx(i, j, Dt) - SusFx(i - 1, j, Dt)) / Dx + (SusFy(i, j, Dt) - SusFy(i, j - 1, Dt)) / Dy);
+	const float4 U = URO[k];
+	const float h = U.x - BCell((uint)i, (uint)j);
+	float Sn = 0.f;   // 마른 칸: 뜬 모래 전부 내려앉음
+	if (h > HDry)
+	{
+		const float Ex = max(length(U.yz / h) - 0.19f * pow(SedD, 0.1f) * log10(max(4.f * h / SusD90, 1.f)), 0.f);
+		const float Ceq = min(SusAss / h * pow(Ex, 2.4f), 0.5f * SusCmax);
+		const float A = Dt / max(SusTsfac * h / SusWs, SusTsmin);
+		Sn = (Sa + A * h * Ceq) / (1.f + A);
+	}
+	SusCRW[k] = Sn;
+	SusERW[k] = Sn - Sa;   // 순 침식 (m) — SedBedCS 가 꼭짓점으로 나눔
+}
+float SusEAt(int i, int j)
+{
+	if (i < 0) { return 0.f; }
+	i = min(i, (int)NX - 1);
+	if (j < 0 || j >= (int)NY) { if (bPeriodicY == 0u) { return 0.f; } j = WJ(j); }
+	return SusERO[Idx((uint)i, (uint)j)];
+}
 float SedBc(int ci, int cj)
 {
 	if (bPeriodicY != 0u) { cj = ((cj % (int)NY) + (int)NY) % (int)NY; }
@@ -960,6 +1031,7 @@ void SedBedCS(uint3 Tid : SV_DispatchThreadID)
 	const float Fe = 0.5f * (SedQAt(ci, cj - 1).x + SedQAt(ci, cj).x), Fw = 0.5f * (SedQAt(ci - 1, cj - 1).x + SedQAt(ci - 1, cj).x);
 	const float Fn = 0.5f * (SedQAt(ci - 1, cj).y + SedQAt(ci, cj).y), Fs = 0.5f * (SedQAt(ci - 1, cj - 1).y + SedQAt(ci, cj - 1).y);
 	float dB = -Dt * Morfac / (1.f - SedPor) * ((Fe - Fw) / Dx + (Fn - Fs) / Dy);
+	if (bSus != 0u) { dB -= Morfac / (1.f - SedPor) * 0.25f * (SusEAt(ci - 1, cj - 1) + SusEAt(ci, cj - 1) + SusEAt(ci - 1, cj) + SusEAt(ci, cj)); }   // T4b 칸 침식 → 둘레 꼭짓점
 	// 사태 — 이웃 꼭짓점 넷. 젖음 = 그 변에 붙은 칸 중 하나라도 젖음
 	const float Ba = SedBc(ci, cj);
 	if (ci + 1 <= (int)NX) { dB -= AvalOut(Ba, SedBc(ci + 1, cj), Dx, SedWet(ci, cj - 1) || SedWet(ci, cj)); }
@@ -993,6 +1065,9 @@ void SedCellCS(uint3 Tid : SV_DispatchThreadID)
 	U.x += 0.25f * (d00 + d10 + d01 + d11);
 	UOutRW[k] = U;
 	if (bWetDry == 0u) { return; }
+	const float Ac = SedAccRW[k] + 0.25f * (abs(d00) + abs(d10) + abs(d01) + abs(d11));
+	if (Ac < 1e-4f) { SedAccRW[k] = Ac; return; }
+	SedAccRW[k] = 0.f;
 	const float b00 = BCornerRW[j * (NX + 1) + i], b10 = BCornerRW[j * (NX + 1) + i + 1], b01 = BCornerRW[(j + 1) * (NX + 1) + i], b11 = BCornerRW[(j + 1) * (NX + 1) + i + 1];
 	const uint k0 = k * 64u;
 	for (uint n = 0; n < 64u; ++n)

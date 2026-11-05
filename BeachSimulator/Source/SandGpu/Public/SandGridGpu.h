@@ -44,6 +44,9 @@ struct FSandGridGpuInit
 	float SedS = 2.65f;             // 상대 밀도 (석영)
 	float SedPor = 0.4f;            // 공극률 (XBeach por)
 	float Morfac = 1.f;             // 지형 과장 배수 (XBeach morfac)
+	bool  bSus = false;             // T4b 부유사 (papers D-M3-25)
+	float SedD90 = 3e-4f;           // m — XBeach 예제 값 (근거 약함)
+	float SusTsfac = 0.1f, SusTsmin = 0.5f, SusCmax = 0.1f;   // XBeach 기본
 	float AvalDry = 1.f, AvalWet = 0.3f;   // 사태 임계 기울기 (XBeach dryslp · wetslp)
 	TArray<float> GwInit;           // 처음 지하수면 NX·NY (비면 min(B, SeaLevel)) — 시험용
 	TArray<float> BCorner;          // (NX+1)·(NY+1)
@@ -67,6 +70,7 @@ public:
 	/** 지하수 (η_gw, δ) 동기 내려받기 · 대수층 바닥 */
 	void DownloadGround(TArray<FVector2f>& OutGw, float* OutZaq = nullptr) const;
 	void DownloadNu(TArray<float>& OutNu) const;
+	void DownloadSus(TArray<float>& OutS) const;   // 칸 S = hC (m), 동기
 	void DownloadBed(TArray<float>& OutBCorner) const;   // 꼭짓점 바닥 (NX+1)·(NY+1), 동기
 	void DownloadBreakDiag(TArray<FVector2f>& Out) const;
 	void ResetBreakDiag();   // 칸별 (최대 |∇η|, 최대 η_t/√(gH)) — 시작부터 누적 (진단)   // 쇄파 와점성 ν (진단, D-M3-20)

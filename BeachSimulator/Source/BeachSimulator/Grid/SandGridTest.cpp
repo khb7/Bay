@@ -628,6 +628,24 @@ namespace
 		}
 	}
 
+	void GpuSus()
+	{
+		// T4b ① 부유사 보존 (m3-plan T4b): 닫힌 영역 물 둑 붕괴 — (1−p)Σb + ΣhC 가 그대로
+		const int32 NX = 160, NY = 4; const double Dx = 0.05;
+		FSandGridGpuInit In = GroundGrid(NX, NY, Dx, [](double) { return 0.0; });
+		In.bGround = false; In.bMorph = true; In.bSus = true; In.bPeriodicY = true;
+		for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i < NX; ++i) { In.W[j * NX + i] = i < NX / 2 ? 0.6f : 0.2f; }
+		FSandGridGpu G; G.Init(In);
+		TArray<float> B0, B1, Su; G.DownloadBed(B0);
+		G.StepFixed(1e-3f, 3000);
+		G.DownloadBed(B1); G.DownloadSus(Su);
+		double Db = 0, Ab = 0, Sm = 0;
+		for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i <= NX; ++i) { const int32 c = j * (NX + 1) + i; Db += (double)B1[c] - B0[c]; Ab += FMath::Abs((double)B1[c] - B0[c]); }
+		for (float V : Su) { Sm += V; }
+		const double Tot = (1.0 - In.SedPor) * Db + Sm;
+		UE_LOG(LogSandGrid, Display, TEXT("T4b ① 부유사 보존: ΣhC %.3e · (1−p)ΣΔb %.3e · 합 %.3e · 비 (합 / (1−p)Σ|Δb|) %.2e (기준 < 1e-3)"), Sm, (1.0 - In.SedPor) * Db, Tot, Tot / FMath::Max((1.0 - In.SedPor) * Ab, 1e-12));
+	}
+
 	void GpuCost(int32 Size, bool bDisp = false)
 	{
 		FSandGridCpu C; Apply(C);   // 지형 · 초기값만 (CPU 로 풀지 않는다)
@@ -648,7 +666,7 @@ int32 RunSandGridGpuTest(const FString& Params)
 	GOpt = FOpt();
 	FParse::Value(*Params, TEXT("gridmanning="), GOpt.N);
 	if (FParse::Param(*Params, TEXT("gridground"))) { GpuGround(); return 0; }
-	if (FParse::Param(*Params, TEXT("gridmorph"))) { GpuMorph(); return 0; }
+	if (FParse::Param(*Params, TEXT("gridmorph"))) { GpuMorph(); GpuSus(); return 0; }
 	if (FParse::Param(*Params, TEXT("gridbous")))
 	{
 		CompareDynamic(true);
