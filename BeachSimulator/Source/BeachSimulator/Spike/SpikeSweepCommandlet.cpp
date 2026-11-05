@@ -1816,7 +1816,7 @@ int32 USpikeSweepCommandlet::Main(const FString& Params)
 	if (FParse::Param(*Params, TEXT("makewatermat")))
 	{
 		FString Msg;
-		const bool bOk = SandMaterial::BuildWater(SandMaterial::WaterPath(), Msg);
+		const bool bOk = SandMaterial::BuildWater(SandMaterial::WaterPath(), Msg) && SandMaterial::Build(SandMaterial::SandGridPath(), Msg, true);
 		UE_LOG(LogSpikeSweep, Display, TEXT("물 재질: %s"), *Msg);
 		return bOk ? 0 : 1;
 	}

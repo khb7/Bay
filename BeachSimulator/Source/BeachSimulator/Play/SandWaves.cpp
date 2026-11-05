@@ -13,6 +13,9 @@
 #include "Math/RandomStream.h"
 #include "Misc/CommandLine.h"
 #include "ProceduralMeshComponent.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "TextureResource.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "UnrealClient.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -275,15 +278,30 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 		const int32 a = vj * VX + vi, b = a + 1, c = a + VX, d = c + 1;
 		Tri.Append({ a, c, b, b, c, d });
 	}
-	SandColors.Init(FColor(0, 0, 0, 255), TV.Num());
-	Wet.Init(0.f, TV.Num());
-	Mesh->CreateMeshSection(0, TV, Tri, Nrm, UV, SandColors, Tan, false);
-	WaterVerts = TV;
-	WaterColors.Init(FColor(0, 0, 0, 255), TV.Num());
-	Mesh->CreateMeshSection(1, WaterVerts, Tri, Nrm, UV, WaterColors, Tan, false);
-	if (UMaterialInterface* MS = LoadObject<UMaterialInterface>(nullptr, *(FString(SandMaterial::DefaultPath()) + TEXT(".M_Sand")))) { Mesh->SetMaterial(0, MS); }
-	UMaterialInterface* MW = LoadObject<UMaterialInterface>(nullptr, *(FString(SandMaterial::WaterPath()) + TEXT(".M_Water")));
-	if (MW) { Mesh->SetMaterial(1, MW); } else { UE_LOG(LogSandWaves, Warning, TEXT("물 재질 없음 — 커맨드릿 -makewatermat 로 만들 것")); }
+	// T5: 정점은 처음 바닥 (경계 상자용), 실제 높이 · 색은 재질이 GridRt 에서 읽는다 (WPO)
+	for (int32 v = 0; v < TV.Num(); ++v) { UV[v] = FVector2D((double)(v % VX) * Step / NX, (double)(v / VX) * Step / NY); }
+	TArray<FColor> NoCol;
+	Mesh->CreateMeshSection(0, TV, Tri, Nrm, UV, NoCol, Tan, false);
+	Mesh->CreateMeshSection(1, TV, Tri, Nrm, UV, NoCol, Tan, false);
+	Mesh->SetBoundsScale(2.f);
+	GridRt = NewObject<UTextureRenderTarget2D>(this);
+	GridRt->bCanCreateUAV = true;
+	GridRt->AddressX = GridRt->AddressY = TA_Clamp;
+	GridRt->ClearColor = FLinearColor::Black;
+	GridRt->InitCustomFormat(NX, NY, PF_A32B32G32R32F, false);
+	GridRt->UpdateResourceImmediate(true);
+	Grid->SetExportTarget(GridRt->GameThread_GetRenderTargetResource(), 1.f / 60.f / 20.f);   // 물이 빠지면 20 초에 걸쳐 마른 색으로 (M5 증발 전까지의 눈요기)
+	auto Mid = [&](const FString& Path, int32 Section, const TCHAR* Name)
+	{
+		UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr, *(Path + TEXT(".") + Name));
+		if (!Base) { UE_LOG(LogSandWaves, Warning, TEXT("%s 없음 — 커맨드릿 -makewatermat 로 만들 것"), Name); return; }
+		UMaterialInstanceDynamic* D = UMaterialInstanceDynamic::Create(Base, this);
+		D->SetTextureParameterValue(TEXT("GridTex"), GridRt);
+		D->SetScalarParameterValue(TEXT("CellCm"), Dx * 100.f);
+		Mesh->SetMaterial(Section, D);
+	};
+	Mid(SandMaterial::SandGridPath(), 0, TEXT("M_SandGrid"));
+	Mid(SandMaterial::WaterPath(), 1, TEXT("M_Water"));
 
 	for (TActorIterator<ADirectionalLight> It(&World); It; ++It)
 	{
@@ -346,58 +364,33 @@ void USandWavesSubsystem::UpdateCamera(APlayerController* PC, float Dt)
 	Cam->SetActorLocationAndRotation(Cam->GetActorLocation() + Move.GetSafeNormal() * Speed * Dt, Rot);
 }
 
-void USandWavesSubsystem::UpdateWaterMesh()
+void USandWavesSubsystem::UpdateSwash()
 {
-	TArray<float> W, HU, HV;
-	Grid->Download(W, HU, HV, &SimTime);
-	if (bZone) { Grid->SetFricX(Swash.Update(W, BCellV, NX, NY, Dx, SimTime)); }
-	const int32 VX = NX / Step + 1, VY = NY / Step + 1;
-	const float DryRate = 1.f / 60.f / 20.f;   // 물이 빠지면 20 초에 걸쳐 마른 색으로 (M5 증발 전까지의 눈요기)
-	for (int32 vj = 0; vj < VY; ++vj)
-	for (int32 vi = 0; vi < VX; ++vi)
-	{
-		const int32 v = vj * VX + vi;
-		const int32 i = FMath::Min(vi * Step, NX - 1), j = FMath::Min(vj * Step, NY - 1);
-		const int32 k = j * NX + i;
-		const float h = W[k] - BCellV[k];
-		const float B = BCorner[FMath::Min(vj * Step, NY) * (NX + 1) + FMath::Min(vi * Step, NX)];
-		const bool bWater = h > 0.003f;
-		WaterVerts[v].Z = (bWater ? FMath::Max(W[k], B + 0.002f) : B - 0.03f) * 100.0;
-		WaterColors[v] = FColor((uint8)FMath::Clamp(h / 0.3f * 255.f, 0.f, 255.f), 0, 0, 255);
-		Wet[v] = bWater ? 1.f : FMath::Max(0.f, Wet[v] - DryRate);
-		SandColors[v] = FColor((uint8)(Wet[v] * 200.f), 0, 0, 255);
-	}
-	// 진단 (5초마다): 물 부피 · 평균 수위(경계 근처) · 물이 닿은 가장 땅 쪽 x
+	// T5: 렌더는 GPU 안에서 끝남 — CPU 는 swash 마찰 구역 · 진단용 수면만 1 s 마다 비동기로
+	SimTime = Grid->LastSimTime();
+	if (SimTime >= NextWReq) { Grid->RequestW(); NextWReq = SimTime + 1.f; }
+	if (!Grid->PollW(LastW)) { return; }
+	if (bZone) { Grid->SetFricX(Swash.Update(LastW, BCellV, NX, NY, Dx, SimTime)); }
 	if (FMath::FloorToInt(SimTime / 5.f) != LastDiag)
 	{
 		LastDiag = FMath::FloorToInt(SimTime / 5.f);
 		double V = 0, Lev = 0; int32 Nl = 0; int32 Shore = NX;
 		for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i < NX; ++i)
 		{
-			const int32 k = j * NX + i; const float h = W[k] - BCellV[k];
+			const int32 k = j * NX + i; const float h = LastW[k] - BCellV[k];
 			V += FMath::Max(0.f, h);
-			if (i > NX - 20) { Lev += W[k]; ++Nl; }
+			if (i > NX - 20) { Lev += LastW[k]; ++Nl; }
 			if (h > 0.003f) { Shore = FMath::Min(Shore, i); }
 		}
 		UE_LOG(LogSandWaves, Display, TEXT("T3 진단 %.0fs: 물 부피 %.2f m³ · 경계 근처 평균 수위 %+.3f m · 물 닿은 땅 쪽 끝 x %.2f m (정지 물가 %.2f)"),
 			SimTime, V * Dx * Dx, Lev / FMath::Max(1, Nl), Shore * Dx, Xs0);
 	}
-	// 수면 법선 — 파도 모양에 빛이 맞게 (지형 법선을 그대로 쓰면 파봉이 안 보인다)
-	WaterNormals.SetNum(WaterVerts.Num());
-	for (int32 vj = 0; vj < VY; ++vj)
-	for (int32 vi = 0; vi < VX; ++vi)
-	{
-		const double zx = WaterVerts[vj * VX + FMath::Min(vi + 1, VX - 1)].Z - WaterVerts[vj * VX + FMath::Max(vi - 1, 0)].Z;
-		const double zy = WaterVerts[FMath::Min(vj + 1, VY - 1) * VX + vi].Z - WaterVerts[FMath::Max(vj - 1, 0) * VX + vi].Z;
-		WaterNormals[vj * VX + vi] = FVector(-zx, -zy, 2.0 * Step * Dx * 100.0).GetSafeNormal();
-	}
-	Mesh->UpdateMeshSection(1, WaterVerts, WaterNormals, TArray<FVector2D>(), WaterColors, TArray<FProcMeshTangent>());
-	Mesh->UpdateMeshSection(0, TArray<FVector>(), TArray<FVector>(), TArray<FVector2D>(), SandColors, TArray<FProcMeshTangent>());
 }
 
 bool USandWavesSubsystem::Tick(float DeltaTime)
 {
 	++Frames;
+	{ const double Now = FPlatformTime::Seconds(); if (SimTime > 10.f && LastWall > 0.0) { WallSum += Now - LastWall; ++WallN; } LastWall = Now; }   // 프레임 시간 (T5 비용)
 	UWorld* World = GetWorld();
 	APlayerController* PC = World ? UGameplayStatics::GetPlayerController(World, 0) : nullptr;
 	if (!Grid.IsValid() || !PC || !Cam) { return true; }
@@ -406,7 +399,7 @@ bool USandWavesSubsystem::Tick(float DeltaTime)
 	if (!bAuto) { UpdateCamera(PC, Dt); }
 	if (GridOuter.IsValid()) { GridOuter->Advance(Dt, 64); }   // 바깥 먼저 (안쪽 경계가 이 프레임 끝 값을 쓴다)
 	Grid->Advance(Dt, 64);
-	UpdateWaterMesh();
+	UpdateSwash();
 	if (GEngine)
 	{
 		GEngine->AddOnScreenDebugMessage(1, 0.f, FColor::White, FString::Printf(TEXT("파도 %.1fs · Hs %.2fm · 격자 GPU %.2f ms (서브스텝 %d) · 가운데 끌기 둘러보기 · WASDQE (Shift 빠르게)"), SimTime, Hs, Grid->LastGpuMs(), Grid->GetLastSubsteps()));
@@ -418,7 +411,7 @@ bool USandWavesSubsystem::Tick(float DeltaTime)
 		UE_LOG(LogSandWaves, Display, TEXT("T3 %.1fs: 스크린샷 %s · 격자 GPU %.2f ms · 서브스텝 %d"), SimTime, *Path, Grid->LastGpuMs(), Grid->GetLastSubsteps());
 		++NextShot;
 	}
-	if (bAuto && NextShot >= ShotTimes.Num() && SimTime > ShotTimes.Last() + 1.f) { FPlatformMisc::RequestExit(false); return false; }   // 마지막 스크린샷이 찍힐 프레임을 남긴다
+	if (bAuto && NextShot >= ShotTimes.Num() && SimTime > ShotTimes.Last() + 1.f) { UE_LOG(LogSandWaves, Display, TEXT("T5 프레임: 평균 %.2f ms (%d 프레임, 10 s 뒤) · 격자 GPU %.2f ms"), 1000.0 * WallSum / FMath::Max(WallN, 1), WallN, Grid->LastGpuMs()); FPlatformMisc::RequestExit(false); return false; }   // 마지막 스크린샷이 찍힐 프레임을 남긴다
 	return true;
 }
 

@@ -70,6 +70,12 @@ public:
 	/** 지하수 (η_gw, δ) 동기 내려받기 · 대수층 바닥 */
 	void DownloadGround(TArray<FVector2f>& OutGw, float* OutZaq = nullptr) const;
 	void DownloadNu(TArray<float>& OutNu) const;
+	/** T5: 프레임마다 (w, h, b, 젖음) 를 쓸 RGBA32F 렌더 타깃 (UAV 가능, NX·NY). 렌더 스레드 자원을 넘긴다 */
+	void SetExportTarget(class FTextureRenderTargetResource* Rt, float DryRatePerFrame);
+	/** 비동기 수면 내려받기 — 요청하고 다음 Tick 들에서 Poll (기다리지 않음). swash 구역 · 진단용 */
+	void RequestW();
+	bool PollW(TArray<float>& OutW);
+	float LastSimTime() const;
 	void DownloadSus(TArray<float>& OutS) const;   // 칸 S = hC (m), 동기
 	void DownloadBed(TArray<float>& OutBCorner) const;   // 꼭짓점 바닥 (NX+1)·(NY+1), 동기
 	void DownloadBreakDiag(TArray<FVector2f>& Out) const;

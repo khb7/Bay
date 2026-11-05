@@ -24,6 +24,10 @@
 #include "Materials/MaterialExpressionPreviousFrameSwitch.h"
 #include "Materials/MaterialExpressionTextureCoordinate.h"
 #include "Materials/MaterialExpressionVertexColor.h"
+#include "Materials/MaterialExpressionTextureObjectParameter.h"
+#include "Materials/MaterialExpressionWorldPosition.h"
+#include "Materials/MaterialExpressionActorPositionWS.h"
+#include "Engine/Texture.h"
 #include "Materials/MaterialFunction.h"
 #include "Misc/PackageName.h"
 #include "UObject/Package.h"
@@ -52,9 +56,40 @@ namespace
 		N->Quality = 1;
 		return N;
 	}
+
+	UMaterialExpressionTextureObjectParameter* AddGridTex(UMaterial* M)
+	{
+		UMaterialExpressionTextureObjectParameter* T = AddExpr<UMaterialExpressionTextureObjectParameter>(M, -1500, 900);
+		T->ParameterName = TEXT("GridTex");
+		T->Texture = LoadObject<UTexture>(nullptr, TEXT("/Engine/EngineResources/DefaultTexture.DefaultTexture"));
+		return T;
+	}
+	// 격자 텍스처 (w, h, b, 젖음) 를 읽는 Custom. 입력 Tex · Uv 는 공통, Extra 는 이름 있는 추가 입력
+	UMaterialExpressionCustom* AddGridCustom(UMaterial* M, UMaterialExpression* Tex, ECustomMaterialOutputType Type, const TCHAR* Code, int32 Y)
+	{
+		UMaterialExpressionTextureCoordinate* Uv = AddExpr<UMaterialExpressionTextureCoordinate>(M, -1300, Y);
+		UMaterialExpressionCustom* C = AddExpr<UMaterialExpressionCustom>(M, -1100, Y);
+		C->OutputType = Type;
+		C->Code = Code;
+		C->Inputs.SetNum(2);
+		C->Inputs[0].InputName = TEXT("Tex"); C->Inputs[0].Input.Connect(0, Tex);
+		C->Inputs[1].InputName = TEXT("Uv");  C->Inputs[1].Input.Connect(0, Uv);
+		return C;
+	}
+	// WPO: 정점을 격자 높이 (m → cm, 액터 기준) 로. Code 는 float Z (m) 를 return 하는 대신 Z 변수를 채운다
+	void ConnectGridWpo(UMaterial* M, UMaterialExpression* Tex, const FString& ZCode, FExpressionInput& Out)
+	{
+		UMaterialExpressionCustom* C = AddGridCustom(M, Tex, CMOT_Float3, *(TEXT("const float4 t = Tex.SampleLevel(TexSampler, Uv, 0);\n") + ZCode + TEXT("\nreturn float3(0, 0, Z * 100.0 + Ap.z - Wp.z);")), 1000);
+		UMaterialExpressionWorldPosition* Wp = AddExpr<UMaterialExpressionWorldPosition>(M, -1300, 1100);
+		UMaterialExpressionActorPositionWS* Ap = AddExpr<UMaterialExpressionActorPositionWS>(M, -1300, 1200);
+		C->Inputs.SetNum(4);
+		C->Inputs[2].InputName = TEXT("Wp"); C->Inputs[2].Input.Connect(0, Wp);
+		C->Inputs[3].InputName = TEXT("Ap"); C->Inputs[3].Input.Connect(0, Ap);
+		Out.Connect(0, C);
+	}
 }
 
-bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage)
+bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage, bool bGrid)
 {
 	// 이미 있으면 완전히 로드하고 옛 재질을 임시 패키지로 치운 뒤 같은 이름으로 다시 만든다 (일부만 로드된 패키지는 저장이 막힌다)
 	UPackage* Package = FPackageName::DoesPackageExist(PackagePath) ? LoadPackage(nullptr, *PackagePath, LOAD_None) : CreatePackage(*PackagePath);
@@ -86,6 +121,8 @@ bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage)
 	UMaterialExpressionVertexColor* VCol = AddExpr<UMaterialExpressionVertexColor>(M, -1100, 500);
 	UMaterialExpressionAdd* WetSum = AddExpr<UMaterialExpressionAdd>(M, -1000, 450);
 	WetSum->A.Connect(0, WetParam); WetSum->B.Connect(1, VCol);   // 출력 1 = R
+	UMaterialExpressionTextureObjectParameter* GridTex = bGrid ? AddGridTex(M) : nullptr;
+	if (bGrid) { WetSum->B.Connect(0, AddGridCustom(M, GridTex, CMOT_Float1, TEXT("return Tex.SampleLevel(TexSampler, Uv, 0).a;"), 500)); }   // T5: 젖음은 격자 텍스처 A
 	UMaterialExpressionSaturate* Wet = AddExpr<UMaterialExpressionSaturate>(M, -900, 400);
 	Wet->Input.Connect(0, WetSum);
 	// 젖음 곡선 Wc — 색 (#33). WetModel 0 이면 예전처럼 선형 W
@@ -173,7 +210,8 @@ bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage)
 	Zero->Constant = FLinearColor(0.f, 0.f, 0.f);
 	UMaterialExpressionPreviousFrameSwitch* Prev = AddExpr<UMaterialExpressionPreviousFrameSwitch>(M, -300, 720);
 	Prev->CurrentFrame.Connect(0, Zero); Prev->PreviousFrame.Connect(0, Back);
-	Ed->WorldPositionOffset.Connect(0, Prev);
+	if (bGrid) { ConnectGridWpo(M, GridTex, TEXT("const float Z = t.z;"), Ed->WorldPositionOffset); }
+	else { Ed->WorldPositionOffset.Connect(0, Prev); }
 	UMaterialExpressionConstant* Spec = AddExpr<UMaterialExpressionConstant>(M, -150, 330);
 	Spec->R = 0.35f;
 	Ed->Specular.Connect(0, Spec);
@@ -202,18 +240,33 @@ bool SandMaterial::BuildWater(const FString& PackagePath, FString& OutMessage)
 	UMaterialEditorOnlyData* Ed = M->GetEditorOnlyData();
 	M->BlendMode = BLEND_Translucent;
 	M->TranslucencyLightingMode = TLM_SurfacePerPixelLighting;
-	UMaterialExpressionVertexColor* VC = AddExpr<UMaterialExpressionVertexColor>(M, -700, 0);
+	// T5: 모든 값은 격자 텍스처 (w, h, b, 젖음) 에서 — 정점 색 대신 깊이 h/0.3 m · 수면 법선은 w 의 중앙 차분
+	UMaterialExpressionTextureObjectParameter* GridTex = AddGridTex(M);
+	UMaterialExpressionCustom* VC = AddGridCustom(M, GridTex, CMOT_Float1, TEXT("return saturate(Tex.SampleLevel(TexSampler, Uv, 0).y / 0.3);"), 0);
+	UMaterialExpressionScalarParameter* CellCm = AddExpr<UMaterialExpressionScalarParameter>(M, -1300, 300);
+	CellCm->ParameterName = TEXT("CellCm"); CellCm->DefaultValue = 5.f;
+	UMaterialExpressionCustom* Nrm = AddGridCustom(M, GridTex, CMOT_Float3, TEXT(
+		"float Wd, Ht; Tex.GetDimensions(Wd, Ht);\n"
+		"const float2 d = 1.0 / float2(Wd, Ht);\n"
+		"const float zx = Tex.SampleLevel(TexSampler, Uv + float2(d.x, 0), 0).x - Tex.SampleLevel(TexSampler, Uv - float2(d.x, 0), 0).x;\n"
+		"const float zy = Tex.SampleLevel(TexSampler, Uv + float2(0, d.y), 0).x - Tex.SampleLevel(TexSampler, Uv - float2(0, d.y), 0).x;\n"
+		"return normalize(float3(-zx * 100.0, -zy * 100.0, 2.0 * Cell));"), 300);
+	Nrm->Inputs.SetNum(3);
+	Nrm->Inputs[2].InputName = TEXT("Cell"); Nrm->Inputs[2].Input.Connect(0, CellCm);
+	Ed->Normal.Connect(0, Nrm);
+	M->bTangentSpaceNormal = false;
+	ConnectGridWpo(M, GridTex, TEXT("const float Z = t.y > 0.003 ? max(t.x, t.z + 0.002) : t.z - 0.03;"), Ed->WorldPositionOffset);
 	UMaterialExpressionConstant3Vector* Shallow = AddExpr<UMaterialExpressionConstant3Vector>(M, -500, -200);
 	Shallow->Constant = FLinearColor(0.20f, 0.26f, 0.22f);
 	UMaterialExpressionConstant3Vector* Deep = AddExpr<UMaterialExpressionConstant3Vector>(M, -500, -100);
 	Deep->Constant = FLinearColor(0.01f, 0.06f, 0.07f);
 	UMaterialExpressionLinearInterpolate* Col = AddExpr<UMaterialExpressionLinearInterpolate>(M, -300, -150);
-	Col->A.Connect(0, Shallow); Col->B.Connect(0, Deep); Col->Alpha.Connect(1, VC);
+	Col->A.Connect(0, Shallow); Col->B.Connect(0, Deep); Col->Alpha.Connect(0, VC);
 	Ed->BaseColor.Connect(0, Col);
 	UMaterialExpressionConstant* OpLo = AddExpr<UMaterialExpressionConstant>(M, -500, 100); OpLo->R = 0.25f;
 	UMaterialExpressionConstant* OpHi = AddExpr<UMaterialExpressionConstant>(M, -500, 160); OpHi->R = 0.85f;
 	UMaterialExpressionLinearInterpolate* Op = AddExpr<UMaterialExpressionLinearInterpolate>(M, -300, 120);
-	Op->A.Connect(0, OpLo); Op->B.Connect(0, OpHi); Op->Alpha.Connect(1, VC);
+	Op->A.Connect(0, OpLo); Op->B.Connect(0, OpHi); Op->Alpha.Connect(0, VC);
 	Ed->Opacity.Connect(0, Op);
 	UMaterialExpressionConstant* Rough = AddExpr<UMaterialExpressionConstant>(M, -300, 250); Rough->R = 0.06f;
 	Ed->Roughness.Connect(0, Rough);
@@ -229,6 +282,6 @@ bool SandMaterial::BuildWater(const FString& PackagePath, FString& OutMessage)
 	return bOk;
 }
 #else
-bool SandMaterial::Build(const FString&, FString& OutMessage) { OutMessage = TEXT("에디터 빌드에서만"); return false; }
+bool SandMaterial::Build(const FString&, FString& OutMessage, bool) { OutMessage = TEXT("에디터 빌드에서만"); return false; }
 bool SandMaterial::BuildWater(const FString&, FString& OutMessage) { OutMessage = TEXT("에디터 빌드에서만"); return false; }
 #endif

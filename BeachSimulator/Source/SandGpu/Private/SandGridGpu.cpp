@@ -47,6 +47,9 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER(float, AvalDry)
 	SHADER_PARAMETER(float, AvalWet)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, SedAccRW)
+	SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float4>, ExportRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, WetRW)
+	SHADER_PARAMETER(float, ExportDryRate)
 	SHADER_PARAMETER(uint32, bSus)
 	SHADER_PARAMETER(float, SusAss)
 	SHADER_PARAMETER(float, SusWs)
@@ -165,6 +168,7 @@ GRID_SHADER(FSandGridNestCS,   "NestCS")
 GRID_SHADER(FSandGridGwFluxCS, "GwFluxCS")
 GRID_SHADER(FSandGridGwApplyCS, "GwApplyCS")
 GRID_SHADER(FSandGridSedQCS,     "SedQCS")
+GRID_SHADER(FSandGridExportCS,    "ExportCS")
 GRID_SHADER(FSandGridSusCS,       "SusCS")
 GRID_SHADER(FSandGridSedBedCS,   "SedBedCS")
 GRID_SHADER(FSandGridSedApplyCS, "SedApplyCS")
@@ -172,7 +176,11 @@ GRID_SHADER(FSandGridSedCellCS,  "SedCellCS")
 
 struct FSandGridGpu::FState
 {
-	TRefCountPtr<FRDGPooledBuffer> SusC, SusC2, SusE, SedAcc;
+	TRefCountPtr<FRDGPooledBuffer> SusC, SusC2, SusE, SedAcc, Wet;
+	FTextureRenderTargetResource* ExportRt = nullptr; float ExportDry = 0.f;   // T5
+	TUniquePtr<FRHIGPUBufferReadback> RbW; bool bRbWBusy = false;              // 비동기 수면 (렌더 스레드)
+	std::atomic<bool> bWantW{ false };
+	FCriticalSection WLock; TArray<float> WReady; bool bWReady = false;
 	TRefCountPtr<FRDGPooledBuffer> BCorner, BSort, SedQ, SedDB, SedB0, SedDel, U0, U1, Level, FX, FY, Drain, AMax, Time, Waves;
 	TRefCountPtr<FRDGPooledBuffer> Dst, UV0, UV1, FsPrev, FsT, Disp;   // T3c 분산
 	TRefCountPtr<FRDGPooledBuffer> Nu, BrkDiag;                                // Kennedy 와점성 (D-M3-19)
@@ -315,7 +323,7 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 		S->BCorner = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.BCorner"), BC.GetData());
 		S->BSort = MakeBuffer(GraphBuilder, sizeof(float), BS.Num(), TEXT("SandGrid.BSort"), BS.GetData());
 		S->SedQ = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.SedQ"));
-		{ TArray<float> Z; Z.Init(0.f, N); S->SusC = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.SusC"), Z.GetData()); S->SusC2 = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.SusC2"), Z.GetData()); S->SusE = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.SusE"), Z.GetData()); S->SedAcc = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.SedAcc"), Z.GetData()); }
+		{ TArray<float> Z; Z.Init(0.f, N); S->SusC = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.SusC"), Z.GetData()); S->SusC2 = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.SusC2"), Z.GetData()); S->SusE = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.SusE"), Z.GetData()); S->SedAcc = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.SedAcc"), Z.GetData()); S->Wet = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.Wet"), Z.GetData()); }
 		S->SedDB = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.SedDB"));
 		S->SedB0 = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.SedB0"), BC.GetData());
 		{ TArray<float> Z; Z.Init(0.f, BC.Num()); S->SedDel = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.SedDel"), Z.GetData()); }
@@ -354,6 +362,20 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 	Params.BCorner.Empty(); Params.W.Empty(); Params.HU.Empty(); Params.HV.Empty(); Params.GwInit.Empty();   // Waves 는 둔다 (NumWaves)
 }
 
+void FSandGridGpu::SetExportTarget(FTextureRenderTargetResource* Rt, float DryRatePerFrame)
+{
+	FState* S = State;
+	ENQUEUE_RENDER_COMMAND(SandGridSetExport)([S, Rt, DryRatePerFrame](FRHICommandListImmediate&) { S->ExportRt = Rt; S->ExportDry = DryRatePerFrame; });
+}
+void FSandGridGpu::RequestW() { State->bWantW.store(true, std::memory_order_relaxed); }
+bool FSandGridGpu::PollW(TArray<float>& OutW)
+{
+	FScopeLock L(&State->WLock);
+	if (!State->bWReady) { return false; }
+	OutW = MoveTemp(State->WReady); State->WReady.Reset(); State->bWReady = false;
+	return true;
+}
+float FSandGridGpu::LastSimTime() const { return State->SimTimeSeen.load(std::memory_order_relaxed); }
 float FSandGridGpu::LastGpuMs() const { return State ? State->GpuMsSeen.load(std::memory_order_relaxed) : 0.f; }
 
 void FSandGridGpu::StepFixed(float Dt, int32 NumSteps) { Run(true, Dt, NumSteps); }
@@ -391,6 +413,19 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 			uint64 A = 0, Bt = 0;
 			if (RHIGetRenderQueryResult(S->RbTs[h][0].GetReference(), A, false) && RHIGetRenderQueryResult(S->RbTs[h][1].GetReference(), Bt, false)) { S->GpuMsSeen.store((float)(Bt - A) * 0.001f, std::memory_order_relaxed); }
 			S->RbHead = (h + 1) % FState::NumRb; --S->RbCount;
+		}
+		if (S->bRbWBusy && S->RbW->IsReady())
+		{
+			const int32 Nw = P.NX * P.NY;
+			if (const FVector4f* Src = (const FVector4f*)S->RbW->Lock(Nw * sizeof(FVector4f)))
+			{
+				FScopeLock L(&S->WLock);
+				S->WReady.SetNumUninitialized(Nw);
+				for (int32 k = 0; k < Nw; ++k) { S->WReady[k] = Src[k].X; }
+				S->bWReady = true;
+			}
+			S->RbW->Unlock();
+			S->bRbWBusy = false;
 		}
 		const int32 Wr = S->RbCount < FState::NumRb ? (S->RbHead + S->RbCount) % FState::NumRb : -1;   // 링이 차면 이번엔 readback 안 함
 		{
@@ -604,6 +639,20 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 					FSandGridParams Y = B; Y.TimeRO = GraphBuilder.CreateSRV(Tm); Y.GwQRO = GraphBuilder.CreateSRV(GwQB); Y.GwRW = GraphBuilder.CreateUAV(GwB); Y.UOutRW = GraphBuilder.CreateUAV(U0);
 					AddGridPass<FSandGridGwApplyCS>(GraphBuilder, RDG_EVENT_NAME("SandGridGwApply"), ShaderMap, Y, GC);
 				}
+			}
+			if (S->ExportRt && S->ExportRt->GetRenderTargetTexture())
+			{
+				// T5 — 렌더 텍스처로 내보내기 (m3-plan T5)
+				FRDGTextureRef Tx = GraphBuilder.RegisterExternalTexture(CreateRenderTarget(S->ExportRt->GetRenderTargetTexture(), TEXT("SandGrid.Export")));
+				FSandGridParams X = B; X.URO = GraphBuilder.CreateSRV(U0); X.ExportRW = GraphBuilder.CreateUAV(Tx); X.WetRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->Wet)); X.ExportDryRate = S->ExportDry;
+				AddGridPass<FSandGridExportCS>(GraphBuilder, RDG_EVENT_NAME("SandGridExport"), ShaderMap, X, GC);
+				GraphBuilder.SetTextureAccessFinal(Tx, ERHIAccess::SRVMask);
+			}
+			if (!S->bRbWBusy && S->bWantW.exchange(false, std::memory_order_relaxed))
+			{
+				if (!S->RbW.IsValid()) { S->RbW = MakeUnique<FRHIGPUBufferReadback>(TEXT("SandGrid.RbW")); }
+				AddEnqueueCopyPass(GraphBuilder, S->RbW.Get(), U0, P.NX * P.NY * sizeof(FVector4f));
+				S->bRbWBusy = true;
 			}
 			GraphBuilder.AddPass(RDG_EVENT_NAME("SandGridTs1"), ERDGPassFlags::NeverCull, [Q = (Wr >= 0 ? S->RbTs[Wr][1] : S->Ts[1]).GetReference()](FRHICommandListImmediate& Cmd) { Cmd.EndRenderQuery(Q); });
 			if (Wr >= 0) { AddEnqueueCopyPass(GraphBuilder, S->Rb[Wr].Get(), Tm, 4 * sizeof(float)); }

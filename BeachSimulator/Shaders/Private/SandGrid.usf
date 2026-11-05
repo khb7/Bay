@@ -1008,6 +1008,22 @@ float SusEAt(int i, int j)
 	if (j < 0 || j >= (int)NY) { if (bPeriodicY == 0u) { return 0.f; } j = WJ(j); }
 	return SusERO[Idx((uint)i, (uint)j)];
 }
+// T5 렌더: 프레임 끝에 칸마다 (w, h, b, 젖음) 를 텍스처로 — 재질 WPO 가 읽는다 (CPU 왕복 없음)
+RWTexture2D<float4>       ExportRW;
+RWStructuredBuffer<float> WetRW;    // 칸 젖음 (1 = 물 닿음, 서서히 마름)
+float ExportDryRate;                // 이번 프레임 줄어드는 양
+[numthreads(8, 8, 1)]
+void ExportCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x, j = Tid.y;
+	if (i >= NX || j >= NY) { return; }
+	const uint k = Idx(i, j);
+	const float W = URO[k].x, B = BCell(i, j), h = W - B;
+	const float Wt = h > 0.003f ? 1.f : max(0.f, WetRW[k] - ExportDryRate);
+	WetRW[k] = Wt;
+	ExportRW[uint2(i, j)] = float4(W, h, B, Wt);
+}
+
 float SedBc(int ci, int cj)
 {
 	if (bPeriodicY != 0u) { cj = ((cj % (int)NY) + (int)NY) % (int)NY; }

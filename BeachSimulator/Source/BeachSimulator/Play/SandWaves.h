@@ -52,7 +52,7 @@ public:
 private:
 	bool Tick(float DeltaTime);
 	void UpdateCamera(class APlayerController* PC, float Dt);
-	void UpdateWaterMesh();
+	void UpdateSwash();
 
 	TUniquePtr<class FSandGridGpu> Grid;
 	TUniquePtr<class FSandGridGpu> GridOuter;   // -nest
@@ -61,20 +61,22 @@ private:
 	UPROPERTY()
 	TObjectPtr<class ACameraActor> Cam = nullptr;
 
-	int32 NX = 0, NY = 0, Step = 2;       // 메시는 Step 칸마다 정점
+	int32 NX = 0, NY = 0, Step = 1;       // 메시는 Step 칸마다 정점
 	float Dx = 0.05f;
 	TArray<float> BCorner, BCellV;         // m
 	FSwashZone Swash; bool bZone = false; float Xs0 = 0.f;
-	TArray<float> Wet;                     // 정점별 젖음 (물이 닿은 뒤 서서히 마름) — 모래 재질 정점 색 R
-	TArray<FVector> WaterVerts, WaterNormals;
-	TArray<FColor> WaterColors, SandColors;
+	TArray<float> LastW;                   // 비동기 수면 (1 s 마다, swash · 진단)
+	float NextWReq = 0.f;
+	UPROPERTY()
+	TObjectPtr<class UTextureRenderTarget2D> GridRt = nullptr;   // T5: (w, h, b, 젖음)
 	float SimTime = 0.f, Hs = 0.f, H0 = 0.f;
 	float Yaw = 0.f, Pitch = -20.f;
 	FVector2D LastMouse = FVector2D::ZeroVector;
 	bool bLooking = false;
 
 	FString ShotPath;
-	int32 Frames = 0;
+	int32 Frames = 0, WallN = 0;
+	double LastWall = 0.0, WallSum = 0.0;
 	int32 LastDiag = -1;
 	TArray<float> ShotTimes;
 	int32 NextShot = 0;
