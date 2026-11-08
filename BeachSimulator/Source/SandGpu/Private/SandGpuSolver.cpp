@@ -17,6 +17,26 @@ IMPLEMENT_MODULE(FDefaultModuleImpl, SandGpu);
 //
 // 여섯 패스가 한 파라미터 구조를 나눠 쓴다. 같은 버퍼의 SRV(…RO)와 UAV(…RW)가 함께 들어 있지만
 // 셰이더가 안 쓰는 쪽은 FComputeShaderUtils::AddPass 의 ClearUnusedGraphResources 가 패스마다 비운다.
+// M4 T1 지면 묶기 — 격자 바닥이 없으면 평면 (더미 버퍼 하나)
+template <typename TParams>
+static void BindGround(FRDGBuilder& GraphBuilder, TParams& X, const FSandGpuFrameParams* P)
+{
+	FRDGBufferRef B;
+	if (P && P->GroundBed.IsValid())
+	{
+		B = GraphBuilder.RegisterExternalBuffer(P->GroundBed);
+		X.GroundMode = 1u; X.GroundNX = (uint32)P->GroundNX; X.GroundNY = (uint32)P->GroundNY; X.GroundCell = P->GroundCell; X.GroundOrigin = P->GroundOrigin; X.GroundZ = P->GroundZ;
+	}
+	else
+	{
+		B = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(float), 1), TEXT("SandGpu.NoGround"));
+		const float Z = 0.f;
+		GraphBuilder.QueueBufferUpload(B, &Z, sizeof(float), ERDGInitialDataFlags::None);
+		X.GroundMode = 0u; X.GroundNX = X.GroundNY = 1u; X.GroundCell = 1.f; X.GroundOrigin = FVector2f::ZeroVector; X.GroundZ = 0.f;
+	}
+	X.GroundBed = GraphBuilder.CreateSRV(B);
+}
+
 BEGIN_SHADER_PARAMETER_STRUCT(FSandSolverParams, )
 	SHADER_PARAMETER(uint32, NumParticles)
 	SHADER_PARAMETER(uint32, NumInternal)
@@ -32,6 +52,13 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandSolverParams, )
 	SHADER_PARAMETER(float, Kc)
 	SHADER_PARAMETER(float, SorOmega)
 	SHADER_PARAMETER(float, Friction)
+	SHADER_PARAMETER(uint32, GroundMode)
+	SHADER_PARAMETER(uint32, GroundNX)
+	SHADER_PARAMETER(uint32, GroundNY)
+	SHADER_PARAMETER(float, GroundCell)
+	SHADER_PARAMETER(FVector2f, GroundOrigin)
+	SHADER_PARAMETER(float, GroundZ)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, GroundBed)
 	SHADER_PARAMETER(float, MaxDepenVel)
 	SHADER_PARAMETER(uint32, bMassSplit)
 	SHADER_PARAMETER(float, BondAlphaTilde)
@@ -131,6 +158,13 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandFrameParams, )
 	SHADER_PARAMETER(float, WarmGapTol)
 	SHADER_PARAMETER(uint32, bWarmTangent)
 	SHADER_PARAMETER(float, Friction)
+	SHADER_PARAMETER(uint32, GroundMode)
+	SHADER_PARAMETER(uint32, GroundNX)
+	SHADER_PARAMETER(uint32, GroundNY)
+	SHADER_PARAMETER(float, GroundCell)
+	SHADER_PARAMETER(FVector2f, GroundOrigin)
+	SHADER_PARAMETER(float, GroundZ)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, GroundBed)
 	SHADER_PARAMETER(FVector3f, Gravity)
 	SHADER_PARAMETER(float, BondStretchBreak)
 	SHADER_PARAMETER(uint32, bBondsDry)
@@ -535,6 +569,7 @@ namespace
 			T.Kc       = D.Kc;
 			T.SorOmega = D.SorOmega;
 			T.Friction = D.Friction;
+			BindGround(GraphBuilder, T, nullptr);
 			T.MaxDepenVel = 0.f;
 			T.bMassSplit     = D.bMassSplit ? 1 : 0;
 			T.BondAlphaTilde = D.BondAlphaTilde;
@@ -911,6 +946,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			F.WarmGapTol   = P.WarmGapTol;
 			F.bWarmTangent = P.bWarmTangent ? 1 : 0;
 			F.Friction     = P.Friction;
+			BindGround(GraphBuilder, F, &P);
 			F.Gravity      = P.Gravity;
 			F.BondStretchBreak = P.BreakStretch;
 			F.bBondsDry    = P.bBondsDry ? 1 : 0;
@@ -1111,6 +1147,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 			T.Kc       = P.Kc;
 			T.SorOmega = P.SorOmega;
 			T.Friction = P.Friction;
+			BindGround(GraphBuilder, T, &P);
 			T.MaxDepenVel = P.MaxDepenVel;
 			T.bMassSplit     = P.bMassSplit ? 1 : 0;
 			T.BondAlphaTilde = P.BondAlphaTilde;

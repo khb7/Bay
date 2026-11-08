@@ -53,6 +53,9 @@ private:
 	bool Tick(float DeltaTime);
 	void UpdateCamera(class APlayerController* PC, float Dt);
 	void UpdateSwash();
+	void InitSand(const TCHAR* Cmd);
+	void UpdateSand();
+	float BedAt(const TArray<float>& Bc, float X, float Y) const;   // m, 꼭짓점 이선형
 	void UpdateTools(class APlayerController* PC, float Mul);
 	void ApplyStamp(const struct FSandToolStamp& T);
 	bool PickBed(const FVector& O, const FVector& Dir, FVector2f& OutXY, float& OutZ) const;
@@ -80,6 +83,14 @@ private:
 	FVector2f LastToolXY = FVector2f::ZeroVector;
 	int32 LastTool = -1;
 	bool bToolTest = false;
+	// M4 T1 (m4-plan): 입자 모래 — 좌표 = 격자 좌표 (cm), 지면 = 격자 바닥 버퍼
+	TUniquePtr<class FSandSpike> Sand;
+	UPROPERTY()
+	TObjectPtr<class USandSurfaceComponent> SandComp = nullptr;
+	TArray<FVector4f> SandPos;
+	FVector2f SandC = FVector2f::ZeroVector;   // 블록 가운데 (m)
+	float SandNextLog = 0.f, SandGpuSum = 0.f; int32 SandGpuN = 0;
+	bool bSandTest = false, bSandPitDone = false;
 	float Yaw = 0.f, Pitch = -20.f;
 	FVector2D LastMouse = FVector2D::ZeroVector;
 	bool bLooking = false;

@@ -1,0 +1,26 @@
+// M4 T1 — 입자 지면 (m4-plan T1). GroundMode 0: 평면 z = 0 (M0–M2 그대로) · 1: 격자 바닥 BCorner (m, 꼭짓점 (NX+1)·(NY+1)) 의 이선형 높이.
+// 반환 (법선 n, 간극) — 간극 = 접평면까지 거리 − 반지름 = n.z·(z − H) − R. 평면이면 n = (0,0,1) 로 원래 식과 같다.
+#pragma once
+
+uint   GroundMode;
+uint   GroundNX;
+uint   GroundNY;
+float  GroundCell;     // 격자 칸 (입자 단위 cm)
+float2 GroundOrigin;   // 입자 좌표에서 꼭짓점 (0,0) 위치
+float  GroundZ;        // 입자 좌표에서 b = 0 높이
+StructuredBuffer<float> GroundBed;
+
+float4 GroundGap(float3 P, float R)
+{
+	if (GroundMode == 0u) { return float4(0.f, 0.f, 1.f, P.z - R); }
+	const float2 G = clamp((P.xy - GroundOrigin) / GroundCell, 0.f, float2(GroundNX, GroundNY));
+	const uint i = min((uint)G.x, GroundNX - 1u), j = min((uint)G.y, GroundNY - 1u);
+	const float u = G.x - i, v = G.y - j;
+	const uint W1 = GroundNX + 1u;
+	const float b00 = GroundBed[j * W1 + i], b10 = GroundBed[j * W1 + i + 1u], b01 = GroundBed[(j + 1u) * W1 + i], b11 = GroundBed[(j + 1u) * W1 + i + 1u];
+	const float H = GroundZ + 100.f * lerp(lerp(b00, b10, u), lerp(b01, b11, u), v);
+	const float Hx = 100.f / GroundCell * lerp(b10 - b00, b11 - b01, v);
+	const float Hy = 100.f / GroundCell * lerp(b01 - b00, b11 - b10, u);
+	const float3 N = normalize(float3(-Hx, -Hy, 1.f));
+	return float4(N, N.z * (P.z - H) - R);
+}

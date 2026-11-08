@@ -23,6 +23,7 @@
 #include "../Grid/SandGridCpu.h"
 #include "../Mesh/SandMaterialBuilder.h"
 #include "../Spike/SandSpike.h"
+#include "../Mesh/SandSurfaceComponent.h"
 #include "DrawDebugHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSandWaves, Log, All);
@@ -333,6 +334,7 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 		FInputModeGameAndUI Mode; Mode.SetHideCursorDuringCapture(false);
 		PC->SetInputMode(Mode);
 	}
+	if (FParse::Param(Cmd, TEXT("wavesand"))) { InitSand(Cmd); }
 	FParse::Value(Cmd, TEXT("sandwavesshot="), ShotPath);
 	ShotTimes = { 20.f, 35.f, 50.f };
 	TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &USandWavesSubsystem::Tick));
@@ -341,6 +343,9 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 void USandWavesSubsystem::Deinitialize()
 {
 	FTSTicker::GetCoreTicker().RemoveTicker(TickHandle);
+	if (SandComp) { SandComp->SetParticles({}); }
+	FlushRenderingCommands();
+	Sand.Reset();
 	Grid.Reset();
 	GridOuter.Reset();
 	Super::Deinitialize();
@@ -470,6 +475,90 @@ void USandWavesSubsystem::UpdateTools(APlayerController* PC, float Mul)
 	}
 }
 
+float USandWavesSubsystem::BedAt(const TArray<float>& Bc, float X, float Y) const
+{
+	const float Gx = FMath::Clamp(X / Dx, 0.f, (float)NX), Gy = FMath::Clamp(Y / Dx, 0.f, (float)NY);
+	const int32 i = FMath::Min((int32)Gx, NX - 1), j = FMath::Min((int32)Gy, NY - 1);
+	const float u = Gx - i, v = Gy - j; const int32 W1 = NX + 1;
+	return FMath::Lerp(FMath::Lerp(Bc[j * W1 + i], Bc[j * W1 + i + 1], u), FMath::Lerp(Bc[(j + 1) * W1 + i], Bc[(j + 1) * W1 + i + 1], u), v);
+}
+
+void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
+{
+	// 젖은 모래 블록 (기본 50 × 50 × 40 cm) 을 물가 위 마른 땅에 — 기둥마다 바닥은 그 자리 지면 위 (경사를 따른다). 결합을 맺어 선다
+	float Half = 25.f, Tall = 40.f, Wet = 0.4f;
+	FParse::Value(Cmd, TEXT("sandhalf="), Half); FParse::Value(Cmd, TEXT("sandtall="), Tall); FParse::Value(Cmd, TEXT("sandwet="), Wet);
+	bSandTest = FParse::Param(Cmd, TEXT("wavesandtest"));
+	FSandParams SP;
+	SP.Substeps = 1; SP.WarmStart = 1.f; SP.WarmGapTol = 0.05f; SP.bGpuResident = true;
+	ApplySandGpuProfile(TEXT("-gpu2"), SP);
+	SP.bGatherApply = false; SP.bMassSplit = false;
+	const float R = SP.Radius, D = 2.f * R;
+	SandC = FVector2f(Xs1 - 2.5f, NY * Dx * 0.5f);
+	TArray<FVector3f> Pos; TArray<float> Inv;
+	const int32 Nh = FMath::Max(1, FMath::RoundToInt(Half / D)), Nz = FMath::Max(1, FMath::RoundToInt(Tall / D));
+	for (int32 a = -Nh; a < Nh; ++a)
+	for (int32 c = -Nh; c < Nh; ++c)
+	{
+		const float X = SandC.X * 100.f + (a + 0.5f) * D, Y = SandC.Y * 100.f + (c + 0.5f) * D;
+		const float Z0 = 100.f * BedAt(BCorner, X / 100.f, Y / 100.f) + R + 0.05f;
+		for (int32 k = 0; k < Nz; ++k) { Pos.Add(FVector3f(X, Y, Z0 + k * D)); Inv.Add(1.f); }
+	}
+	Sand = MakeUnique<FSandSpike>();
+	Sand->GroundSrc.GroundBed = Grid->GetBedBuffer(); Sand->GroundSrc.GroundNX = NX; Sand->GroundSrc.GroundNY = NY;
+	Sand->GroundSrc.GroundCell = Dx * 100.f; Sand->GroundSrc.GroundOrigin = FVector2f::ZeroVector; Sand->GroundSrc.GroundZ = 0.f;
+	Sand->InitCustom(SP, Pos, Inv);
+	Sand->SetWGlobal(Wet);
+	const int32 Bonds = Sand->FormBonds();
+	Sand->bAsyncStats = true;
+	Sand->Step(1.f / 60.f);   // GPU 상주 시뮬은 첫 스텝에서 만들어진다 — 메셔에 넘기기 전에
+	AActor* Actor = GetWorld()->SpawnActor<AActor>();
+	SandComp = NewObject<USandSurfaceComponent>(Actor);
+	Actor->SetRootComponent(SandComp);
+	SandComp->RegisterComponent();
+	Actor->SetActorLocation(GridBase);
+	const FVector3f C3(SandC.X * 100.f, SandC.Y * 100.f, 100.f * BedAt(BCorner, SandC.X, SandC.Y));
+	SandComp->SetSimSource(Sand->GetGpuSim(), C3 - FVector3f(150.f, 150.f, 60.f), C3 + FVector3f(150.f, 150.f, Tall + 60.f));
+	UE_LOG(LogSandWaves, Display, TEXT("M4 T1 모래 블록: 입자 %d · 반지름 %.2f cm · %d×%d×%d · 가운데 (%.2f, %.2f) m · W %.2f · 결합 %d"), Pos.Num(), R, 2 * Nh, 2 * Nh, Nz, SandC.X, SandC.Y, Wet, Bonds);
+}
+
+void USandWavesSubsystem::UpdateSand()
+{
+	if (!Sand.IsValid()) { return; }
+	if (bSandTest && !bSandPitDone && SimTime >= 3.f)
+	{
+		// 블록 +y 가장자리에 구덩이 (반지름 30 cm, 40 L) — 밑동이 걸친 쪽이 무너져 들어가야 한다
+		Grid->QueueBedStamp(SandC.X, SandC.Y + 0.30f, 0.3f, -0.04f);
+		bSandPitDone = true;
+		UE_LOG(LogSandWaves, Display, TEXT("M4 T1 %.1fs: 구덩이 (%.2f, %.2f) R 0.30 m · 40 L"), SimTime, SandC.X, SandC.Y + 0.30f);
+	}
+	Sand->Step(1.f / 60.f);
+	SandComp->UpdateFromSim();
+	SandGpuSum += Sand->LastGpuMs(); ++SandGpuN;
+	Sand->GetGpuSim()->RequestPositionsAsync();
+	const bool bGot = Sand->GetGpuSim()->TakePositionsAsync(SandPos);
+	if (bSandTest && bGot && SimTime >= SandNextLog)
+	{
+		SandNextLog = SimTime + 1.f;
+		TArray<float> Bc; Grid->DownloadBed(Bc);
+		const float R = Sand->GetParams().Radius;
+		float MinGap = 1e9f, Top = -1e9f; int32 Alive = 0, InPit = 0, Bad = 0;
+		for (const FVector4f& X : SandPos)
+		{
+			if (SandPool::IsGrave(FVector3f(X))) { continue; }
+			if (!FMath::IsFinite(X.X + X.Y + X.Z)) { ++Bad; continue; }
+			++Alive;
+			const float Gx = X.X / 100.f, Gy = X.Y / 100.f, H = 100.f * BedAt(Bc, Gx, Gy), Hb0 = 100.f * BedAt(BCorner, Gx, Gy);
+			MinGap = FMath::Min(MinGap, X.Z - H - R);
+			Top = FMath::Max(Top, X.Z + R - Hb0);
+			if (X.Z - R < Hb0 - 1.f) { ++InPit; }   // 처음 지면보다 1 cm 넘게 아래 = 구덩이로 들어감
+		}
+		UE_LOG(LogSandWaves, Display, TEXT("M4 T1 %.0fs: 입자 %d (비유한 %d) · 처음 지면 위 최고 %.1f cm · 지면 최소 간극 %.2f cm · 구덩이 안 %d · 입자 GPU 평균 %.2f ms · 격자 GPU %.2f ms"),
+			SimTime, Alive, Bad, Top, MinGap, InPit, SandGpuSum / FMath::Max(SandGpuN, 1), Grid->LastGpuMs());
+		SandGpuSum = 0.f; SandGpuN = 0;
+	}
+}
+
 void USandWavesSubsystem::UpdateSwash()
 {
 	// T5: 렌더는 GPU 안에서 끝남 — CPU 는 swash 마찰 구역 · 진단용 수면만 1 s 마다 비동기로
@@ -506,6 +595,7 @@ bool USandWavesSubsystem::Tick(float DeltaTime)
 	UpdateTools(PC, PC->IsInputKeyDown(EKeys::LeftShift) ? 3.f : 1.f);
 	if (GridOuter.IsValid()) { GridOuter->Advance(Dt, 64); }   // 바깥 먼저 (안쪽 경계가 이 프레임 끝 값을 쓴다)
 	Grid->Advance(Dt, 64);
+	UpdateSand();   // M4 T1: 격자 다음 (이번 프레임 바닥 위에서)
 	UpdateSwash();
 	if (GEngine)
 	{

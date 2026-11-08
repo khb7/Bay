@@ -4,6 +4,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "RenderGraphResources.h"
 
 struct FSandGridGpuInit
 {
@@ -88,6 +89,8 @@ public:
 	float LastGpuMs() const;   // 비동기 타임스탬프 (1~3 프레임 전 Run, ms)
 	int32 GetLastSubsteps() const { return LastSubsteps; }
 
+	/** M4 T1: 꼭짓점 바닥 버퍼 (m, (NX+1)·(NY+1)) — 입자 지면이 같은 GPU 버퍼를 읽는다. Init 뒤 고정 핸들 */
+	TRefCountPtr<FRDGPooledBuffer> GetBedBuffer() const;
 	int32 GetNX() const { return Params.NX; }
 	int32 GetNY() const { return Params.NY; }
 

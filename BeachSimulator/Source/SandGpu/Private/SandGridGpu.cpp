@@ -380,6 +380,7 @@ bool FSandGridGpu::PollW(TArray<float>& OutW)
 	OutW = MoveTemp(State->WReady); State->WReady.Reset(); State->bWReady = false;
 	return true;
 }
+TRefCountPtr<FRDGPooledBuffer> FSandGridGpu::GetBedBuffer() const { return State->BCorner; }
 float FSandGridGpu::LastSimTime() const { return State->SimTimeSeen.load(std::memory_order_relaxed); }
 float FSandGridGpu::LastGpuMs() const { return State ? State->GpuMsSeen.load(std::memory_order_relaxed) : 0.f; }
 

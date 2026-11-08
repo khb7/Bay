@@ -19,6 +19,7 @@
 //   StatsCS           감쇠 · 그룹별 부분합 (Σ|v| · max|v| · 자유 수 · Σ|λn|)
 
 #include "/Engine/Public/Platform.ush"
+#include "SandGround.ush"   // M4 T1 지면
 
 #define SMALL 1.e-4f
 #define SCAN_GROUP 1024          // 그룹당 2048 원소
@@ -492,9 +493,10 @@ void WarmPredictCS(uint3 Tid : SV_DispatchThreadID)
 		V += Imp * Wi;
 
 		// 지면
-		float GL = (P.z <= Radius) ? max(0.f, GroundLambdaRW[p] * WarmStart) : 0.f;
+		const float4 Gn = GroundGap(P, Radius);   // M4 T1
+		float GL = (Gn.w <= 0.f) ? max(0.f, GroundLambdaRW[p] * WarmStart) : 0.f;
 		GroundLambdaRW[p] = GL;
-		V.z += GL * Wi;
+		V += Gn.xyz * (GL * Wi);
 
 		// 벽 — 상자만 워밍한다 (CPU 와 같다. 원통은 0)
 		float4 WL = 0;
@@ -528,7 +530,7 @@ void WarmPredictCS(uint3 Tid : SV_DispatchThreadID)
 	else
 	{
 		PrevPosRW[p] = float4(P, 0);
-		GroundLambdaRW[p] = (P.z <= Radius) ? max(0.f, GroundLambdaRW[p] * WarmStart) : 0.f;   // CPU 는 고정 입자도 λ 를 든다 (적용은 w=0 이라 없음)
+		GroundLambdaRW[p] = (GroundGap(P, Radius).w <= 0.f) ? max(0.f, GroundLambdaRW[p] * WarmStart) : 0.f;   // CPU 는 고정 입자도 λ 를 든다 (적용은 w=0 이라 없음)
 		WallLambdaRW[p] = 0;
 	}
 }

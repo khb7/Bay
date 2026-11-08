@@ -10,6 +10,7 @@
 //   ApplyBondsCS       입자별 gather + 지면 + 벽 (지면·벽은 입자 하나짜리라 같은 스레드에서 순차로 이어 풀어도 CPU 와 같다)
 
 #include "/Engine/Public/Platform.ush"
+#include "SandGround.ush"   // M4 T1 지면
 
 #define SMALL 1.e-4f   // UE_KINDA_SMALL_NUMBER
 
@@ -522,21 +523,24 @@ void ApplyBondsCS(uint3 Tid : SV_DispatchThreadID)
 	// --- 지면 (무한 질량) ---
 	{
 		float LambdaN = GroundLambdaRW[p];
-		const float Gap = P.z - Radius;
+		const float4 Gn = GroundGap(P, Radius);   // M4 T1: 법선 · 간극 (평면이면 (0,0,1), z − R)
+		const float3 Ng = Gn.xyz;
+		const float Gap = Gn.w;
 		if (Gap > 0.f && LambdaN <= 0.f)
 		{
 			LambdaN = 0.f;
 		}
 		else
 		{
-			const float ResN = Kv * V.z + (Kc * InvH) * ((MaxDepenVel > 0.f) ? max(Gap, -MaxDepenVel * StepDt) : Gap);   // #51 지면에도 분리 속도 상한
+			const float ResN = Kv * dot(V, Ng) + (Kc * InvH) * ((MaxDepenVel > 0.f) ? max(Gap, -MaxDepenVel * StepDt) : Gap);   // #51 지면에도 분리 속도 상한
 			float DLambdaN   = -(SorOmega / Wi) * ResN;
 			const float OldN = LambdaN;
 			LambdaN  = max(0.f, LambdaN + DLambdaN);
 			DLambdaN = LambdaN - OldN;
 
-			const float3 DriftT = float3(P.xy - PP.xy, 0.f);
-			const float3 NuT    = float3(V.xy, 0.f);
+			const float3 Dd = P - PP;
+			const float3 DriftT = Dd - Ng * dot(Dd, Ng);
+			const float3 NuT    = V - Ng * dot(V, Ng);
 			float3 DLambdaTan = (NuT * Kv + DriftT * (Kc * InvH)) * (-(SorOmega / Wi));
 			const float MaxTan = Friction * LambdaN;
 			const float L = length(DLambdaTan);
@@ -544,7 +548,7 @@ void ApplyBondsCS(uint3 Tid : SV_DispatchThreadID)
 			{
 				DLambdaTan = (L > SMALL) ? DLambdaTan * (MaxTan / L) : float3(0, 0, 0);
 			}
-			const float3 Impulse = float3(0, 0, DLambdaN) + DLambdaTan;
+			const float3 Impulse = Ng * DLambdaN + DLambdaTan;
 			V += Impulse * Wi;
 			P += Impulse * (Wi * StepDt);
 		}

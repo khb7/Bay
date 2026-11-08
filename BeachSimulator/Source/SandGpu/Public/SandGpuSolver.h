@@ -125,6 +125,11 @@ struct FSandGpuFrameParams
 	float  PileDropVel = 0.f;         // 놓을 때 아래로 주는 속도 (cm/s)
 	// A5 — 통계를 기다리지 않는다 (한 프레임 이상 늦은 값). 사건 결합 프레임만 동기. 결정성 시험(커맨드릿)은 끈다
 	bool   bAsyncStats = false;
+	// M4 T1 지면 — 비면 평면 z = 0. 격자 바닥 버퍼 (FSandGridGpu::GetBedBuffer, m) 와 입자 좌표 (cm) 사이 변환
+	TRefCountPtr<FRDGPooledBuffer> GroundBed;
+	int32  GroundNX = 0, GroundNY = 0;
+	float  GroundCell = 5.f, GroundZ = 0.f;
+	FVector2f GroundOrigin = FVector2f::ZeroVector;
 };
 
 /** 프레임 통계 — UpdateSettleState 가 쓰는 것 전부 */

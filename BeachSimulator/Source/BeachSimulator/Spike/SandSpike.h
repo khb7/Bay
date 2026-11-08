@@ -371,6 +371,7 @@ public:
 	int32 GetLastPiled() const { return LastPiled; }
 	int32 GetLastBondsCompacted() const { return LastBondsCompacted; }
 	float PileDropVel = 0.f;
+	FSandGpuFrameParams GroundSrc;   // M4 T1 — GroundBed · NX · NY · Cell · Origin · Z 만 쓴다 (비면 평면)
 	bool  bAsyncStats = false;                          // A5 — GPU 통계를 기다리지 않는다 (플레이용. 결정성 시험은 끈다)                            // 쌓기: 놓을 때 아래로 속도 (cm/s)
 	int32 HandCap = 600;                                // 손 용량 — 반지름 10cm 구 한 삽 (m2-plan)
 	float DrainTau = 0.f;                               // M2 임시 배수 τ (초). 0 = 끔. W > WOptEnd 를 WOptEnd 쪽으로
