@@ -130,6 +130,8 @@ struct FSandGpuFrameParams
 	TRefCountPtr<FRDGPooledBuffer> GroundStruct;   // M4 T2 b_struct (FSandGridGpu::GetStructBuffer) — 지면 = Bed − Struct
 	TRefCountPtr<FRDGPooledBuffer> GroundWater;    // M4 T3 격자 상태 U0 (FSandGridGpu::GetWaterBuffer) — 물 닿은 입자 W = 1
 	bool   bWetting = false;
+	TRefCountPtr<FRDGPooledBuffer> GroundLoad;     // M4 T4 ① 칸 벽 하중 (FSandGridGpu::GetLoadBuffer, N)
+	float  LoadMassKg = 0.f;                       // 입자 질량. 0 = 하중 끔
 	int32  GroundNX = 0, GroundNY = 0;
 	float  GroundCell = 5.f, GroundZ = 0.f;
 	FVector2f GroundOrigin = FVector2f::ZeroVector;

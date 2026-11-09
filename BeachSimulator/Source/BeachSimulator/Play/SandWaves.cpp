@@ -514,6 +514,12 @@ void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
 	Sand = MakeUnique<FSandSpike>();
 	Sand->GroundSrc.GroundBed = Grid->GetBedBuffer(); Sand->GroundSrc.GroundStruct = Grid->GetStructBuffer(); Sand->GroundSrc.GroundNX = NX; Sand->GroundSrc.GroundNY = NY;
 	Sand->GroundSrc.GroundCell = Dx * 100.f; Sand->GroundSrc.GroundOrigin = FVector2f::ZeroVector; Sand->GroundSrc.GroundZ = 0.f;
+	if (!FParse::Param(Cmd, TEXT("noload")))
+	{
+		// M4 T4 ① 벽 하중 — 입자 한 개 = 지름 D 정육면체의 모래 (석영 2650 kg/m³ · 공극률은 격자 SedPor 와 같은 0.4)
+		Sand->GroundSrc.GroundWater = Grid->GetWaterBuffer(); Sand->GroundSrc.GroundLoad = Grid->GetLoadBuffer();
+		Sand->GroundSrc.LoadMassKg = FMath::Cube(D / 100.f) * 2650.f * (1.f - 0.4f);
+	}
 	Sand->InitCustom(SP, Pos, Inv);
 	if (FParse::Param(Cmd, TEXT("nowetting")))
 	{
@@ -599,14 +605,17 @@ void USandWavesSubsystem::UpdateSand()
 		{
 			// M4 T3: 입자 W — 포화 (≥ WSat, 결합 0) 수 · 밑 10 cm / 위 쪽 평균 W
 			const TArray<float>& Wt = Sand->GetWet(); const TArray<FVector3f>& Ps = Sand->GetPositions();
-			int32 NSat = 0, NLo = 0, NHi = 0; double WLo = 0, WHi = 0;
+			int32 NSat = 0, NLo = 0, NHi = 0; double WLo = 0, WHi = 0; FVector3d Cg(0); int32 NCg = 0;
 			for (int32 i = 0; i < FMath::Min(Wt.Num(), Ps.Num()); ++i)
 			{
 				if (SandPool::IsGrave(Ps[i])) { continue; }
-				NSat += Wt[i] >= Sand->GetParams().WSat;
+				NSat += Wt[i] >= Sand->GetParams().WSat; Cg += FVector3d(Ps[i]); ++NCg;
 				const float Hb0 = 100.f * BedAt(BCorner, Ps[i].X / 100.f, Ps[i].Y / 100.f);
 				if (Ps[i].Z - Hb0 < 10.f) { ++NLo; WLo += Wt[i]; } else { ++NHi; WHi += Wt[i]; }
 			}
+			TArray<FVector2f> Ld; Grid->DownloadLoad(Ld); FVector2d Fs(0); double Fa = 0; for (const FVector2f& F : Ld) { Fs += FVector2d(F); Fa += F.Size(); }
+			Cg /= FMath::Max(NCg, 1);
+			UE_LOG(LogSandWaves, Display, TEXT("M4 T4 %.0fs: 벽 하중 합 (%.1f, %.1f) N · Σ|F| %.1f N · 입자 무게중심 (%.1f, %.1f, %.1f) cm"), SimTime, Fs.X, Fs.Y, Fa, Cg.X, Cg.Y, Cg.Z);
 			UE_LOG(LogSandWaves, Display, TEXT("M4 T3 %.0fs: 포화 입자 %d · 밑 10 cm 평균 W %.2f (%d) · 위 평균 W %.2f (%d)"), SimTime, NSat, WLo / FMath::Max(NLo, 1), NLo, WHi / FMath::Max(NHi, 1), NHi);
 		}
 		UE_LOG(LogSandWaves, Display, TEXT("M4 T2 %.0fs: b_struct 최대 %.2f m · 벽 칸 젖음 %d/%d · 터널 칸 젖음 %d/%d · 둘레 칸 젖음 %d/%d"), SimTime, SMax, WetWall, NWall, WetTun, NTun, WetRing, NRing);

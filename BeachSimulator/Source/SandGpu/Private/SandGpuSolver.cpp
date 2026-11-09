@@ -296,6 +296,11 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandToolParams, )
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, GroundBed)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, GroundStruct)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, GroundWater)
+	SHADER_PARAMETER(uint32, LoadMode)
+	SHADER_PARAMETER(float, LoadMassKg)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FVector2f>, GroundLoad)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, LoadCountRW)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, LoadCountRO)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, Stamps)
 	SHADER_PARAMETER(uint32, NumPileTargets)
 	SHADER_PARAMETER(float, PileDropVel)
@@ -337,6 +342,7 @@ END_SHADER_PARAMETER_STRUCT()
 
 #define TOOL_USF "/Project/Private/SandTool.usf"
 SAND_SHADER(FSandStampCS,    FSandToolParams, TOOL_USF, "StampCS")
+SAND_SHADER(FSandLoadCountCS, FSandToolParams, TOOL_USF, "LoadCountCS")
 SAND_SHADER(FSandBondToolCS, FSandToolParams, TOOL_USF, "BondToolCS")
 SAND_SHADER(FSandPileCS,       FSandToolParams, TOOL_USF, "PileCS")
 SAND_SHADER(FSandPileFinishCS, FSandToolParams, TOOL_USF, "PileFinishCS")
@@ -1062,7 +1068,8 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 					AddCopyBufferPass(GraphBuilder, HandCountBuf, sizeof(uint32), Z, 0, 3 * sizeof(uint32));
 				}
 				const bool bWetting = P.bWetting && P.GroundBed.IsValid() && P.GroundWater.IsValid();
-				const bool bTool = P.Stamps.Num() > 0 || P.DrainTau > 0.f || P.PileTargets.Num() > 0 || bWetting;
+				const bool bLoad = P.GroundLoad.IsValid() && P.GroundBed.IsValid() && P.GroundWater.IsValid() && P.LoadMassKg > 0.f;
+				const bool bTool = P.Stamps.Num() > 0 || P.DrainTau > 0.f || P.PileTargets.Num() > 0 || bWetting || bLoad;
 				BondTrigBuf = ScratchBuffer(GraphBuilder, TEXT("SandSim.BondTrig"), sizeof(uint32), LN);
 				AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(BondTrigBuf), 0u);
 				if (bTool)
@@ -1084,7 +1091,22 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 					TP.WDry = P.WDry; TP.WOptStart = P.WOptStart; TP.WOptEnd = P.WOptEnd; TP.WSat = P.WSat;
 					BindGround(GraphBuilder, TP, &P);
 					TP.WetMode = bWetting ? 1u : 0u; TP.WetRadius = P.Radius;
-					TP.GroundWater = GraphBuilder.CreateSRV(bWetting ? GraphBuilder.RegisterExternalBuffer(P.GroundWater) : GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), 1), TEXT("SandSim.NoWater")));
+					TP.GroundWater = GraphBuilder.CreateSRV((bWetting || bLoad) ? GraphBuilder.RegisterExternalBuffer(P.GroundWater) : GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), 1), TEXT("SandSim.NoWater")));
+					// M4 T4 ① — 칸별 잠겨 닿은 입자 수를 먼저 센다
+					TP.LoadMode = bLoad ? 1u : 0u; TP.LoadMassKg = FMath::Max(P.LoadMassKg, 1e-6f);
+					const int32 NCell = bLoad ? P.GroundNX * P.GroundNY : 1;
+					FRDGBufferRef LoadCnt = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), NCell), TEXT("SandSim.LoadCount"));
+					AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(LoadCnt), 0u);
+					if (bLoad)
+					{
+						TP.GroundLoad = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(P.GroundLoad));
+					}
+					else
+					{
+						FRDGBufferRef Lz = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector2f), 1), TEXT("SandSim.NoLoad"));
+						AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(Lz), 0u);
+						TP.GroundLoad = GraphBuilder.CreateSRV(Lz);
+					}
 					FRDGBufferRef StBuf = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), St.Num()), TEXT("SandSim.Stamps"));
 					GraphBuilder.QueueBufferUpload(StBuf, St.GetData(), St.Num() * sizeof(FVector4f), ERDGInitialDataFlags::None);   // 지역 배열 — 복사
 					TP.Stamps = GraphBuilder.CreateSRV(StBuf);
@@ -1106,6 +1128,13 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 					TP.HandCountRW = GraphBuilder.CreateUAV(HandCountBuf);
 					TP.BondIJ = GraphBuilder.CreateSRV(BondIJ);
 					TP.BondTrigRW = GraphBuilder.CreateUAV(BondTrigBuf);
+					if (bLoad)
+					{
+						FSandToolParams TC = TP; TC.LoadCountRW = GraphBuilder.CreateUAV(LoadCnt);
+						TC.VelRW = nullptr; TC.PrevPosRW = nullptr; TC.WetRW = nullptr; TC.GroundLambdaRW = nullptr; TC.WallLambdaRW = nullptr; TC.HandWRW = nullptr; TC.HandCountRW = nullptr; TC.BondTrigRW = nullptr;
+						AddDirectPass<FSandLoadCountCS>(GraphBuilder, RDG_EVENT_NAME("SandLoadCount"), ShaderMap, TC, LN, 64);
+					}
+					TP.LoadCountRO = GraphBuilder.CreateSRV(LoadCnt);
 					AddDirectPass<FSandStampCS>(GraphBuilder, RDG_EVENT_NAME("SandStamp"), ShaderMap, TP, LN, 64);
 					if (P.PileTargets.Num() > 0)
 					{

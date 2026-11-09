@@ -50,6 +50,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER(FVector2f, StructOrigin)
 	SHADER_PARAMETER(float, StructZ)
 	SHADER_PARAMETER(float, StructR)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FVector2f>, LoadRW)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, BSort)
 	SHADER_PARAMETER(uint32, bMorph)
 	SHADER_PARAMETER(float, SedThc)
@@ -190,11 +191,12 @@ GRID_SHADER(FSandGridStampBedCS, "StampBedCS")
 GRID_SHADER(FSandGridStampWaterCS, "StampWaterCS")
 GRID_SHADER(FSandGridOccCS, "OccCS")
 GRID_SHADER(FSandGridStructCS, "StructCS")
+GRID_SHADER(FSandGridLoadCS, "LoadCS")
 
 struct FSandGridGpu::FState
 {
 	TRefCountPtr<FRDGPooledBuffer> SusC, SusC2, SusE, SedAcc, Wet;
-	TRefCountPtr<FRDGPooledBuffer> SCorner, Occ, StructPos;   // M4 T2 — b_struct · 점유 비트 · 시험용 고정 위치
+	TRefCountPtr<FRDGPooledBuffer> SCorner, Occ, StructPos, Load;   // M4 T2 — b_struct · 점유 비트 · 시험용 고정 위치
 	FTextureRenderTargetResource* ExportRt = nullptr; float ExportDry = 0.f;   // T5
 	TUniquePtr<FRHIGPUBufferReadback> RbW; bool bRbWBusy = false;              // 비동기 수면 (렌더 스레드)
 	std::atomic<bool> bWantW{ false };
@@ -345,6 +347,7 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 		S->SedDB = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.SedDB"));
 		S->SedB0 = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.SedB0"), BC.GetData());
 		{ TArray<float> Z; Z.Init(0.f, BC.Num()); S->SedDel = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.SedDel"), Z.GetData()); S->SCorner = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.SCorner"), Z.GetData()); }
+		{ TArray<FVector2f> Z; Z.Init(FVector2f::ZeroVector, N); S->Load = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.Load"), Z.GetData()); }
 		{ TArray<uint32> Z; Z.Init(0u, 2 * BC.Num()); S->Occ = MakeBuffer(GraphBuilder, sizeof(uint32), Z.Num(), TEXT("SandGrid.Occ"), Z.GetData()); }
 		S->U0 = MakeBuffer(GraphBuilder, sizeof(FVector4f), N, TEXT("SandGrid.U0"), U.GetData());
 		S->U1 = MakeBuffer(GraphBuilder, sizeof(FVector4f), N, TEXT("SandGrid.U1"));
@@ -397,6 +400,26 @@ bool FSandGridGpu::PollW(TArray<float>& OutW)
 TRefCountPtr<FRDGPooledBuffer> FSandGridGpu::GetBedBuffer() const { return State->BCorner; }
 TRefCountPtr<FRDGPooledBuffer> FSandGridGpu::GetStructBuffer() const { return State->SCorner; }
 TRefCountPtr<FRDGPooledBuffer> FSandGridGpu::GetWaterBuffer() const { return State->U0; }
+TRefCountPtr<FRDGPooledBuffer> FSandGridGpu::GetLoadBuffer() const { return State->Load; }
+void FSandGridGpu::DownloadLoad(TArray<FVector2f>& Out) const
+{
+	const int32 N = Params.NX * Params.NY;
+	Out.SetNum(N);
+	FState* S = State;
+	ENQUEUE_RENDER_COMMAND(SandGridDownloadLoad)([S, N, &Out](FRHICommandListImmediate& RHICmdList)
+	{
+		FRHIGPUBufferReadback Rb(TEXT("SandGrid.DlLoad"));
+		{
+			FRDGBuilder GraphBuilder(RHICmdList, RDG_EVENT_NAME("SandGridDownloadLoad"));
+			AddEnqueueCopyPass(GraphBuilder, &Rb, GraphBuilder.RegisterExternalBuffer(S->Load), N * sizeof(FVector2f));
+			GraphBuilder.Execute();
+		}
+		RHICmdList.SubmitAndBlockUntilGPUIdle();
+		if (const void* Src = Rb.Lock(N * sizeof(FVector2f))) { FMemory::Memcpy(Out.GetData(), Src, N * sizeof(FVector2f)); }
+		Rb.Unlock();
+	});
+	FlushRenderingCommands();
+}
 void FSandGridGpu::SetStructSource(const FSandGpuSim* Sim, const FStructMap& Map)
 {
 	StructSim = Sim; StructMap = Map;
@@ -745,6 +768,12 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 					FSandGridParams Y = B; Y.TimeRO = GraphBuilder.CreateSRV(Tm); Y.GwQRO = GraphBuilder.CreateSRV(GwQB); Y.GwRW = GraphBuilder.CreateUAV(GwB); Y.UOutRW = GraphBuilder.CreateUAV(U0);
 					AddGridPass<FSandGridGwApplyCS>(GraphBuilder, RDG_EVENT_NAME("SandGridGwApply"), ShaderMap, Y, GC);
 				}
+			}
+			if (bDoStruct)
+			{
+				// M4 T4 ① 벽 하중 — 프레임 끝 상태로 (입자는 다음 Step 에서 받는다)
+				FSandGridParams X = B; X.URO = GraphBuilder.CreateSRV(U0); X.LoadRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->Load));
+				AddGridPass<FSandGridLoadCS>(GraphBuilder, RDG_EVENT_NAME("SandGridLoad"), ShaderMap, X, GC);
 			}
 			if (S->ExportRt && S->ExportRt->GetRenderTargetTexture())
 			{

@@ -1027,6 +1027,22 @@ void ExportCS(uint3 Tid : SV_DispatchThreadID)
 	ExportRW[uint2(i, j)] = float4(W, h, B - Sm, Wt);   // 렌더 지형 = 모래 b (성은 입자 메시가 그린다)
 }
 
+// M4 T4 ① 벽 하중 (m4-plan T4, papers D-M4-1): SWE 가 b_struct 경사로 물에 거는 원천 −g·h·∇b_struct 의 반작용.
+// 칸마다 F = ρ·g·h·∇b_struct·Δx·Δy (N, 벽 안쪽 방향). 계수 없음
+RWStructuredBuffer<float2> LoadRW;
+[numthreads(8, 8, 1)]
+void LoadCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint i = Tid.x, j = Tid.y;
+	if (i >= NX || j >= NY) { return; }
+	const uint k = Idx(i, j);
+	const float h = URO[k].x - BCell(i, j);
+	const uint c = j * (NX + 1) + i;
+	const float s00 = SCorner[c], s10 = SCorner[c + 1], s01 = SCorner[c + NX + 1], s11 = SCorner[c + NX + 2];
+	const float2 G = float2((s10 + s11 - s00 - s01) / (2.f * Dx), (s01 + s11 - s00 - s10) / (2.f * Dy));
+	LoadRW[k] = h > 0.003f ? 1000.f * Gravity * h * G * Dx * Dy : float2(0.f, 0.f);
+}
+
 float SedBc(int ci, int cj)
 {
 	if (bPeriodicY != 0u) { cj = ((cj % (int)NY) + (int)NY) % (int)NY; }

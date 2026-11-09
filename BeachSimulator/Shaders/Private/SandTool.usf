@@ -39,6 +39,13 @@ float  GroundZ;
 float  WetRadius;
 StructuredBuffer<float>  GroundBed;     // 물이 보는 유효 바닥 (b + b_struct, m, 꼭짓점)
 StructuredBuffer<float4> GroundWater;   // 격자 상태 U0 (x = 수면 w, m, 칸)
+// M4 T4 ① 벽 하중: 격자 칸 하중 (N) 을 그 칸에 잠겨 닿은 입자 수로 나눠 속도에 (Δv = F·Δt / m)
+uint   LoadMode;
+float  LoadMassKg;                        // 입자 한 개 질량 (D³ · ρs · (1 − n))
+StructuredBuffer<float2> GroundLoad;
+RWStructuredBuffer<uint> LoadCountRW;
+StructuredBuffer<uint>   LoadCountRO;
+
 
 uint  NumPileTargets;
 float PileDropVel;
@@ -98,6 +105,40 @@ float CohesionOfW(float W)
 	return (WSat - W) / max(WSat - WOptEnd, 1.e-4f);
 }
 
+// 입자가 칸 (i, j) 에 걸치고 (가로 거리 ≤ R) 그 칸에 물 (h > 3 mm) 이 있고 입자 밑이 그 칸 수면 아래인가
+bool SubmergedIn(float3 P, int i, int j)
+{
+	if (i < 0 || j < 0 || i >= (int)GroundNX || j >= (int)GroundNY) { return false; }
+	const float2 Lo = GroundOrigin + float2(i, j) * GroundCell, Hi = Lo + GroundCell;
+	const float2 Dd = max(0.f, max(Lo - P.xy, P.xy - Hi));
+	if (dot(Dd, Dd) > WetRadius * WetRadius) { return false; }
+	const uint W1 = GroundNX + 1u, c = (uint)j * W1 + (uint)i;
+	const float w = GroundWater[(uint)j * GroundNX + (uint)i].x;
+	const float h = w - 0.25f * (GroundBed[c] + GroundBed[c + 1u] + GroundBed[c + W1] + GroundBed[c + W1 + 1u]);
+	return h > 0.003f && P.z - WetRadius < GroundZ + 100.f * w;
+}
+bool HasLoad(int i, int j) { const float2 F = GroundLoad[(uint)j * GroundNX + (uint)i]; return F.x != 0.f || F.y != 0.f; }
+
+[numthreads(64, 1, 1)]
+void LoadCountCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint p = Tid.x;
+	if (p >= NumParticles) { return; }
+	const float4 P4 = PosRW[p];
+	if (IsGrave(P4.xyz) || LoadMode == 0u) { return; }
+	const uint Sl = SleepRW[p];
+	if (!(P4.w > 0.f || (Sl >= SleepFrames && SleepFrames > 0u))) { return; }
+	const int ci = (int)floor((P4.x - GroundOrigin.x) / GroundCell), cj = (int)floor((P4.y - GroundOrigin.y) / GroundCell);
+	for (int dj = -1; dj <= 1; ++dj)
+	for (int di = -1; di <= 1; ++di)
+	{
+		if (SubmergedIn(P4.xyz, ci + di, cj + dj) && HasLoad(ci + di, cj + dj))
+		{
+			uint Dummy; InterlockedAdd(LoadCountRW[(uint)(cj + dj) * GroundNX + (uint)(ci + di)], 1u, Dummy);
+		}
+	}
+}
+
 [numthreads(64, 1, 1)]
 void StampCS(uint3 Tid : SV_DispatchThreadID)
 {
@@ -112,31 +153,28 @@ void StampCS(uint3 Tid : SV_DispatchThreadID)
 
 	float W = WetRW[p];
 	if (DrainTau > 0.f && W > DrainTarget) { W -= (W - DrainTarget) * min(1.f, StepDt / DrainTau); }
-	if (WetMode != 0u && W < 1.f)
+	float3 V = VelRW[p].xyz;
+	bool bWake = false;
+	if (WetMode != 0u || LoadMode != 0u)
 	{
-		const float2 G = (P4.xy - GroundOrigin) / GroundCell;
-		const int ci = (int)floor(G.x), cj = (int)floor(G.y);
-		const uint W1 = GroundNX + 1u;
-		float Surf = -1.e30f;
+		const int ci = (int)floor((P4.x - GroundOrigin.x) / GroundCell), cj = (int)floor((P4.y - GroundOrigin.y) / GroundCell);
+		float2 F = 0;
+		bool bSub = false;
 		for (int dj = -1; dj <= 1; ++dj)
 		for (int di = -1; di <= 1; ++di)
 		{
 			const int i = ci + di, j = cj + dj;
-			if (i < 0 || j < 0 || i >= (int)GroundNX || j >= (int)GroundNY) { continue; }
-			// 칸 사각형까지 가로 거리 ≤ R 이면 입자가 그 칸에 걸친다
-			const float2 Lo = GroundOrigin + float2(i, j) * GroundCell, Hi = Lo + GroundCell;
-			const float2 Dd = max(0.f, max(Lo - P4.xy, P4.xy - Hi));
-			if (dot(Dd, Dd) > WetRadius * WetRadius) { continue; }
-			const uint c = (uint)j * W1 + (uint)i;
-			const float w = GroundWater[(uint)j * GroundNX + (uint)i].x;
-			const float h = w - 0.25f * (GroundBed[c] + GroundBed[c + 1u] + GroundBed[c + W1] + GroundBed[c + W1 + 1u]);
-			if (h > 0.003f) { Surf = max(Surf, w); }
+			if (!SubmergedIn(P4.xyz, i, j)) { continue; }
+			bSub = true;
+			if (LoadMode != 0u && HasLoad(i, j))
+			{
+				const uint k = (uint)j * GroundNX + (uint)i;
+				F += GroundLoad[k] / (float)max(LoadCountRO[k], 1u);
+			}
 		}
-		if (P4.z - WetRadius < GroundZ + 100.f * Surf) { W = 1.f; }
+		if (WetMode != 0u && bSub) { W = 1.f; }   // T3 젖음 — 포화
+		if (F.x != 0.f || F.y != 0.f) { V.xy += 100.f * F * StepDt / LoadMassKg; bWake = true; }   // cm/s
 	}
-
-	float3 V = VelRW[p].xyz;
-	bool bWake = false;
 	for (uint s = 0; s < NumStamps; ++s)
 	{
 		const float4 A = Stamps[2 * s], B = Stamps[2 * s + 1];

@@ -679,6 +679,68 @@ namespace
 		UE_LOG(LogSandGrid, Display, TEXT("T6 3 s 뒤: Σb 차 %.3e L · Σh 차 %.3e L · 유한 %d"), (B4 - B3) * 1e3, (H4 - H3) * 1e3, FMath::IsFinite(B4 + H4) ? 1 : 0);
 	}
 
+	void GpuLoad()
+	{
+		// M4 T4 ① (m4-plan): 벽 하중 F = ρ g h ∇b_struct ΔA. ① 한쪽 물 0.2 m → ΣFx = ½ρgh²·폭 ② 양쪽 같은 물 → ΣFx ≈ 0
+		// ③ Lobovský 외 (2014) 댐 붕괴 (H 0.3 · L 0.6 · 벽까지 1.0 m) — 벽 앞 수심 · 바닥 정수압 · 단위 폭 힘의 시간 이력
+		const double Dx = 0.05; const int32 NY = 16; const float Wd = NY * Dx;
+		FSandGridGpu::FStructMap Map;
+		auto Wall = [&](TArray<FVector4f>& P, float X0, float X1, float Hgt)
+		{
+			for (float x = X0 * 100.f + 2.5f; x < X1 * 100.f; x += 5.f) for (int32 c = 0; c < NY; ++c) for (float z = 2.5f; z < Hgt * 100.f; z += 5.f) { P.Add(FVector4f(x, 2.5f + 5.f * c, z, 1.f)); }
+		};
+		auto SumF = [&](FSandGridGpu& G, int32 NX, float XA, float XB)
+		{
+			TArray<FVector2f> L; G.DownloadLoad(L); FVector2d S(0, 0);
+			for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i < NX; ++i) { const float X = (i + 0.5f) * Dx; if (X >= XA && X <= XB) { S += FVector2d(L[j * NX + i]); } }
+			return S;
+		};
+		for (int32 Case = 0; Case < 2; ++Case)
+		{
+			const int32 NX = 120;
+			FSandGridGpuInit In = GroundGrid(NX, NY, Dx, [](double) { return 0.0; });
+			In.bGround = false; In.bMorph = false; In.bPeriodicY = true;
+			for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i < NX; ++i) { const float X = (i + 0.5f) * Dx; In.W[j * NX + i] = (X < 3.f || Case == 1) ? 0.2f : 0.f; }
+			FSandGridGpu G; G.Init(In);
+			TArray<FVector4f> P; Wall(P, 3.0f, 3.3f, 0.4f); G.SetStructPositions(P, Map);
+			for (int32 n = 0; n < 10; ++n) { G.StepFixed(1e-3f, 100); }
+			const FVector2d F = SumF(G, NX, 2.5f, 3.8f), FL = SumF(G, NX, 2.5f, 3.15f), FR = SumF(G, NX, 3.15f, 3.8f);
+			const double Ex = 0.5 * 1000.0 * 9.81 * 0.2 * 0.2 * Wd;
+			UE_LOG(LogSandGrid, Display, TEXT("T4 %s 1 s: ΣFx %.2f N (앞면 %.2f · 뒷면 %.2f) · ΣFy %.2e N · 기대 앞면 ½ρgh²·폭 = %.2f N → 비 %.3f"),
+				Case == 0 ? TEXT("① 한쪽 물") : TEXT("② 양쪽 물"), F.X, FL.X, FR.X, F.Y, Ex, FL.X / Ex);
+		}
+		{
+			const int32 NX = 64; const float H = 0.3f, XG = 0.5f, XW = 1.5f;   // 저수 0.5–1.1 (가운데 벽 x < 0.5) · 수문 x 1.1 · 하류 벽 x 2.1 (= 수문에서 1.0 m)
+			FSandGridGpuInit In = GroundGrid(NX, NY, Dx, [](double) { return 0.0; });
+			In.bGround = false; In.bMorph = false; In.bPeriodicY = true;
+			for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i < NX; ++i) { const float X = (i + 0.5f) * Dx; In.W[j * NX + i] = (X > XG && X < XG + 0.6f) ? H : 0.f; }
+			FSandGridGpu G; G.Init(In);
+			// 하류 벽 앞면 = XG + 0.6 + 1.0 = 2.1 m
+			TArray<FVector4f> P; Wall(P, 0.2f, XG, 0.65f); Wall(P, XG + 0.6f + XW - 0.5f, XG + 0.6f + XW - 0.2f, 0.65f);
+			G.SetStructPositions(P, Map);
+			G.StepFixed(1e-3f, 1);
+			float HMax = 0.f, FMax = 0.f, THit = -1.f, TH = 0.f, TF = 0.f;
+			const float Ts = FMath::Sqrt(9.81f / H);
+			FString Hist;
+			for (int32 n = 1; n <= 300; ++n)
+			{
+				G.StepFixed(1e-3f, 10);
+				const float T = n * 0.01f;
+				TArray<float> Bc, W, Hu, Hv; G.DownloadBed(Bc); G.Download(W, Hu, Hv);
+				const int32 i = (int32)(2.025f / Dx), c = i;   // 벽 앞 칸 (j = 0) — 벽 걸친 칸 (2.05–2.10) 바로 앞
+				const float h = W[i] - 0.25f * (Bc[c] + Bc[c + 1] + Bc[c + NX + 1] + Bc[c + NX + 2]);
+				const float Fw = (float)SumF(G, NX, 1.9f, 2.3f).X / Wd;   // 단위 폭 (N/m)
+				if (THit < 0.f && h > 0.003f) { THit = T; }
+				if (h > HMax) { HMax = h; TH = T; }
+				if (Fw > FMax) { FMax = Fw; TF = T; }
+				if (n % 25 == 0) { Hist += FString::Printf(TEXT(" t*%.1f:h%.3f/F%.0f(heq %.3f)"), T * Ts, h, Fw, FMath::Sqrt(FMath::Max(0.f, 2.f * Fw / 9810.f))); }
+			}
+			UE_LOG(LogSandGrid, Display, TEXT("T4 ③ Lobovský H 0.3: 도착 t* %.2f · 벽 앞 최대 h %.3f m (t* %.2f) → 바닥 정수압 %.1f mb · z 15/30/80 mm %.1f/%.1f/%.1f mb · 최대 단위 폭 힘 %.0f N/m (t* %.2f, ½ρg h²max = %.0f · 같은 힘의 정수압 깊이 %.3f m → 바닥 %.1f mb)"),
+				THit * Ts, HMax, TH * Ts, 1000.f * 9.81f * HMax / 100.f, 1000.f * 9.81f * (HMax - 0.015f) / 100.f, 1000.f * 9.81f * (HMax - 0.03f) / 100.f, 1000.f * 9.81f * (HMax - 0.08f) / 100.f, FMax, TF * Ts, 0.5f * 1000.f * 9.81f * HMax * HMax, FMath::Sqrt(2.f * FMax / 9810.f), 9810.f * FMath::Sqrt(2.f * FMax / 9810.f) / 100.f);
+			UE_LOG(LogSandGrid, Display, TEXT("T4 ③ 이력:%s"), *Hist);
+		}
+	}
+
 	void GpuStruct()
 	{
 		// M4 T2 (m4-plan): 고정 입자 → b_struct. 물 0.2 m 고인 평평한 바닥에 벽 (30×30×40 cm) 과 터널 블록 (40×40×40 cm, 가운데 20 cm 폭 · 밑 5–20 cm 비움).
@@ -787,6 +849,7 @@ int32 RunSandGridGpuTest(const FString& Params)
 	if (FParse::Param(*Params, TEXT("gridground"))) { GpuGround(); return 0; }
 	if (FParse::Param(*Params, TEXT("gridtool"))) { GpuTool(); return 0; }
 	if (FParse::Param(*Params, TEXT("gridstruct"))) { GpuStruct(); return 0; }
+	if (FParse::Param(*Params, TEXT("gridload"))) { GpuLoad(); return 0; }
 	if (FParse::Param(*Params, TEXT("gridmorph"))) { GpuMorph(); GpuSus(); return 0; }
 	if (FParse::Param(*Params, TEXT("gridbous")))
 	{
