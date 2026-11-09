@@ -29,6 +29,16 @@ float WDry;
 float WOptStart;
 float WOptEnd;
 float WSat;
+// M4 T3 젖음 (m4-plan T3): 격자 물이 닿은 입자는 포화 (W = 1). 물 닿음 = 입자가 가로로 R 안에 걸친 칸 중 h > 3 mm 인 칸의 수면 아래로 입자 밑이 들어감
+uint   WetMode;
+uint   GroundNX;
+uint   GroundNY;
+float  GroundCell;
+float2 GroundOrigin;
+float  GroundZ;
+float  WetRadius;
+StructuredBuffer<float>  GroundBed;     // 물이 보는 유효 바닥 (b + b_struct, m, 꼭짓점)
+StructuredBuffer<float4> GroundWater;   // 격자 상태 U0 (x = 수면 w, m, 칸)
 
 uint  NumPileTargets;
 float PileDropVel;
@@ -102,6 +112,28 @@ void StampCS(uint3 Tid : SV_DispatchThreadID)
 
 	float W = WetRW[p];
 	if (DrainTau > 0.f && W > DrainTarget) { W -= (W - DrainTarget) * min(1.f, StepDt / DrainTau); }
+	if (WetMode != 0u && W < 1.f)
+	{
+		const float2 G = (P4.xy - GroundOrigin) / GroundCell;
+		const int ci = (int)floor(G.x), cj = (int)floor(G.y);
+		const uint W1 = GroundNX + 1u;
+		float Surf = -1.e30f;
+		for (int dj = -1; dj <= 1; ++dj)
+		for (int di = -1; di <= 1; ++di)
+		{
+			const int i = ci + di, j = cj + dj;
+			if (i < 0 || j < 0 || i >= (int)GroundNX || j >= (int)GroundNY) { continue; }
+			// 칸 사각형까지 가로 거리 ≤ R 이면 입자가 그 칸에 걸친다
+			const float2 Lo = GroundOrigin + float2(i, j) * GroundCell, Hi = Lo + GroundCell;
+			const float2 Dd = max(0.f, max(Lo - P4.xy, P4.xy - Hi));
+			if (dot(Dd, Dd) > WetRadius * WetRadius) { continue; }
+			const uint c = (uint)j * W1 + (uint)i;
+			const float w = GroundWater[(uint)j * GroundNX + (uint)i].x;
+			const float h = w - 0.25f * (GroundBed[c] + GroundBed[c + 1u] + GroundBed[c + W1] + GroundBed[c + W1 + 1u]);
+			if (h > 0.003f) { Surf = max(Surf, w); }
+		}
+		if (P4.z - WetRadius < GroundZ + 100.f * Surf) { W = 1.f; }
+	}
 
 	float3 V = VelRW[p].xyz;
 	bool bWake = false;

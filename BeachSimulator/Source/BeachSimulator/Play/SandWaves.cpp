@@ -515,7 +515,18 @@ void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
 	Sand->GroundSrc.GroundBed = Grid->GetBedBuffer(); Sand->GroundSrc.GroundStruct = Grid->GetStructBuffer(); Sand->GroundSrc.GroundNX = NX; Sand->GroundSrc.GroundNY = NY;
 	Sand->GroundSrc.GroundCell = Dx * 100.f; Sand->GroundSrc.GroundOrigin = FVector2f::ZeroVector; Sand->GroundSrc.GroundZ = 0.f;
 	Sand->InitCustom(SP, Pos, Inv);
-	Sand->SetWGlobal(Wet);
+	if (FParse::Param(Cmd, TEXT("nowetting")))
+	{
+		Sand->SetWGlobal(Wet);
+	}
+	else
+	{
+		// M4 T3 젖음 — 입자별 W (물 닿으면 1) · 배수는 M2 놀이와 같은 임시 이완 (τ 10 s → WOptEnd)
+		Sand->GroundSrc.GroundWater = Grid->GetWaterBuffer(); Sand->GroundSrc.bWetting = true;
+		Sand->SetWGlobal(Wet);
+		Sand->SetWet([Wet](int32, const FVector3f&) { return Wet; });
+		Sand->DrainTau = 10.f; FParse::Value(Cmd, TEXT("sanddrain="), Sand->DrainTau);
+	}
 	const int32 Bonds = Sand->FormBonds();
 	Sand->bAsyncStats = true;
 	Sand->Step(1.f / 60.f);   // GPU 상주 시뮬은 첫 스텝에서 만들어진다 — 메셔에 넘기기 전에
@@ -585,6 +596,19 @@ void USandWavesSubsystem::UpdateSand()
 		}
 		UE_LOG(LogSandWaves, Display, TEXT("M4 T1 %.0fs: 입자 %d (비유한 %d) · 처음 지면 위 최고 %.1f cm · 지면 최소 간극 %.2f cm · 구덩이 안 %d · 입자 GPU 평균 %.2f ms · 격자 GPU %.2f ms"),
 			SimTime, Alive, Bad, Top, MinGap, InPit, SandGpuSum / FMath::Max(SandGpuN, 1), Grid->LastGpuMs());
+		{
+			// M4 T3: 입자 W — 포화 (≥ WSat, 결합 0) 수 · 밑 10 cm / 위 쪽 평균 W
+			const TArray<float>& Wt = Sand->GetWet(); const TArray<FVector3f>& Ps = Sand->GetPositions();
+			int32 NSat = 0, NLo = 0, NHi = 0; double WLo = 0, WHi = 0;
+			for (int32 i = 0; i < FMath::Min(Wt.Num(), Ps.Num()); ++i)
+			{
+				if (SandPool::IsGrave(Ps[i])) { continue; }
+				NSat += Wt[i] >= Sand->GetParams().WSat;
+				const float Hb0 = 100.f * BedAt(BCorner, Ps[i].X / 100.f, Ps[i].Y / 100.f);
+				if (Ps[i].Z - Hb0 < 10.f) { ++NLo; WLo += Wt[i]; } else { ++NHi; WHi += Wt[i]; }
+			}
+			UE_LOG(LogSandWaves, Display, TEXT("M4 T3 %.0fs: 포화 입자 %d · 밑 10 cm 평균 W %.2f (%d) · 위 평균 W %.2f (%d)"), SimTime, NSat, WLo / FMath::Max(NLo, 1), NLo, WHi / FMath::Max(NHi, 1), NHi);
+		}
 		UE_LOG(LogSandWaves, Display, TEXT("M4 T2 %.0fs: b_struct 최대 %.2f m · 벽 칸 젖음 %d/%d · 터널 칸 젖음 %d/%d · 둘레 칸 젖음 %d/%d"), SimTime, SMax, WetWall, NWall, WetTun, NTun, WetRing, NRing);
 		SandGpuSum = 0.f; SandGpuN = 0;
 	}

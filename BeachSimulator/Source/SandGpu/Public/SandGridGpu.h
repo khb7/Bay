@@ -91,6 +91,8 @@ public:
 
 	/** M4 T1: 꼭짓점 바닥 버퍼 (m, (NX+1)·(NY+1)) — 입자 지면이 같은 GPU 버퍼를 읽는다. Init 뒤 고정 핸들 */
 	TRefCountPtr<FRDGPooledBuffer> GetBedBuffer() const;
+	/** M4 T3: 격자 상태 U0 (칸 float4, x = 수면 w m) — 입자 젖음이 읽는다 */
+	TRefCountPtr<FRDGPooledBuffer> GetWaterBuffer() const;
 	/** M4 T2: 꼭짓점 b_struct 버퍼 (m) — 입자 지면은 Bed − Struct */
 	TRefCountPtr<FRDGPooledBuffer> GetStructBuffer() const;
 	/** M4 T2 장애물 마스크: 매 Advance 맨 앞에 입자 위치 (지난 프레임) → b_struct. Sim 은 SetStructSource(nullptr) 전까지 살아 있어야 한다.

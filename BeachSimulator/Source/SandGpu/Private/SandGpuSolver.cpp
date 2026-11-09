@@ -285,6 +285,17 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandToolParams, )
 	SHADER_PARAMETER(float, WOptStart)
 	SHADER_PARAMETER(float, WOptEnd)
 	SHADER_PARAMETER(float, WSat)
+	SHADER_PARAMETER(uint32, WetMode)
+	SHADER_PARAMETER(float, WetRadius)
+	SHADER_PARAMETER(uint32, GroundMode)
+	SHADER_PARAMETER(uint32, GroundNX)
+	SHADER_PARAMETER(uint32, GroundNY)
+	SHADER_PARAMETER(float, GroundCell)
+	SHADER_PARAMETER(FVector2f, GroundOrigin)
+	SHADER_PARAMETER(float, GroundZ)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, GroundBed)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, GroundStruct)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, GroundWater)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, Stamps)
 	SHADER_PARAMETER(uint32, NumPileTargets)
 	SHADER_PARAMETER(float, PileDropVel)
@@ -1050,7 +1061,8 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 					GraphBuilder.QueueBufferUpload(Z, Zero.GetData(), 3 * sizeof(uint32), ERDGInitialDataFlags::None);   // 지역 배열 — 복사해 둔다 (NoCopy 면 실행 전에 사라진다)
 					AddCopyBufferPass(GraphBuilder, HandCountBuf, sizeof(uint32), Z, 0, 3 * sizeof(uint32));
 				}
-				const bool bTool = P.Stamps.Num() > 0 || P.DrainTau > 0.f || P.PileTargets.Num() > 0;
+				const bool bWetting = P.bWetting && P.GroundBed.IsValid() && P.GroundWater.IsValid();
+				const bool bTool = P.Stamps.Num() > 0 || P.DrainTau > 0.f || P.PileTargets.Num() > 0 || bWetting;
 				BondTrigBuf = ScratchBuffer(GraphBuilder, TEXT("SandSim.BondTrig"), sizeof(uint32), LN);
 				AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(BondTrigBuf), 0u);
 				if (bTool)
@@ -1070,6 +1082,9 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 					TP.DrainTarget = P.DrainTarget; TP.DrainTau = P.DrainTau;
 					TP.bPerParticleWet = P.bPerParticleWet ? 1u : 0u;
 					TP.WDry = P.WDry; TP.WOptStart = P.WOptStart; TP.WOptEnd = P.WOptEnd; TP.WSat = P.WSat;
+					BindGround(GraphBuilder, TP, &P);
+					TP.WetMode = bWetting ? 1u : 0u; TP.WetRadius = P.Radius;
+					TP.GroundWater = GraphBuilder.CreateSRV(bWetting ? GraphBuilder.RegisterExternalBuffer(P.GroundWater) : GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), 1), TEXT("SandSim.NoWater")));
 					FRDGBufferRef StBuf = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), St.Num()), TEXT("SandSim.Stamps"));
 					GraphBuilder.QueueBufferUpload(StBuf, St.GetData(), St.Num() * sizeof(FVector4f), ERDGInitialDataFlags::None);   // 지역 배열 — 복사
 					TP.Stamps = GraphBuilder.CreateSRV(StBuf);

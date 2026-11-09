@@ -396,6 +396,7 @@ bool FSandGridGpu::PollW(TArray<float>& OutW)
 }
 TRefCountPtr<FRDGPooledBuffer> FSandGridGpu::GetBedBuffer() const { return State->BCorner; }
 TRefCountPtr<FRDGPooledBuffer> FSandGridGpu::GetStructBuffer() const { return State->SCorner; }
+TRefCountPtr<FRDGPooledBuffer> FSandGridGpu::GetWaterBuffer() const { return State->U0; }
 void FSandGridGpu::SetStructSource(const FSandGpuSim* Sim, const FStructMap& Map)
 {
 	StructSim = Sim; StructMap = Map;
