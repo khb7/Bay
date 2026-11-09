@@ -298,6 +298,12 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandToolParams, )
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, GroundWater)
 	SHADER_PARAMETER(uint32, LoadMode)
 	SHADER_PARAMETER(float, LoadMassKg)
+	SHADER_PARAMETER(uint32, BuoyMode)
+	SHADER_PARAMETER(float, BuoyAccel)
+	SHADER_PARAMETER(uint32, DragMode)
+	SHADER_PARAMETER(float, DragK)
+	SHADER_PARAMETER(float, DragDiam)
+	SHADER_PARAMETER(float, WaterNu)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FVector2f>, GroundLoad)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, LoadCountRW)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, LoadCountRO)
@@ -1069,7 +1075,9 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 				}
 				const bool bWetting = P.bWetting && P.GroundBed.IsValid() && P.GroundWater.IsValid();
 				const bool bLoad = P.GroundLoad.IsValid() && P.GroundBed.IsValid() && P.GroundWater.IsValid() && P.LoadMassKg > 0.f;
-				const bool bTool = P.Stamps.Num() > 0 || P.DrainTau > 0.f || P.PileTargets.Num() > 0 || bWetting || bLoad;
+				const bool bSubOK = P.GroundBed.IsValid() && P.GroundWater.IsValid() && P.SubMassKg > 0.f;
+				const bool bBuoy = P.bBuoyancy && bSubOK, bDragOn = P.bDrag && bSubOK;
+				const bool bTool = P.Stamps.Num() > 0 || P.DrainTau > 0.f || P.PileTargets.Num() > 0 || bWetting || bLoad || bBuoy || bDragOn;
 				BondTrigBuf = ScratchBuffer(GraphBuilder, TEXT("SandSim.BondTrig"), sizeof(uint32), LN);
 				AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(BondTrigBuf), 0u);
 				if (bTool)
@@ -1091,9 +1099,14 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 					TP.WDry = P.WDry; TP.WOptStart = P.WOptStart; TP.WOptEnd = P.WOptEnd; TP.WSat = P.WSat;
 					BindGround(GraphBuilder, TP, &P);
 					TP.WetMode = bWetting ? 1u : 0u; TP.WetRadius = P.Radius;
-					TP.GroundWater = GraphBuilder.CreateSRV((bWetting || bLoad) ? GraphBuilder.RegisterExternalBuffer(P.GroundWater) : GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), 1), TEXT("SandSim.NoWater")));
+					TP.GroundWater = GraphBuilder.CreateSRV((bWetting || bLoad || bBuoy || bDragOn) ? GraphBuilder.RegisterExternalBuffer(P.GroundWater) : GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), 1), TEXT("SandSim.NoWater")));
 					// M4 T4 ① — 칸별 잠겨 닿은 입자 수를 먼저 센다
 					TP.LoadMode = bLoad ? 1u : 0u; TP.LoadMassKg = FMath::Max(P.LoadMassKg, 1e-6f);
+					// M4 T4 ② — 부력 가속 = g ρw/ρs (알갱이 부피에만), 항력 K = ½ ρw π R² / m (R = 입자 반지름)
+					const float Rm = P.Radius / 100.f;
+					TP.BuoyMode = bBuoy ? 1u : 0u; TP.BuoyAccel = 980.f * 1000.f / FMath::Max(P.GrainDensity, 1.f);
+					TP.DragMode = bDragOn ? 1u : 0u; TP.DragK = 0.5f * 1000.f * UE_PI * Rm * Rm / FMath::Max(P.SubMassKg, 1e-6f);
+					TP.DragDiam = 2.f * Rm; TP.WaterNu = 1.0e-6f;
 					const int32 NCell = bLoad ? P.GroundNX * P.GroundNY : 1;
 					FRDGBufferRef LoadCnt = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), NCell), TEXT("SandSim.LoadCount"));
 					AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(LoadCnt), 0u);

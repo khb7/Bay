@@ -45,6 +45,19 @@ float  LoadMassKg;                        // 입자 한 개 질량 (D³ · ρs �
 StructuredBuffer<float2> GroundLoad;
 RWStructuredBuffer<uint> LoadCountRW;
 StructuredBuffer<uint>   LoadCountRO;
+// M4 T4 ② 잠긴 입자: 부력 (알갱이 부피 · ρw/ρs) + 구 항력 (Morrison 2013 Cd(Re), 가로 상대 속도, 반암시)
+uint   BuoyMode;
+float  BuoyAccel;                         // g · ρw/ρs (cm/s²), 잠긴 비율을 곱한다
+uint   DragMode;
+float  DragK;                             // ½ ρw · πR² / m (1/m)
+float  DragDiam;                          // m
+float  WaterNu;                           // m²/s
+float MorrisonCd(float Re)
+{
+	Re = max(Re, 1e-3f);
+	const float a = Re / 5.f, b = Re / 263000.f, c = Re / 1e6f;
+	return 24.f / Re + 2.6f * a / (1.f + pow(a, 1.52f)) + 0.411f * pow(b, -7.94f) / (1.f + pow(b, -8.f)) + 0.25f * c / (1.f + c);
+}
 
 
 uint  NumPileTargets;
@@ -155,17 +168,24 @@ void StampCS(uint3 Tid : SV_DispatchThreadID)
 	if (DrainTau > 0.f && W > DrainTarget) { W -= (W - DrainTarget) * min(1.f, StepDt / DrainTau); }
 	float3 V = VelRW[p].xyz;
 	bool bWake = false;
-	if (WetMode != 0u || LoadMode != 0u)
+	if (WetMode != 0u || LoadMode != 0u || BuoyMode != 0u || DragMode != 0u)
 	{
 		const int ci = (int)floor((P4.x - GroundOrigin.x) / GroundCell), cj = (int)floor((P4.y - GroundOrigin.y) / GroundCell);
 		float2 F = 0;
 		bool bSub = false;
+		float WTop = -1e9f; float2 Uw = 0; float Nw = 0;
 		for (int dj = -1; dj <= 1; ++dj)
 		for (int di = -1; di <= 1; ++di)
 		{
 			const int i = ci + di, j = cj + dj;
 			if (!SubmergedIn(P4.xyz, i, j)) { continue; }
 			bSub = true;
+			{
+				const float4 Uc = GroundWater[(uint)j * GroundNX + (uint)i];
+				const uint W1 = GroundNX + 1u, c = (uint)j * W1 + (uint)i;
+				const float hc = Uc.x - 0.25f * (GroundBed[c] + GroundBed[c + 1u] + GroundBed[c + W1] + GroundBed[c + W1 + 1u]);
+				WTop = max(WTop, Uc.x); Uw += Uc.yz / hc; Nw += 1.f;
+			}
 			if (LoadMode != 0u && HasLoad(i, j))
 			{
 				const uint k = (uint)j * GroundNX + (uint)i;
@@ -174,6 +194,20 @@ void StampCS(uint3 Tid : SV_DispatchThreadID)
 		}
 		if (WetMode != 0u && bSub) { W = 1.f; }   // T3 젖음 — 포화
 		if (F.x != 0.f || F.y != 0.f) { V.xy += 100.f * F * StepDt / LoadMassKg; bWake = true; }   // cm/s
+		if (bSub && DragMode != 0u)
+		{
+			const float2 Du = Uw / Nw - 0.01f * V.xy;   // m/s
+			const float Sp = length(Du);
+			const float Frac = saturate((GroundZ + 100.f * WTop - (P4.z - WetRadius)) / (2.f * WetRadius));
+			const float S = DragK * MorrisonCd(Sp * DragDiam / WaterNu) * Frac * Sp * StepDt;
+			const float2 Dv = 100.f * Du * S / (1.f + S);   // 반암시: 물 속도를 넘지 않는다
+			if (!bAsleep || dot(Dv, Dv) > 1.f) { V.xy += Dv; bWake = true; }   // 잠든 입자는 1 cm/s 넘는 끌림만 깨운다
+		}
+		if (bSub && BuoyMode != 0u && (!bAsleep || bWake))
+		{
+			const float Frac = saturate((GroundZ + 100.f * WTop - (P4.z - WetRadius)) / (2.f * WetRadius));
+			V.z += BuoyAccel * Frac * StepDt; bWake = true;
+		}
 	}
 	for (uint s = 0; s < NumStamps; ++s)
 	{

@@ -132,6 +132,9 @@ struct FSandGpuFrameParams
 	bool   bWetting = false;
 	TRefCountPtr<FRDGPooledBuffer> GroundLoad;     // M4 T4 ① 칸 벽 하중 (FSandGridGpu::GetLoadBuffer, N)
 	float  LoadMassKg = 0.f;                       // 입자 질량. 0 = 하중 끔
+	// M4 T4 ② 잠긴 입자 부력 · 구 항력 (GroundWater 필요). SubMassKg = 입자 질량, GrainDensity = 알갱이 밀도
+	bool   bBuoyancy = false, bDrag = false;
+	float  SubMassKg = 0.f, GrainDensity = 2650.f;
 	int32  GroundNX = 0, GroundNY = 0;
 	float  GroundCell = 5.f, GroundZ = 0.f;
 	FVector2f GroundOrigin = FVector2f::ZeroVector;

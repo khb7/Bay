@@ -520,6 +520,13 @@ void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
 		Sand->GroundSrc.GroundWater = Grid->GetWaterBuffer(); Sand->GroundSrc.GroundLoad = Grid->GetLoadBuffer();
 		Sand->GroundSrc.LoadMassKg = FMath::Cube(D / 100.f) * 2650.f * (1.f - 0.4f);
 	}
+	{
+		// M4 T4 ② 잠긴 입자 부력 · 구 항력 — 질량은 T4 ① 과 같은 정의
+		Sand->GroundSrc.GroundWater = Grid->GetWaterBuffer();
+		Sand->GroundSrc.SubMassKg = FMath::Cube(D / 100.f) * 2650.f * (1.f - 0.4f); Sand->GroundSrc.GrainDensity = 2650.f;
+		Sand->GroundSrc.bBuoyancy = !FParse::Param(Cmd, TEXT("nobuoy"));
+		Sand->GroundSrc.bDrag = !FParse::Param(Cmd, TEXT("nodrag"));
+	}
 	Sand->InitCustom(SP, Pos, Inv);
 	if (FParse::Param(Cmd, TEXT("nowetting")))
 	{
