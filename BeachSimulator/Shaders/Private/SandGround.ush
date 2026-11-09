@@ -9,6 +9,7 @@ float  GroundCell;     // 격자 칸 (입자 단위 cm)
 float2 GroundOrigin;   // 입자 좌표에서 꼭짓점 (0,0) 위치
 float  GroundZ;        // 입자 좌표에서 b = 0 높이
 StructuredBuffer<float> GroundBed;
+StructuredBuffer<float> GroundStruct;   // M4 T2 b_struct — 격자 BCorner 는 b + b_struct 라 빼서 모래 지면 b 만 (입자가 제 성 위에 서지 않게)
 
 float4 GroundGap(float3 P, float R)
 {
@@ -17,7 +18,8 @@ float4 GroundGap(float3 P, float R)
 	const uint i = min((uint)G.x, GroundNX - 1u), j = min((uint)G.y, GroundNY - 1u);
 	const float u = G.x - i, v = G.y - j;
 	const uint W1 = GroundNX + 1u;
-	const float b00 = GroundBed[j * W1 + i], b10 = GroundBed[j * W1 + i + 1u], b01 = GroundBed[(j + 1u) * W1 + i], b11 = GroundBed[(j + 1u) * W1 + i + 1u];
+	const uint c = j * W1 + i;
+	const float b00 = GroundBed[c] - GroundStruct[c], b10 = GroundBed[c + 1u] - GroundStruct[c + 1u], b01 = GroundBed[c + W1] - GroundStruct[c + W1], b11 = GroundBed[c + W1 + 1u] - GroundStruct[c + W1 + 1u];
 	const float H = GroundZ + 100.f * lerp(lerp(b00, b10, u), lerp(b01, b11, u), v);
 	const float Hx = 100.f / GroundCell * lerp(b10 - b00, b11 - b01, v);
 	const float Hy = 100.f / GroundCell * lerp(b01 - b00, b11 - b10, u);

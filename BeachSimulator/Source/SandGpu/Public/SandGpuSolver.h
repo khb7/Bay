@@ -127,6 +127,7 @@ struct FSandGpuFrameParams
 	bool   bAsyncStats = false;
 	// M4 T1 지면 — 비면 평면 z = 0. 격자 바닥 버퍼 (FSandGridGpu::GetBedBuffer, m) 와 입자 좌표 (cm) 사이 변환
 	TRefCountPtr<FRDGPooledBuffer> GroundBed;
+	TRefCountPtr<FRDGPooledBuffer> GroundStruct;   // M4 T2 b_struct (FSandGridGpu::GetStructBuffer) — 지면 = Bed − Struct
 	int32  GroundNX = 0, GroundNY = 0;
 	float  GroundCell = 5.f, GroundZ = 0.f;
 	FVector2f GroundOrigin = FVector2f::ZeroVector;

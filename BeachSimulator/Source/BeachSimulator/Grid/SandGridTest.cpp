@@ -679,6 +679,92 @@ namespace
 		UE_LOG(LogSandGrid, Display, TEXT("T6 3 s 뒤: Σb 차 %.3e L · Σh 차 %.3e L · 유한 %d"), (B4 - B3) * 1e3, (H4 - H3) * 1e3, FMath::IsFinite(B4 + H4) ? 1 : 0);
 	}
 
+	void GpuStruct()
+	{
+		// M4 T2 (m4-plan): 고정 입자 → b_struct. 물 0.2 m 고인 평평한 바닥에 벽 (30×30×40 cm) 과 터널 블록 (40×40×40 cm, 가운데 20 cm 폭 · 밑 5–20 cm 비움).
+		// ① b_struct 값 (벽 0.40 · 터널 0.05) ② 물 부피 보존 (세울 때 · 3 s · 치울 때) ③ 모래 b 는 그대로 (사태가 성을 깎지 않는다) ④ 벽 위 칸 마름 · 터널 칸 물 있음
+		const int32 NX = 160, NY = 64; const double Dx = 0.05;
+		FSandGridGpuInit In = GroundGrid(NX, NY, Dx, [](double) { return 0.0; });
+		In.bGround = false; In.bMorph = true; In.bPeriodicY = true;
+		for (float& V : In.W) { V = 0.2f; }
+		FSandGridGpu G; G.Init(In);
+		TArray<FVector4f> Pos;
+		for (int32 a = 0; a < 6; ++a) for (int32 c = 0; c < 6; ++c) for (int32 k = 0; k < 8; ++k) { Pos.Add(FVector4f(300.f + 2.5f + 5.f * a, 140.f + 2.5f + 5.f * c, 2.5f + 5.f * k, 1.f)); }
+		for (int32 a = 0; a < 8; ++a) for (int32 c = 0; c < 8; ++c) for (int32 k = 0; k < 8; ++k)
+		{
+			if (c >= 2 && c <= 5 && k >= 1 && k <= 3) { continue; }   // 터널 (x 방향으로 뚫림)
+			Pos.Add(FVector4f(500.f + 2.5f + 5.f * a, 140.f + 2.5f + 5.f * c, 2.5f + 5.f * k, 1.f));
+		}
+		FSandGridGpu::FStructMap Map;
+		auto Measure = [&](double& Sb, double& Sh, double& Ss, float& Smax, float& DbMax)
+		{
+			TArray<float> Bc, Sc, W, Hu, Hv; G.DownloadBed(Bc); G.DownloadBed(Sc, true); G.Download(W, Hu, Hv);
+			Sb = 0; Sh = 0; Ss = 0; Smax = 0; DbMax = 0;
+			for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i <= NX; ++i) { const int32 c = j * (NX + 1) + i; Sb += Bc[c] - Sc[c]; Ss += Sc[c]; Smax = FMath::Max(Smax, Sc[c]); DbMax = FMath::Max(DbMax, FMath::Abs(Bc[c] - Sc[c])); }
+			for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i < NX; ++i)
+			{
+				const int32 c = j * (NX + 1) + i;
+				Sh += W[j * NX + i] - 0.25 * ((double)Bc[c] + Bc[c + 1] + Bc[c + NX + 1] + Bc[c + NX + 2]);
+			}
+			Sb *= Dx * Dx; Sh *= Dx * Dx; Ss *= Dx * Dx;
+		};
+		auto CellH = [&](float X, float Y)
+		{
+			TArray<float> Bc, W, Hu, Hv; G.DownloadBed(Bc); G.Download(W, Hu, Hv);
+			const int32 i = (int32)(X / Dx), j = (int32)(Y / Dx), c = j * (NX + 1) + i;
+			return W[j * NX + i] - 0.25f * (Bc[c] + Bc[c + 1] + Bc[c + NX + 1] + Bc[c + NX + 2]);
+		};
+		double B0, H0, S0, B1, H1, S1, B2, H2, S2, B3, H3, S3; float Mx, Db;
+		Measure(B0, H0, S0, Mx, Db);
+		G.SetStructPositions(Pos, Map); G.StepFixed(1e-3f, 1); Measure(B1, H1, S1, Mx, Db);
+		TArray<float> Sc; G.DownloadBed(Sc, true);
+		auto Sat = [&](float X, float Y) { return Sc[FMath::RoundToInt(Y / Dx) * (NX + 1) + FMath::RoundToInt(X / Dx)]; };
+		UE_LOG(LogSandGrid, Display, TEXT("T2 ① b_struct: 최대 %.3f m · 벽 가운데 %.3f (기대 0.40) · 터널 가운데 %.3f (기대 0.05) · 터널 벽 %.3f (기대 0.40) · 블록 밖 %.3f"),
+			Mx, Sat(3.15f, 1.55f), Sat(5.20f, 1.60f), Sat(5.20f, 1.45f), Sat(4.0f, 1.55f));
+		UE_LOG(LogSandGrid, Display, TEXT("T2 ② 세움: Σh 변화 %.3e L · Σb 변화 %.3e L · Σb_struct %.3f L"), (H1 - H0) * 1e3, (B1 - B0) * 1e3, S1 * 1e3);
+		for (int32 n = 0; n < 30; ++n) { G.StepFixed(1e-3f, 100); }   // 매 Run 마다 마스크 패스 (30 번)
+		Measure(B2, H2, S2, Mx, Db);
+		UE_LOG(LogSandGrid, Display, TEXT("T2 ③ 3 s 뒤: Σh 차 %.3e L · Σb 차 %.3e L · 최대 |b| %.2e m (사태가 성을 깎으면 커진다) · Σb_struct 차 %.3e L · 벽 위 칸 h %.4f m · 터널 칸 h %.4f m · 밖 h %.4f m"),
+			(H2 - H1) * 1e3, (B2 - B1) * 1e3, Db, (S2 - S1) * 1e3, CellH(3.12f, 1.52f), CellH(5.22f, 1.62f), CellH(4.0f, 1.0f));
+		G.SetStructPositions(TArray<FVector4f>(), Map); G.StepFixed(1e-3f, 1); Measure(B3, H3, S3, Mx, Db);
+		UE_LOG(LogSandGrid, Display, TEXT("T2 ④ 치움: Σb_struct %.3e L · Σh 변화 %.3e L · Σb 변화 %.3e L · 유한 %d"), S3 * 1e3, (H3 - H2) * 1e3, (B3 - B2) * 1e3, FMath::IsFinite(H3 + B3) ? 1 : 0);
+
+		// ⑤ 흐름: 댐 붕괴 (x < 2 m 에 물 0.3 m, 나머지 마름) 가 x = 3–3.4 m 에 선 블록 (40×40×40 cm) 을 만난다. 블록 없음 · 벽 · 터널 (가운데 20 cm 폭, 밑 5–20 cm 빈) 셋을 비교.
+		// 1.5 s 뒤 블록 위 칸 · 터널 칸 · 블록 바로 뒤 칸 · 옆 칸의 물 깊이, 전체 물 부피 (닫힌 상자)
+		for (int32 Case = 0; Case < 3; ++Case)
+		{
+			FSandGridGpuInit D = GroundGrid(NX, NY, Dx, [](double) { return 0.0; });
+			D.bGround = false; D.bMorph = false; D.bPeriodicY = true;
+			for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i < NX; ++i) { D.W[j * NX + i] = (i + 0.5) * Dx < 2.0 ? 0.3f : 0.f; }
+			FSandGridGpu Gd; Gd.Init(D);
+			TArray<FVector4f> Pb;
+			if (Case > 0)
+			{
+				for (int32 a = 0; a < 8; ++a) for (int32 c = 0; c < 8; ++c) for (int32 k = 0; k < 8; ++k)
+				{
+					if (Case == 2 && c >= 2 && c <= 5 && k >= 1 && k <= 3) { continue; }
+					Pb.Add(FVector4f(300.f + 2.5f + 5.f * a, 140.f + 2.5f + 5.f * c, 2.5f + 5.f * k, 1.f));
+				}
+				Gd.SetStructPositions(Pb, Map);
+			}
+			auto Vol = [&]()
+			{
+				TArray<float> Bc, W, Hu, Hv; Gd.DownloadBed(Bc); Gd.Download(W, Hu, Hv);
+				double V = 0; for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i < NX; ++i) { const int32 c = j * (NX + 1) + i; V += FMath::Max(0.0, W[j * NX + i] - 0.25 * ((double)Bc[c] + Bc[c + 1] + Bc[c + NX + 1] + Bc[c + NX + 2])); }
+				return V * Dx * Dx;
+			};
+			Gd.StepFixed(1e-3f, 1);
+			const double V0 = Vol();
+			for (int32 n = 0; n < 15; ++n) { Gd.StepFixed(1e-3f, 100); }
+			const double V1 = Vol();
+			TArray<float> Bc, W, Hu, Hv; Gd.DownloadBed(Bc); Gd.Download(W, Hu, Hv);
+			auto H = [&](float X, float Y) { const int32 i = (int32)(X / Dx), j = (int32)(Y / Dx), c = j * (NX + 1) + i; return W[j * NX + i] - 0.25f * (Bc[c] + Bc[c + 1] + Bc[c + NX + 1] + Bc[c + NX + 2]); };
+			auto Qx = [&](float X, float Y) { const int32 i = (int32)(X / Dx), j = (int32)(Y / Dx); return Hu[j * NX + i]; };
+			UE_LOG(LogSandGrid, Display, TEXT("T2 ⑤ %s 1.5 s: 블록 위 h %.3f m · 터널 h %.3f m (qx %.4f) · 바로 뒤 (x 3.5) h %.3f · 옆 (y 1.2) h %.3f · 앞 (x 2.9) h %.3f · 물 부피 차 %.3e L / %.1f L"),
+				Case == 0 ? TEXT("없음") : Case == 1 ? TEXT("벽  ") : TEXT("터널"), H(3.22f, 1.42f), H(3.22f, 1.62f), Qx(3.22f, 1.62f), H(3.52f, 1.62f), H(3.22f, 1.22f), H(2.92f, 1.62f), (V1 - V0) * 1e3, V0 * 1e3);
+		}
+	}
+
 	void GpuCost(int32 Size, bool bDisp = false)
 	{
 		FSandGridCpu C; Apply(C);   // 지형 · 초기값만 (CPU 로 풀지 않는다)
@@ -700,6 +786,7 @@ int32 RunSandGridGpuTest(const FString& Params)
 	FParse::Value(*Params, TEXT("gridmanning="), GOpt.N);
 	if (FParse::Param(*Params, TEXT("gridground"))) { GpuGround(); return 0; }
 	if (FParse::Param(*Params, TEXT("gridtool"))) { GpuTool(); return 0; }
+	if (FParse::Param(*Params, TEXT("gridstruct"))) { GpuStruct(); return 0; }
 	if (FParse::Param(*Params, TEXT("gridmorph"))) { GpuMorph(); GpuSus(); return 0; }
 	if (FParse::Param(*Params, TEXT("gridbous")))
 	{

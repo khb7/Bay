@@ -21,10 +21,11 @@ IMPLEMENT_MODULE(FDefaultModuleImpl, SandGpu);
 template <typename TParams>
 static void BindGround(FRDGBuilder& GraphBuilder, TParams& X, const FSandGpuFrameParams* P)
 {
-	FRDGBufferRef B;
+	FRDGBufferRef B, Sb;
 	if (P && P->GroundBed.IsValid())
 	{
 		B = GraphBuilder.RegisterExternalBuffer(P->GroundBed);
+		Sb = GraphBuilder.RegisterExternalBuffer(P->GroundStruct);
 		X.GroundMode = 1u; X.GroundNX = (uint32)P->GroundNX; X.GroundNY = (uint32)P->GroundNY; X.GroundCell = P->GroundCell; X.GroundOrigin = P->GroundOrigin; X.GroundZ = P->GroundZ;
 	}
 	else
@@ -32,9 +33,11 @@ static void BindGround(FRDGBuilder& GraphBuilder, TParams& X, const FSandGpuFram
 		B = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(float), 1), TEXT("SandGpu.NoGround"));
 		const float Z = 0.f;
 		GraphBuilder.QueueBufferUpload(B, &Z, sizeof(float), ERDGInitialDataFlags::None);
+		Sb = B;
 		X.GroundMode = 0u; X.GroundNX = X.GroundNY = 1u; X.GroundCell = 1.f; X.GroundOrigin = FVector2f::ZeroVector; X.GroundZ = 0.f;
 	}
 	X.GroundBed = GraphBuilder.CreateSRV(B);
+	X.GroundStruct = GraphBuilder.CreateSRV(Sb);
 }
 
 BEGIN_SHADER_PARAMETER_STRUCT(FSandSolverParams, )
@@ -59,6 +62,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandSolverParams, )
 	SHADER_PARAMETER(FVector2f, GroundOrigin)
 	SHADER_PARAMETER(float, GroundZ)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, GroundBed)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, GroundStruct)
 	SHADER_PARAMETER(float, MaxDepenVel)
 	SHADER_PARAMETER(uint32, bMassSplit)
 	SHADER_PARAMETER(float, BondAlphaTilde)
@@ -165,6 +169,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandFrameParams, )
 	SHADER_PARAMETER(FVector2f, GroundOrigin)
 	SHADER_PARAMETER(float, GroundZ)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, GroundBed)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, GroundStruct)
 	SHADER_PARAMETER(FVector3f, Gravity)
 	SHADER_PARAMETER(float, BondStretchBreak)
 	SHADER_PARAMETER(uint32, bBondsDry)

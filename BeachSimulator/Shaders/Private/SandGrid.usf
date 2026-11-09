@@ -68,6 +68,7 @@ RWStructuredBuffer<float>  GwQRW;
 uint  bPeriodicY;        // 해안선 방향(y) 주기 경계 — 비스듬한 파도가 옆 벽에서 튕기지 않게 (k_y 는 2π m / L_y 로 맞춘다)          // 바닥 마찰 n (s/m^⅓) — CPU FixDry 와 같은 암시적 꼴
 
 StructuredBuffer<float>    BCorner;
+StructuredBuffer<float>    SCorner;   // M4 T2 꼭짓점 b_struct (m). BCorner = b + b_struct (물이 보는 유효 바닥) — 침식 · 사태 · 렌더 · 입자 지면은 b 만
 StructuredBuffer<float>    BSort;     // 칸마다 정렬한 8×8 바닥 표본 (LevelCS)
 StructuredBuffer<float4>   URO;      // 이 단계 입력 (1 단계: U0, 2 단계: U1)
 StructuredBuffer<float4>   U0RO;     // 2 단계에서 U0
@@ -1021,13 +1022,15 @@ void ExportCS(uint3 Tid : SV_DispatchThreadID)
 	const float W = URO[k].x, B = BCell(i, j), h = W - B;
 	const float Wt = h > 0.003f ? 1.f : max(0.f, WetRW[k] - ExportDryRate);
 	WetRW[k] = Wt;
-	ExportRW[uint2(i, j)] = float4(W, h, B, Wt);
+	const uint c = j * (NX + 1) + i;
+	const float Sm = 0.25f * (SCorner[c] + SCorner[c + 1] + SCorner[c + NX + 1] + SCorner[c + NX + 2]);
+	ExportRW[uint2(i, j)] = float4(W, h, B - Sm, Wt);   // 렌더 지형 = 모래 b (성은 입자 메시가 그린다)
 }
 
 float SedBc(int ci, int cj)
 {
 	if (bPeriodicY != 0u) { cj = ((cj % (int)NY) + (int)NY) % (int)NY; }
-	return Bc((uint)ci, (uint)cj);
+	return Bc((uint)ci, (uint)cj) - SCorner[(uint)cj * (NX + 1) + (uint)ci];   // 사태는 모래 b 만 (b_struct 는 침식 대상 아님, system-design)
 }
 // 사태: 꼭짓점 a → 이웃 n 으로 넘기는 양 (+ 면 a 가 잃음). 양쪽이 같은 입력으로 같은 값을 계산 → 반대 부호로 더해져 보존.
 // 넘친 높이 (|Δb| − m_cr·Δ) 의 ¼ (한 꼭짓점이 네 이웃에 동시에 주므로 과보정 방지)
@@ -1135,4 +1138,51 @@ void StampWaterCS(uint3 Tid : SV_DispatchThreadID)
 	float4 U = UOutRW[Idx(i, j)];
 	U.x += Dh;
 	UOutRW[Idx(i, j)] = U;
+}
+
+// ---------------------------------------------------------------------------------------------
+// M4 T2 장애물 마스크 (m4-plan T2, system-design "장애물 마스크를 만드는 법"). 프레임 맨 앞 (지난 프레임 입자 위치, 1 프레임 지연).
+// OccCS: 입자가 둘레 꼭짓점 (가로 거리 ≤ 0.75 칸) 의 높이 칸 (지면 b 기준, 칸 높이 = 입자 지름) 비트를 켠다 — 구간 [z−R, z+R] 이 ¾ 넘게 걸친 칸.
+// StructCS: 바닥부터 연속으로 켜진 칸 수 × 지름 = 새 b_struct. Δ 를 DB 에 → SedApplyCS · SedCellCS (스탬프와 같은 길: 물 깊이 유지 · 물 보존 · BSort 갱신)
+uint   StructN;
+float  StructCell;      // 격자 칸 (입자 단위 cm)
+float2 StructOrigin;    // 입자 좌표에서 꼭짓점 (0,0)
+float  StructZ;         // 입자 좌표에서 b = 0 높이
+float  StructR;         // 입자 반지름 (cm)
+StructuredBuffer<float4> StructPosRO;   // 입자 xyz (cm) · w 역질량 (0 = 죽음 · 고정 — 뺀다)
+RWStructuredBuffer<uint> OccRW;         // 꼭짓점마다 uint 둘 (64 칸)
+RWStructuredBuffer<float> SCornerRW;
+[numthreads(64, 1, 1)]
+void OccCS(uint3 Tid : SV_DispatchThreadID)
+{
+	if (Tid.x >= StructN) { return; }
+	const float4 P = StructPosRO[Tid.x];
+	if (P.w <= 0.f || !all(isfinite(P.xyz))) { return; }
+	const float2 G = (P.xy - StructOrigin) / StructCell;
+	const float Rs = 0.75f;
+	const int i0 = (int)ceil(G.x - Rs), i1 = (int)floor(G.x + Rs), j0 = (int)ceil(G.y - Rs), j1 = (int)floor(G.y + Rs);
+	const float D = 2.f * StructR;
+	for (int cj = max(j0, 0); cj <= min(j1, (int)NY); ++cj)
+	for (int ci = max(i0, 0); ci <= min(i1, (int)NX); ++ci)
+	{
+		const float2 d = G - float2(ci, cj);
+		if (dot(d, d) > Rs * Rs) { continue; }
+		const uint c = (uint)cj * (NX + 1) + (uint)ci;
+		const float Zg = P.z - (StructZ + 100.f * (BCorner[c] - SCorner[c]));   // 모래 지면 위 높이 (cm)
+		const int s0 = max(0, (int)floor((Zg - StructR) / D + 0.25f)), s1 = min(63, (int)floor((Zg + StructR) / D - 0.25f));
+		for (int s = s0; s <= s1; ++s) { InterlockedOr(OccRW[c * 2u + ((uint)s >> 5)], 1u << ((uint)s & 31u)); }
+	}
+}
+[numthreads(8, 8, 1)]
+void StructCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint ci = Tid.x, cj = Tid.y;
+	if (ci > NX || cj > NY) { return; }
+	const uint c = cj * (NX + 1) + ci;
+	const uint o0 = OccRW[c * 2u], o1 = OccRW[c * 2u + 1u];
+	OccRW[c * 2u] = 0u; OccRW[c * 2u + 1u] = 0u;   // 다음 프레임용으로 비움
+	const uint n = o0 != 0xFFFFFFFFu ? firstbitlow(~o0) : (o1 != 0xFFFFFFFFu ? 32u + firstbitlow(~o1) : 64u);
+	const float Sn = n * 2.f * StructR / 100.f;
+	DBRW[c] = Sn - SCornerRW[c];
+	SCornerRW[c] = Sn;
 }

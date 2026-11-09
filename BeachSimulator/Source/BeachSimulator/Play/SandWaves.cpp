@@ -344,6 +344,7 @@ void USandWavesSubsystem::Deinitialize()
 {
 	FTSTicker::GetCoreTicker().RemoveTicker(TickHandle);
 	if (SandComp) { SandComp->SetParticles({}); }
+	if (Grid.IsValid()) { Grid->SetStructSource(nullptr, FSandGridGpu::FStructMap()); }
 	FlushRenderingCommands();
 	Sand.Reset();
 	Grid.Reset();
@@ -488,13 +489,15 @@ void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
 	// 젖은 모래 블록 (기본 50 × 50 × 40 cm) 을 물가 위 마른 땅에 — 기둥마다 바닥은 그 자리 지면 위 (경사를 따른다). 결합을 맺어 선다
 	float Half = 25.f, Tall = 40.f, Wet = 0.4f;
 	FParse::Value(Cmd, TEXT("sandhalf="), Half); FParse::Value(Cmd, TEXT("sandtall="), Tall); FParse::Value(Cmd, TEXT("sandwet="), Wet);
+	float Back = 2.5f; FParse::Value(Cmd, TEXT("sandback="), Back);   // 정지 물가에서 땅 쪽으로 (m)
+	const bool bTunnel = FParse::Param(Cmd, TEXT("sandtunnel"));      // M4 T2: 가운데 20 cm 폭 · 밑 5–20 cm 비운 터널 (x = 파도 방향)
 	bSandTest = FParse::Param(Cmd, TEXT("wavesandtest"));
 	FSandParams SP;
 	SP.Substeps = 1; SP.WarmStart = 1.f; SP.WarmGapTol = 0.05f; SP.bGpuResident = true;
 	ApplySandGpuProfile(TEXT("-gpu2"), SP);
 	SP.bGatherApply = false; SP.bMassSplit = false;
 	const float R = SP.Radius, D = 2.f * R;
-	SandC = FVector2f(Xs1 - 2.5f, NY * Dx * 0.5f);
+	SandC = FVector2f(Xs1 - Back, NY * Dx * 0.5f);
 	TArray<FVector3f> Pos; TArray<float> Inv;
 	const int32 Nh = FMath::Max(1, FMath::RoundToInt(Half / D)), Nz = FMath::Max(1, FMath::RoundToInt(Tall / D));
 	for (int32 a = -Nh; a < Nh; ++a)
@@ -502,16 +505,26 @@ void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
 	{
 		const float X = SandC.X * 100.f + (a + 0.5f) * D, Y = SandC.Y * 100.f + (c + 0.5f) * D;
 		const float Z0 = 100.f * BedAt(BCorner, X / 100.f, Y / 100.f) + R + 0.05f;
-		for (int32 k = 0; k < Nz; ++k) { Pos.Add(FVector3f(X, Y, Z0 + k * D)); Inv.Add(1.f); }
+		for (int32 k = 0; k < Nz; ++k)
+		{
+			if (bTunnel && FMath::Abs(c + 0.5f) < 2.f && k >= 1 && k <= 3) { continue; }
+			Pos.Add(FVector3f(X, Y, Z0 + k * D)); Inv.Add(1.f);
+		}
 	}
 	Sand = MakeUnique<FSandSpike>();
-	Sand->GroundSrc.GroundBed = Grid->GetBedBuffer(); Sand->GroundSrc.GroundNX = NX; Sand->GroundSrc.GroundNY = NY;
+	Sand->GroundSrc.GroundBed = Grid->GetBedBuffer(); Sand->GroundSrc.GroundStruct = Grid->GetStructBuffer(); Sand->GroundSrc.GroundNX = NX; Sand->GroundSrc.GroundNY = NY;
 	Sand->GroundSrc.GroundCell = Dx * 100.f; Sand->GroundSrc.GroundOrigin = FVector2f::ZeroVector; Sand->GroundSrc.GroundZ = 0.f;
 	Sand->InitCustom(SP, Pos, Inv);
 	Sand->SetWGlobal(Wet);
 	const int32 Bonds = Sand->FormBonds();
 	Sand->bAsyncStats = true;
 	Sand->Step(1.f / 60.f);   // GPU 상주 시뮬은 첫 스텝에서 만들어진다 — 메셔에 넘기기 전에
+	if (!FParse::Param(Cmd, TEXT("nostruct")))
+	{
+		// M4 T2 장애물 마스크 — 다음 Advance 부터 입자 위치 (지난 프레임) 가 격자 유효 바닥에 들어간다
+		FSandGridGpu::FStructMap Map; Map.CellCm = Dx * 100.f; Map.RadiusCm = R;
+		Grid->SetStructSource(Sand->GetGpuSim(), Map);
+	}
 	AActor* Actor = GetWorld()->SpawnActor<AActor>();
 	SandComp = NewObject<USandSurfaceComponent>(Actor);
 	Actor->SetRootComponent(SandComp);
@@ -540,7 +553,24 @@ void USandWavesSubsystem::UpdateSand()
 	if (bSandTest && bGot && SimTime >= SandNextLog)
 	{
 		SandNextLog = SimTime + 1.f;
-		TArray<float> Bc; Grid->DownloadBed(Bc);
+		TArray<float> Bc, Sc, Wd, Hu, Hv; Grid->DownloadBed(Bc); Grid->DownloadBed(Sc, true); Grid->Download(Wd, Hu, Hv);
+		// M4 T2: 블록 둘레 칸 — 벽 (네 꼭짓점 b_struct > 15 cm) · 터널 (0 < 모두 ≤ 10 cm) · 고리 (블록 밖 30 cm 안) 의 물 닿은 칸 수
+		int32 NWall = 0, WetWall = 0, NTun = 0, WetTun = 0, NRing = 0, WetRing = 0; float SMax = 0.f;
+		{
+			const int32 W1 = NX + 1, I0 = FMath::Max(0, (int32)((SandC.X - 0.6f) / Dx)), I1 = FMath::Min(NX - 1, (int32)((SandC.X + 0.6f) / Dx)), J0 = FMath::Max(0, (int32)((SandC.Y - 0.6f) / Dx)), J1 = FMath::Min(NY - 1, (int32)((SandC.Y + 0.6f) / Dx));
+			for (int32 j = J0; j <= J1; ++j) for (int32 i = I0; i <= I1; ++i)
+			{
+				const int32 c = j * W1 + i;
+				const float s[4] = { Sc[c], Sc[c + 1], Sc[c + W1], Sc[c + W1 + 1] };
+				const float Smin = FMath::Min(FMath::Min(s[0], s[1]), FMath::Min(s[2], s[3])), Smx = FMath::Max(FMath::Max(s[0], s[1]), FMath::Max(s[2], s[3]));
+				SMax = FMath::Max(SMax, Smx);
+				const bool bWet = Wd[j * NX + i] - 0.25f * (Bc[c] + Bc[c + 1] + Bc[c + W1] + Bc[c + W1 + 1]) > 0.003f;
+				if (Smin > 0.15f) { ++NWall; WetWall += bWet; }
+				else if (Smin > 0.f && Smx <= 0.10f) { ++NTun; WetTun += bWet; }
+				else if (Smx == 0.f) { ++NRing; WetRing += bWet; }
+			}
+		}
+		for (int32 c = 0; c < Bc.Num(); ++c) { Bc[c] -= Sc[c]; }   // 모래 b (입자 지면)
 		const float R = Sand->GetParams().Radius;
 		float MinGap = 1e9f, Top = -1e9f; int32 Alive = 0, InPit = 0, Bad = 0;
 		for (const FVector4f& X : SandPos)
@@ -555,6 +585,7 @@ void USandWavesSubsystem::UpdateSand()
 		}
 		UE_LOG(LogSandWaves, Display, TEXT("M4 T1 %.0fs: 입자 %d (비유한 %d) · 처음 지면 위 최고 %.1f cm · 지면 최소 간극 %.2f cm · 구덩이 안 %d · 입자 GPU 평균 %.2f ms · 격자 GPU %.2f ms"),
 			SimTime, Alive, Bad, Top, MinGap, InPit, SandGpuSum / FMath::Max(SandGpuN, 1), Grid->LastGpuMs());
+		UE_LOG(LogSandWaves, Display, TEXT("M4 T2 %.0fs: b_struct 최대 %.2f m · 벽 칸 젖음 %d/%d · 터널 칸 젖음 %d/%d · 둘레 칸 젖음 %d/%d"), SimTime, SMax, WetWall, NWall, WetTun, NTun, WetRing, NRing);
 		SandGpuSum = 0.f; SandGpuN = 0;
 	}
 }

@@ -81,7 +81,7 @@ public:
 	bool PollW(TArray<float>& OutW);
 	float LastSimTime() const;
 	void DownloadSus(TArray<float>& OutS) const;   // 칸 S = hC (m), 동기
-	void DownloadBed(TArray<float>& OutBCorner) const;   // 꼭짓점 바닥 (NX+1)·(NY+1), 동기
+	void DownloadBed(TArray<float>& OutBCorner, bool bStruct = false) const;   // 꼭짓점 바닥 (NX+1)·(NY+1), 동기. 물이 보는 유효 바닥 b + b_struct · bStruct 면 b_struct (M4 T2)
 	void DownloadBreakDiag(TArray<FVector2f>& Out) const;
 	void ResetBreakDiag();   // 칸별 (최대 |∇η|, 최대 η_t/√(gH)) — 시작부터 누적 (진단)   // 쇄파 와점성 ν (진단, D-M3-20)
 	/** 마지막 Step 의 GPU 시간 (타임스탬프, ms) */
@@ -91,6 +91,14 @@ public:
 
 	/** M4 T1: 꼭짓점 바닥 버퍼 (m, (NX+1)·(NY+1)) — 입자 지면이 같은 GPU 버퍼를 읽는다. Init 뒤 고정 핸들 */
 	TRefCountPtr<FRDGPooledBuffer> GetBedBuffer() const;
+	/** M4 T2: 꼭짓점 b_struct 버퍼 (m) — 입자 지면은 Bed − Struct */
+	TRefCountPtr<FRDGPooledBuffer> GetStructBuffer() const;
+	/** M4 T2 장애물 마스크: 매 Advance 맨 앞에 입자 위치 (지난 프레임) → b_struct. Sim 은 SetStructSource(nullptr) 전까지 살아 있어야 한다.
+	 *  Map: 입자 좌표 (cm) ↔ 격자 — 칸 (cm) · 꼭짓점 (0,0) 위치 · b = 0 높이 · 입자 반지름 */
+	struct FStructMap { float CellCm = 5.f; FVector2f OriginCm = FVector2f::ZeroVector; float ZCm = 0.f; float RadiusCm = 2.5f; };
+	void SetStructSource(const class FSandGpuSim* Sim, const FStructMap& Map);
+	/** 시험용: 고정 위치 (xyz cm · w 역질량). 비우면 다음 Run 에 b_struct 가 0 으로 */
+	void SetStructPositions(const TArray<FVector4f>& Pos, const FStructMap& Map);
 	int32 GetNX() const { return Params.NX; }
 	int32 GetNY() const { return Params.NY; }
 
@@ -98,6 +106,10 @@ private:
 	void Run(bool bFixed, float DtOrFrame, int32 NumSub);
 	void QueueStamp(float X, float Y, float Radius, float Volume, bool bWater);
 	TArray<FVector4f> PendingStamps;
+	const class FSandGpuSim* StructSim = nullptr;
+	FStructMap StructMap;
+	bool bStruct = false;          // 마스크 패스를 돈다 (위치를 비운 뒤 한 번 더 돌아 0 으로 만든다)
+	TArray<FVector4f> StructUpload; bool bStructUpload = false;
 
 	struct FState;
 	FState* State = nullptr;

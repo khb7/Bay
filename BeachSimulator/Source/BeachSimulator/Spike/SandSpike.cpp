@@ -1460,7 +1460,7 @@ void FSandSpike::StepGpuResident(float Dt)
 	for (int32 k = 1; k < P.Stamps.Num(); k += 2) { P.bFormBonds |= (P.Stamps[k].X == (float)(uint8)ESandTool::Pour && P.Stamps[k].Z > 0.f); }
 	P.bFormBonds |= bPile;
 	P.PileDropVel = PileDropVel;
-	P.GroundBed = GroundSrc.GroundBed; P.GroundNX = GroundSrc.GroundNX; P.GroundNY = GroundSrc.GroundNY; P.GroundCell = GroundSrc.GroundCell; P.GroundOrigin = GroundSrc.GroundOrigin; P.GroundZ = GroundSrc.GroundZ;
+	P.GroundBed = GroundSrc.GroundBed; P.GroundStruct = GroundSrc.GroundStruct; P.GroundNX = GroundSrc.GroundNX; P.GroundNY = GroundSrc.GroundNY; P.GroundCell = GroundSrc.GroundCell; P.GroundOrigin = GroundSrc.GroundOrigin; P.GroundZ = GroundSrc.GroundZ;
 	P.bAsyncStats = bAsyncStats;
 	P.BondFormRange = 2.f * Params.Radius * Params.BondFormStretch;
 	P.BondSlots = Params.BondSlots;
