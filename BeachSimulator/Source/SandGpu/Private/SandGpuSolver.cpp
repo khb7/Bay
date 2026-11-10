@@ -299,6 +299,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandToolParams, )
 	SHADER_PARAMETER(uint32, LoadMode)
 	SHADER_PARAMETER(float, LoadMassKg)
 	SHADER_PARAMETER(uint32, ReturnMode)
+	SHADER_PARAMETER(float, ReturnVel)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ReturnAccRW)
 	SHADER_PARAMETER(uint32, BuoyMode)
 	SHADER_PARAMETER(float, BuoyAccel)
@@ -1152,15 +1153,15 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 						AddDirectPass<FSandLoadCountCS>(GraphBuilder, RDG_EVENT_NAME("SandLoadCount"), ShaderMap, TC, LN, 64);
 					}
 					TP.LoadCountRO = GraphBuilder.CreateSRV(LoadCnt);
-					AddDirectPass<FSandStampCS>(GraphBuilder, RDG_EVENT_NAME("SandStamp"), ShaderMap, TP, LN, 64);
 					if (bReturn)
 					{
 						// M4 T5 파괴 환원 — 산 결합 확인에 결합 데이터 · 인접 목록
-						FSandToolParams TR = TP; TR.ReturnMode = 1u; TR.ReturnAccRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(P.GroundReturn));
-						TR.WetRW = nullptr; TR.HandWRW = nullptr; TR.HandCountRW = nullptr; TR.BondTrigRW = nullptr;
+						FSandToolParams TR = TP; TR.ReturnMode = 1u; TR.ReturnVel = P.SleepVel; TR.ReturnAccRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(P.GroundReturn));
+						TR.HandWRW = nullptr; TR.HandCountRW = nullptr; TR.BondTrigRW = nullptr;
 						TR.BondDataRW = GraphBuilder.CreateUAV(BondData); TR.OldAdjOffset = GraphBuilder.CreateSRV(BondAdjOffset); TR.OldAdj = GraphBuilder.CreateSRV(BondAdj);
 						AddDirectPass<FSandReturnCS>(GraphBuilder, RDG_EVENT_NAME("SandReturn"), ShaderMap, TR, LN, 64);
 					}
+					AddDirectPass<FSandStampCS>(GraphBuilder, RDG_EVENT_NAME("SandStamp"), ShaderMap, TP, LN, 64);
 					if (P.PileTargets.Num() > 0)
 					{
 						// M2 T3 — 무덤 칸이 손 재고를 하나씩 받아 놓을 자리로 (파기 뒤 — 같은 프레임에 판 것도 쌓을 수 있다)

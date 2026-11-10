@@ -262,9 +262,10 @@ void StampCS(uint3 Tid : SV_DispatchThreadID)
 	}
 }
 
-// M4 T5 파괴 환원 (m4-plan T5, papers D-M4-4 · D-M4-8): 산 결합 0 · 잠김 · 지면에 닿음 (지면 λ > 0) · 깨어 있음 → 무덤으로,
+// M4 T5 파괴 환원 (m4-plan T5, papers D-M4-4 · D-M4-8): 산 결합 0 · 젖음 (잠김 또는 W ≥ WSat) · 지면에 닿음 (지면 λ > 0) · 깨어 있고 속도 < SleepVel (멈춘 잔해, Leach & Marais 의 정지 전환. 잠든 입자는 건드리지 않음) → 무덤으로,
 // 부피 (지름 D 정육면체 = 격자 b 와 같은 공극 포함 부피) 를 둘레 꼭짓점 4 개에 이선형 무게로 (1/65536 단위, 격자 ReturnCS 가 b 로)
 uint ReturnMode;
+float ReturnVel;   // 정지 속도 (cm/s) = 잠들기 기준 SleepVel
 RWStructuredBuffer<uint> ReturnAccRW;
 [numthreads(64, 1, 1)]
 void ReturnCS(uint3 Tid : SV_DispatchThreadID)
@@ -272,8 +273,8 @@ void ReturnCS(uint3 Tid : SV_DispatchThreadID)
 	const uint p = Tid.x;
 	if (p >= NumParticles || ReturnMode == 0u) { return; }
 	const float4 P4 = PosRW[p];
-	if (IsGrave(P4.xyz) || P4.w <= 0.f) { return; }
-	if (SleepFrames > 0u && SleepRW[p] >= SleepFrames) { return; }
+	if (IsGrave(P4.xyz) || P4.w <= 0.f) { return; }   // 고정 · 잠든 입자 (w = 0) 제외
+	if (dot(VelRW[p].xyz, VelRW[p].xyz) >= ReturnVel * ReturnVel) { return; }   // 움직이는 입자는 입자로 남는다 — 무너지는 모습이 보이게
 	if (GroundLambdaRW[p] <= 0.f) { return; }
 	if (NumBonds > 0u)
 	{
@@ -285,7 +286,7 @@ void ReturnCS(uint3 Tid : SV_DispatchThreadID)
 	bool bSub = false;
 	for (int dj = -1; dj <= 1 && !bSub; ++dj)
 	for (int di = -1; di <= 1 && !bSub; ++di) { bSub = SubmergedIn(P4.xyz, ci + di, cj + dj); }
-	if (!bSub) { return; }
+	if (!bSub && WetRW[p] < WSat) { return; }
 	const float fx = gx - ci, fy = gy - cj;
 	const uint W1 = GroundNX + 1u, c = (uint)cj * W1 + (uint)ci;
 	const uint a00 = (uint)round(65536.f * (1 - fx) * (1 - fy)), a10 = (uint)round(65536.f * fx * (1 - fy)), a01 = (uint)round(65536.f * (1 - fx) * fy);
