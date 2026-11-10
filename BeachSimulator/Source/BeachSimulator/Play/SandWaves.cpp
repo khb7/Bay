@@ -548,6 +548,12 @@ void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
 		// M4 T2 장애물 마스크 — 다음 Advance 부터 입자 위치 (지난 프레임) 가 격자 유효 바닥에 들어간다
 		FSandGridGpu::FStructMap Map; Map.CellCm = Dx * 100.f; Map.RadiusCm = R;
 		Grid->SetStructSource(Sand->GetGpuSim(), Map);
+		if (!FParse::Param(Cmd, TEXT("noreturn")))
+		{
+			// M4 T5 파괴 환원 — 입자 하나 = 지름 D 정육면체 (격자 b 와 같은 공극 포함 부피). 1/65536 단위의 바닥 높이 (m)
+			Sand->GroundSrc.GroundReturn = Grid->GetReturnBuffer();
+			Grid->SetReturnScale(FMath::Cube(D / 100.f) / (Dx * Dx) / 65536.f);
+		}
 	}
 	AActor* Actor = GetWorld()->SpawnActor<AActor>();
 	SandComp = NewObject<USandSurfaceComponent>(Actor);
@@ -595,6 +601,9 @@ void USandWavesSubsystem::UpdateSand()
 			}
 		}
 		for (int32 c = 0; c < Bc.Num(); ++c) { Bc[c] -= Sc[c]; }   // 모래 b (입자 지면)
+		double DbVol = 0.0;   // M4 T5: 격자 모래 부피 변화 (꼭짓점 Δb · 칸 넓이, 내부 꼭짓점 합 = 부피) + 부유사 (hC / (1 − p))
+		for (int32 c = 0; c < Bc.Num(); ++c) { DbVol += ((double)Bc[c] - BCorner[c]) * Dx * Dx; }
+		double SusVol = 0.0; { TArray<float> Ss; Grid->DownloadSus(Ss); for (float s : Ss) { SusVol += (double)s * Dx * Dx / (1.0 - 0.4); } }
 		const float R = Sand->GetParams().Radius;
 		float MinGap = 1e9f, Top = -1e9f; int32 Alive = 0, InPit = 0, Bad = 0;
 		for (const FVector4f& X : SandPos)
@@ -606,6 +615,10 @@ void USandWavesSubsystem::UpdateSand()
 			MinGap = FMath::Min(MinGap, X.Z - H - R);
 			Top = FMath::Max(Top, X.Z + R - Hb0);
 			if (X.Z - R < Hb0 - 1.f) { ++InPit; }   // 처음 지면보다 1 cm 넘게 아래 = 구덩이로 들어감
+		}
+		{
+			const double PV = FMath::Cube((double)Sand->GetParams().Radius * 2.0 / 100.0);
+			UE_LOG(LogSandWaves, Display, TEXT("M4 T5 %.0fs: 입자 %d × D³ = %.5f m³ · 격자 Δb 부피 %.5f · 부유사 %.5f · 합 %.5f m³ (처음 %.5f)"), SimTime, Alive, Alive * PV, DbVol, SusVol, Alive * PV + DbVol + SusVol, SandPos.Num() * PV);
 		}
 		UE_LOG(LogSandWaves, Display, TEXT("M4 T1 %.0fs: 입자 %d (비유한 %d) · 처음 지면 위 최고 %.1f cm · 지면 최소 간극 %.2f cm · 구덩이 안 %d · 입자 GPU 평균 %.2f ms · 격자 GPU %.2f ms"),
 			SimTime, Alive, Bad, Top, MinGap, InPit, SandGpuSum / FMath::Max(SandGpuN, 1), Grid->LastGpuMs());

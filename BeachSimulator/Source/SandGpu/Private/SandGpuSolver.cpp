@@ -298,6 +298,8 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandToolParams, )
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, GroundWater)
 	SHADER_PARAMETER(uint32, LoadMode)
 	SHADER_PARAMETER(float, LoadMassKg)
+	SHADER_PARAMETER(uint32, ReturnMode)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ReturnAccRW)
 	SHADER_PARAMETER(uint32, BuoyMode)
 	SHADER_PARAMETER(float, BuoyAccel)
 	SHADER_PARAMETER(uint32, DragMode)
@@ -348,6 +350,7 @@ END_SHADER_PARAMETER_STRUCT()
 
 #define TOOL_USF "/Project/Private/SandTool.usf"
 SAND_SHADER(FSandStampCS,    FSandToolParams, TOOL_USF, "StampCS")
+SAND_SHADER(FSandReturnCS,   FSandToolParams, TOOL_USF, "ReturnCS")
 SAND_SHADER(FSandLoadCountCS, FSandToolParams, TOOL_USF, "LoadCountCS")
 SAND_SHADER(FSandBondToolCS, FSandToolParams, TOOL_USF, "BondToolCS")
 SAND_SHADER(FSandPileCS,       FSandToolParams, TOOL_USF, "PileCS")
@@ -1077,7 +1080,8 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 				const bool bLoad = P.GroundLoad.IsValid() && P.GroundBed.IsValid() && P.GroundWater.IsValid() && P.LoadMassKg > 0.f;
 				const bool bSubOK = P.GroundBed.IsValid() && P.GroundWater.IsValid() && P.SubMassKg > 0.f;
 				const bool bBuoy = P.bBuoyancy && bSubOK, bDragOn = P.bDrag && bSubOK;
-				const bool bTool = P.Stamps.Num() > 0 || P.DrainTau > 0.f || P.PileTargets.Num() > 0 || bWetting || bLoad || bBuoy || bDragOn;
+				const bool bReturn = P.GroundReturn.IsValid() && P.GroundBed.IsValid() && P.GroundWater.IsValid();
+				const bool bTool = P.Stamps.Num() > 0 || P.DrainTau > 0.f || P.PileTargets.Num() > 0 || bWetting || bLoad || bBuoy || bDragOn || bReturn;
 				BondTrigBuf = ScratchBuffer(GraphBuilder, TEXT("SandSim.BondTrig"), sizeof(uint32), LN);
 				AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(BondTrigBuf), 0u);
 				if (bTool)
@@ -1099,7 +1103,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 					TP.WDry = P.WDry; TP.WOptStart = P.WOptStart; TP.WOptEnd = P.WOptEnd; TP.WSat = P.WSat;
 					BindGround(GraphBuilder, TP, &P);
 					TP.WetMode = bWetting ? 1u : 0u; TP.WetRadius = P.Radius;
-					TP.GroundWater = GraphBuilder.CreateSRV((bWetting || bLoad || bBuoy || bDragOn) ? GraphBuilder.RegisterExternalBuffer(P.GroundWater) : GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), 1), TEXT("SandSim.NoWater")));
+					TP.GroundWater = GraphBuilder.CreateSRV((bWetting || bLoad || bBuoy || bDragOn || bReturn) ? GraphBuilder.RegisterExternalBuffer(P.GroundWater) : GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), 1), TEXT("SandSim.NoWater")));
 					// M4 T4 ① — 칸별 잠겨 닿은 입자 수를 먼저 센다
 					TP.LoadMode = bLoad ? 1u : 0u; TP.LoadMassKg = FMath::Max(P.LoadMassKg, 1e-6f);
 					// M4 T4 ② — 부력 가속 = g ρw/ρs (알갱이 부피에만), 항력 K = ½ ρw π R² / m (R = 입자 반지름)
@@ -1149,6 +1153,14 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 					}
 					TP.LoadCountRO = GraphBuilder.CreateSRV(LoadCnt);
 					AddDirectPass<FSandStampCS>(GraphBuilder, RDG_EVENT_NAME("SandStamp"), ShaderMap, TP, LN, 64);
+					if (bReturn)
+					{
+						// M4 T5 파괴 환원 — 산 결합 확인에 결합 데이터 · 인접 목록
+						FSandToolParams TR = TP; TR.ReturnMode = 1u; TR.ReturnAccRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(P.GroundReturn));
+						TR.WetRW = nullptr; TR.HandWRW = nullptr; TR.HandCountRW = nullptr; TR.BondTrigRW = nullptr;
+						TR.BondDataRW = GraphBuilder.CreateUAV(BondData); TR.OldAdjOffset = GraphBuilder.CreateSRV(BondAdjOffset); TR.OldAdj = GraphBuilder.CreateSRV(BondAdj);
+						AddDirectPass<FSandReturnCS>(GraphBuilder, RDG_EVENT_NAME("SandReturn"), ShaderMap, TR, LN, 64);
+					}
 					if (P.PileTargets.Num() > 0)
 					{
 						// M2 T3 — 무덤 칸이 손 재고를 하나씩 받아 놓을 자리로 (파기 뒤 — 같은 프레임에 판 것도 쌓을 수 있다)

@@ -95,6 +95,9 @@ public:
 	TRefCountPtr<FRDGPooledBuffer> GetWaterBuffer() const;
 	/** M4 T4 ①: 칸 벽 하중 (float2, N) — 마스크가 켜진 Run 끝에 갱신 */
 	TRefCountPtr<FRDGPooledBuffer> GetLoadBuffer() const;
+	/** M4 T5 파괴 환원: 꼭짓점 uint 누적 (1/65536 입자). Scale = 1/65536 입자의 바닥 높이 (m). 0 = 끔. 마스크 패스 (SetStructSource) 와 같이 돈다 */
+	TRefCountPtr<FRDGPooledBuffer> GetReturnBuffer() const;
+	void SetReturnScale(float S) { ReturnScale = S; }
 	void DownloadLoad(TArray<FVector2f>& Out) const;   // 동기 (시험용)
 	/** M4 T2: 꼭짓점 b_struct 버퍼 (m) — 입자 지면은 Bed − Struct */
 	TRefCountPtr<FRDGPooledBuffer> GetStructBuffer() const;
@@ -113,6 +116,7 @@ private:
 	TArray<FVector4f> PendingStamps;
 	const class FSandGpuSim* StructSim = nullptr;
 	FStructMap StructMap;
+	float ReturnScale = 0.f;
 	bool bStruct = false;          // 마스크 패스를 돈다 (위치를 비운 뒤 한 번 더 돌아 0 으로 만든다)
 	TArray<FVector4f> StructUpload; bool bStructUpload = false;
 

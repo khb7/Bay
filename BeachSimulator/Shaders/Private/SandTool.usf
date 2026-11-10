@@ -262,6 +262,46 @@ void StampCS(uint3 Tid : SV_DispatchThreadID)
 	}
 }
 
+// M4 T5 파괴 환원 (m4-plan T5, papers D-M4-4 · D-M4-8): 산 결합 0 · 잠김 · 지면에 닿음 (지면 λ > 0) · 깨어 있음 → 무덤으로,
+// 부피 (지름 D 정육면체 = 격자 b 와 같은 공극 포함 부피) 를 둘레 꼭짓점 4 개에 이선형 무게로 (1/65536 단위, 격자 ReturnCS 가 b 로)
+uint ReturnMode;
+RWStructuredBuffer<uint> ReturnAccRW;
+[numthreads(64, 1, 1)]
+void ReturnCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint p = Tid.x;
+	if (p >= NumParticles || ReturnMode == 0u) { return; }
+	const float4 P4 = PosRW[p];
+	if (IsGrave(P4.xyz) || P4.w <= 0.f) { return; }
+	if (SleepFrames > 0u && SleepRW[p] >= SleepFrames) { return; }
+	if (GroundLambdaRW[p] <= 0.f) { return; }
+	if (NumBonds > 0u)
+	{
+		for (uint e = OldAdjOffset[p]; e < OldAdjOffset[p + 1]; ++e) { if (BondDataRW[OldAdj[e] >> 1].x >= 0.f) { return; } }
+	}
+	const float gx = (P4.x - GroundOrigin.x) / GroundCell, gy = (P4.y - GroundOrigin.y) / GroundCell;
+	const int ci = (int)floor(gx), cj = (int)floor(gy);
+	if (ci < 0 || cj < 0 || ci >= (int)GroundNX || cj >= (int)GroundNY) { return; }
+	bool bSub = false;
+	for (int dj = -1; dj <= 1 && !bSub; ++dj)
+	for (int di = -1; di <= 1 && !bSub; ++di) { bSub = SubmergedIn(P4.xyz, ci + di, cj + dj); }
+	if (!bSub) { return; }
+	const float fx = gx - ci, fy = gy - cj;
+	const uint W1 = GroundNX + 1u, c = (uint)cj * W1 + (uint)ci;
+	const uint a00 = (uint)round(65536.f * (1 - fx) * (1 - fy)), a10 = (uint)round(65536.f * fx * (1 - fy)), a01 = (uint)round(65536.f * (1 - fx) * fy);
+	const uint a11 = 65536u - a00 - a10 - a01;   // 합이 정확히 65536 — 부피 보존
+	uint Dm;
+	InterlockedAdd(ReturnAccRW[c], a00, Dm); InterlockedAdd(ReturnAccRW[c + 1u], a10, Dm);
+	InterlockedAdd(ReturnAccRW[c + W1], a01, Dm); InterlockedAdd(ReturnAccRW[c + W1 + 1u], a11, Dm);
+	const float3 G = GravePos(p);
+	PosRW[p] = float4(G, 0.f);
+	PrevPosRW[p] = float4(G, 0.f);
+	VelRW[p] = 0;
+	GroundLambdaRW[p] = 0.f;
+	WallLambdaRW[p] = 0;
+	SleepRW[p] = 0u;
+}
+
 [numthreads(64, 1, 1)]
 void PileCS(uint3 Tid : SV_DispatchThreadID)
 {

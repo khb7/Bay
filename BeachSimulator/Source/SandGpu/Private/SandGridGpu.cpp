@@ -51,6 +51,8 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER(float, StructZ)
 	SHADER_PARAMETER(float, StructR)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FVector2f>, LoadRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ReturnAccRW)
+	SHADER_PARAMETER(float, ReturnScale)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, BSort)
 	SHADER_PARAMETER(uint32, bMorph)
 	SHADER_PARAMETER(float, SedThc)
@@ -188,6 +190,7 @@ GRID_SHADER(FSandGridSedBedCS,   "SedBedCS")
 GRID_SHADER(FSandGridSedApplyCS, "SedApplyCS")
 GRID_SHADER(FSandGridSedCellCS,  "SedCellCS")
 GRID_SHADER(FSandGridStampBedCS, "StampBedCS")
+GRID_SHADER(FSandGridReturnCS,   "ReturnCS")
 GRID_SHADER(FSandGridStampWaterCS, "StampWaterCS")
 GRID_SHADER(FSandGridOccCS, "OccCS")
 GRID_SHADER(FSandGridStructCS, "StructCS")
@@ -196,7 +199,7 @@ GRID_SHADER(FSandGridLoadCS, "LoadCS")
 struct FSandGridGpu::FState
 {
 	TRefCountPtr<FRDGPooledBuffer> SusC, SusC2, SusE, SedAcc, Wet;
-	TRefCountPtr<FRDGPooledBuffer> SCorner, Occ, StructPos, Load;   // M4 T2 — b_struct · 점유 비트 · 시험용 고정 위치
+	TRefCountPtr<FRDGPooledBuffer> SCorner, Occ, StructPos, Load, ReturnAcc;   // M4 T2 — b_struct · 점유 비트 · 시험용 고정 위치
 	FTextureRenderTargetResource* ExportRt = nullptr; float ExportDry = 0.f;   // T5
 	TUniquePtr<FRHIGPUBufferReadback> RbW; bool bRbWBusy = false;              // 비동기 수면 (렌더 스레드)
 	std::atomic<bool> bWantW{ false };
@@ -348,6 +351,7 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 		S->SedB0 = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.SedB0"), BC.GetData());
 		{ TArray<float> Z; Z.Init(0.f, BC.Num()); S->SedDel = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.SedDel"), Z.GetData()); S->SCorner = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.SCorner"), Z.GetData()); }
 		{ TArray<FVector2f> Z; Z.Init(FVector2f::ZeroVector, N); S->Load = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.Load"), Z.GetData()); }
+		{ TArray<uint32> Z; Z.Init(0u, BC.Num()); S->ReturnAcc = MakeBuffer(GraphBuilder, sizeof(uint32), Z.Num(), TEXT("SandGrid.ReturnAcc"), Z.GetData()); }
 		{ TArray<uint32> Z; Z.Init(0u, 2 * BC.Num()); S->Occ = MakeBuffer(GraphBuilder, sizeof(uint32), Z.Num(), TEXT("SandGrid.Occ"), Z.GetData()); }
 		S->U0 = MakeBuffer(GraphBuilder, sizeof(FVector4f), N, TEXT("SandGrid.U0"), U.GetData());
 		S->U1 = MakeBuffer(GraphBuilder, sizeof(FVector4f), N, TEXT("SandGrid.U1"));
@@ -401,6 +405,7 @@ TRefCountPtr<FRDGPooledBuffer> FSandGridGpu::GetBedBuffer() const { return State
 TRefCountPtr<FRDGPooledBuffer> FSandGridGpu::GetStructBuffer() const { return State->SCorner; }
 TRefCountPtr<FRDGPooledBuffer> FSandGridGpu::GetWaterBuffer() const { return State->U0; }
 TRefCountPtr<FRDGPooledBuffer> FSandGridGpu::GetLoadBuffer() const { return State->Load; }
+TRefCountPtr<FRDGPooledBuffer> FSandGridGpu::GetReturnBuffer() const { return State->ReturnAcc; }
 void FSandGridGpu::DownloadLoad(TArray<FVector2f>& Out) const
 {
 	const int32 N = Params.NX * Params.NY;
@@ -486,7 +491,8 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 	TArray<FVector4f> SUp; const bool bSUp = bStructUpload;
 	if (bStructUpload) { SUp = StructUpload; bStructUpload = false; }
 	if (StructN == 0) { bStruct = false; }
-	ENQUEUE_RENDER_COMMAND(SandGridRun)([S, P, OS, OP, bFixed, DtOrFrame, NumSub, Stamps = MoveTemp(PendingStamps), bDoStruct, Sim, Sm, StructN, SUp = MoveTemp(SUp), bSUp](FRHICommandListImmediate& RHICmdList)
+	const float RetScale = ReturnScale;
+	ENQUEUE_RENDER_COMMAND(SandGridRun)([S, P, OS, OP, bFixed, DtOrFrame, NumSub, Stamps = MoveTemp(PendingStamps), bDoStruct, RetScale, Sim, Sm, StructN, SUp = MoveTemp(SUp), bSUp](FRHICommandListImmediate& RHICmdList)
 	{
 		const FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 		// 지난 Run 들의 readback 중 준비된 것 (오래된 순) 만 읽는다 — GPU 를 기다리지 않음 (m3-plan p1).
@@ -637,6 +643,12 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 				}
 				FSandGridParams Y = B; Y.SCorner = nullptr; Y.StructR = Sm.RadiusCm; Y.OccRW = GraphBuilder.CreateUAV(Oc); Y.DBRW = GraphBuilder.CreateUAV(Db); Y.SCornerRW = GraphBuilder.CreateUAV(Sc);
 				AddGridPass<FSandGridStructCS>(GraphBuilder, RDG_EVENT_NAME("SandGridStruct"), ShaderMap, Y, GK);
+				if (RetScale > 0.f)
+				{
+					// M4 T5 파괴 환원 — 입자가 모은 부피 → DB (b 증가, b_struct 아님)
+					FSandGridParams R = B; R.DBRW = GraphBuilder.CreateUAV(Db); R.ReturnAccRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->ReturnAcc)); R.ReturnScale = RetScale;
+					AddGridPass<FSandGridReturnCS>(GraphBuilder, RDG_EVENT_NAME("SandGridReturn"), ShaderMap, R, GK);
+				}
 				FSandGridParams Z = B; Z.BCorner = nullptr; Z.DBRO = GraphBuilder.CreateSRV(Db); Z.BCornerRW = GraphBuilder.CreateUAV(BC); Z.B0RO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->SedB0)); Z.BDelRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SedDel));
 				AddGridPass<FSandGridSedApplyCS>(GraphBuilder, RDG_EVENT_NAME("SandGridStructApply"), ShaderMap, Z, GK);
 				FSandGridParams C = Z; C.B0RO = nullptr; C.BDelRW = nullptr; C.BSort = nullptr; C.UOutRW = GraphBuilder.CreateUAV(U0); C.BSortRW = GraphBuilder.CreateUAV(Bs); C.SedAccRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SedAcc));

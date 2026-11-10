@@ -1189,6 +1189,20 @@ void OccCS(uint3 Tid : SV_DispatchThreadID)
 		for (int s = s0; s <= s1; ++s) { InterlockedOr(OccRW[c * 2u + ((uint)s >> 5)], 1u << ((uint)s & 31u)); }
 	}
 }
+// M4 T5 파괴 환원: 입자가 꼭짓점마다 모은 무게 (uint, 1/65536 입자) → DB 에 b 증가로 (StructCS 뒤, 같은 적용 길)
+RWStructuredBuffer<uint> ReturnAccRW;
+float ReturnScale;       // 1/65536 입자의 바닥 높이 (m) = D³ / (Dx·Dy) / 65536
+[numthreads(8, 8, 1)]
+void ReturnCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const uint ci = Tid.x, cj = Tid.y;
+	if (ci > NX || cj > NY) { return; }
+	const uint c = cj * (NX + 1) + ci;
+	const uint a = ReturnAccRW[c];
+	if (a == 0u) { return; }
+	ReturnAccRW[c] = 0u;
+	DBRW[c] += a * ReturnScale;
+}
 [numthreads(8, 8, 1)]
 void StructCS(uint3 Tid : SV_DispatchThreadID)
 {
