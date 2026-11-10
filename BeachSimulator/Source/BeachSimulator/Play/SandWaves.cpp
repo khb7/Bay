@@ -492,6 +492,7 @@ void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
 	float Back = 2.5f; FParse::Value(Cmd, TEXT("sandback="), Back);   // 정지 물가에서 땅 쪽으로 (m)
 	const bool bTunnel = FParse::Param(Cmd, TEXT("sandtunnel"));      // M4 T2: 가운데 20 cm 폭 · 밑 5–20 cm 비운 터널 (x = 파도 방향)
 	bSandTest = FParse::Param(Cmd, TEXT("wavesandtest"));
+	bSandNoMesh = FParse::Param(Cmd, TEXT("nosandmesh"));   // T6 프로파일: 표면 메시 갱신 끔
 	FSandParams SP;
 	SP.Substeps = 1; SP.WarmStart = 1.f; SP.WarmGapTol = 0.05f; SP.bGpuResident = true;
 	ApplySandGpuProfile(TEXT("-gpu2"), SP);
@@ -541,7 +542,7 @@ void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
 		Sand->DrainTau = 10.f; FParse::Value(Cmd, TEXT("sanddrain="), Sand->DrainTau);
 	}
 	const int32 Bonds = Sand->FormBonds();
-	Sand->bAsyncStats = true;
+	Sand->bAsyncStats = !FParse::Param(Cmd, TEXT("sandsyncstats"));   // 동기 통계 = 입자 GPU ms 측정 (T6 프로파일)
 	Sand->Step(1.f / 60.f);   // GPU 상주 시뮬은 첫 스텝에서 만들어진다 — 메셔에 넘기기 전에
 	if (!FParse::Param(Cmd, TEXT("nostruct")))
 	{
@@ -576,7 +577,7 @@ void USandWavesSubsystem::UpdateSand()
 		UE_LOG(LogSandWaves, Display, TEXT("M4 T1 %.1fs: 구덩이 (%.2f, %.2f) R 0.30 m · 40 L"), SimTime, SandC.X, SandC.Y + 0.30f);
 	}
 	Sand->Step(1.f / 60.f);
-	SandComp->UpdateFromSim();
+	if (!bSandNoMesh) { SandComp->UpdateFromSim(); }
 	SandGpuSum += Sand->LastGpuMs(); ++SandGpuN;
 	Sand->GetGpuSim()->RequestPositionsAsync();
 	const bool bGot = Sand->GetGpuSim()->TakePositionsAsync(SandPos);
