@@ -306,10 +306,18 @@ float ParticleMargin(uint p)
 	// 중력 항 g·Δt² — 정지에서 출발한 입자도 한 프레임에 0.27cm(≈0.11R) 움직인다. 이걸 빼면 깨어나는 입자의 쌍을 놓쳐 깊게 겹친다 (#50: 겹침 max 1.95R)
 	return clamp(2.f * length(VelRO[p].xyz) * StepDt + length(Gravity) * StepDt * StepDt, MarginMinR * Radius, Radius);
 }
-float PairRange2(float Range2, float Mi, uint j)
+uint  bRelMargin;   // M4 T6 — 쌍 여유를 상대 속도로 (닫히는 속도 = |v_i − v_j|, 삼각부등식으로 m_i + m_j 보다 작거나 같다 — 놓치는 쌍 없음). 같이 떠밀리는 판은 여유가 늘지 않는다
+float PairRange2(float Range2, float Mi, uint j, uint i)
 {
 	if (bParticleMargin == 0u) { return Range2; }
-	const float R = min(2.f * Radius + Mi + ParticleMargin(j), CellSize);
+	float M;
+	if (bRelMargin != 0u)
+	{
+		const float Gd = length(Gravity) * StepDt * StepDt;
+		M = clamp(2.f * length(VelRO[i].xyz - VelRO[j].xyz) * StepDt + 2.f * Gd, 2.f * MarginMinR * Radius, 2.f * Radius);
+	}
+	else { M = Mi + ParticleMargin(j); }
+	const float R = min(2.f * Radius + M, CellSize);
 	return R * R;
 }
 
@@ -324,7 +332,7 @@ void PairCountCS(uint3 Tid : SV_DispatchThreadID)
 	uint n = 0;
 	FOR_NEIGHBORS(Pi,
 		const float3 d = Pi - PosRO[j].xyz;
-		if (dot(d, d) < PairRange2(Range2, Mi, j)) { ++n; }
+		if (dot(d, d) < PairRange2(Range2, Mi, j, i)) { ++n; }
 	)
 	PairCountRW[i] = n;
 }
@@ -344,7 +352,7 @@ void PairFillCS(uint3 Tid : SV_DispatchThreadID)
 	uint k = Begin;
 	FOR_NEIGHBORS(Pi,
 		const float3 d = Pi - PosRO[j].xyz;
-		if (dot(d, d) < PairRange2(Range2, Mi, j))
+		if (dot(d, d) < PairRange2(Range2, Mi, j, i))
 		{
 			if (k < MaxPairs)
 			{

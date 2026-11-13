@@ -1390,14 +1390,14 @@ void FSandSpike::StepGpuResident(float Dt)
 	P.bSleep = Params.bSleep; P.SleepVel = Params.SleepVel; P.SleepFrames = Params.SleepFrames; P.WakeVel = Params.WakeVel; P.WakeTouchVel = Params.WakeTouchVel;
 	// #53 조합 나누기 — 입자별 여유(다짐 중에 유리)와 재우기(정지에 유리)를 함께 켜면 마른 더미가 재각성 · 사출한다 (#50~52).
 	// 대부분 잠들면 전체 여유로 돌아간다. 문턱은 C9 의 "축소율 70% 부터 이득" 을 빌린 경험값, 50% 로 이력을 둔다
-	if (Params.bSleep && Params.bParticleMargin && Pos.Num() > 0)
+	if (Params.bSleep && Params.bParticleMargin && !Params.bRelMargin && Pos.Num() > 0)   // 상대 여유면 전체 여유로 안 돌아간다 (M4 T6)
 	{
 		const float AsleepFrac = (float)LastAsleep / Pos.Num();
 		if (!bMarginGlobalMode && AsleepFrac >= 0.7f) { bMarginGlobalMode = true; }
 		else if (bMarginGlobalMode && AsleepFrac < 0.5f) { bMarginGlobalMode = false; }
 	}
 	P.bParticleMargin = Params.bParticleMargin && !bMarginGlobalMode;
-	P.MarginMinR = Params.MarginMinR;
+	P.MarginMinR = Params.MarginMinR; P.bRelMargin = Params.bRelMargin;
 	P.bWakeCold = Params.bWakeCold;
 	P.bWakeZeroPairs = Params.bWakeZeroPairs;
 	P.bSleepColdPairs = Params.bSleepColdPairs;
@@ -1474,6 +1474,7 @@ void FSandSpike::StepGpuResident(float Dt)
 			S.NumBatchBlocks > 0 ? (float)S.SumBatch / S.NumBatchBlocks : 0.f, S.BatchOverflow);
 	}
 
+	LastMaxBatch = S.MaxBatch; LastAvgBatch = S.NumBatchBlocks > 0 ? (float)S.SumBatch / S.NumBatchBlocks : 0.f; LastPairs = S.NumPairs;
 	BondsBrokenTotal += S.BondsBroken;
 	HandCount = S.HandCount; LastDug = S.Dug; LastHandFull = S.HandFull;
 	LastBondsFormed = S.BondsFormed; LastBondFormRejected = S.BondFormRejected;
