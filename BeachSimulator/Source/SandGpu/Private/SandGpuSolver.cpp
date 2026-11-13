@@ -107,6 +107,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandSolverParams, )
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BatchStartRW)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BatchStartRO)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BatchStatsRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, IterArgsRW)
 
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, GroundLambdaRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, WallLambdaRW)
@@ -132,6 +133,8 @@ END_SHADER_PARAMETER_STRUCT()
 SAND_SHADER(FSandSolveBlocksCS,   FSandSolverParams, SOLVER_USF, "SolveBlocksCS")
 SAND_SHADER(FSandColorBatchCS,   FSandSolverParams, SOLVER_USF, "ColorBatchCS")
 SAND_SHADER(FSandSolveBlocksParCS, FSandSolverParams, SOLVER_USF, "SolveBlocksParCS")
+SAND_SHADER(FSandAnyAwakeCS,  FSandSolverParams, SOLVER_USF, "AnyAwakeCS")
+SAND_SHADER(FSandIterArgsCS,  FSandSolverParams, SOLVER_USF, "IterArgsCS")
 SAND_SHADER(FSandCountBoundaryCS, FSandSolverParams, SOLVER_USF, "CountBoundaryCS")
 SAND_SHADER(FSandSolveBoundaryCS, FSandSolverParams, SOLVER_USF, "SolveBoundaryCS")
 SAND_SHADER(FSandApplyBoundaryCS, FSandSolverParams, SOLVER_USF, "ApplyBoundaryCS")
@@ -458,7 +461,7 @@ namespace
 	/** 반복 루프 — 1·2단계가 같은 패스 열을 쓴다. IndirectArgs 가 있으면 경계 패스는 간접(GPU 가 센 쌍 수), 없으면 NumBoundaryDirect */
 	void AddSolverIterations(FRDGBuilder& GraphBuilder, const FGlobalShaderMap* ShaderMap, const FSandSolverParams& T,
 		int32 Iterations, int32 N, int32 NumBlocks, int32 NumBonds, bool bMassSplit, FRDGBufferRef IndirectArgs, int32 NumBoundaryDirect,
-		bool bColor8 = false, int32 FrameIndex = 0, bool bColor8Par = false)
+		bool bColor8 = false, int32 FrameIndex = 0, bool bColor8Par = false, FRDGBufferRef IterArgs = nullptr)
 	{
 		for (int32 It = 0; It < Iterations; ++It)
 		{
@@ -471,7 +474,13 @@ namespace
 					FSandSolverParams TC = T;
 					TC.NumBlocks = Sub;
 					TC.BlockBase = ((c + FrameIndex) & 7) * Sub;   // 색 회전 (R5)
-					if (bColor8Par)
+					if (bColor8Par && IterArgs)
+					{
+						// M4 T6 — 같은 패스를 간접으로 (모두 잠들면 0 그룹)
+						FSandSolverParams TI = TC; TI.NumBlocks = Sub;
+						AddIndirectPass<FSandSolveBlocksParCS>(GraphBuilder, RDG_EVENT_NAME("SandColorPar"), ShaderMap, TI, IterArgs, 0);
+					}
+					else if (bColor8Par)
 					{
 						// 단계 2 — 그룹 = 블록, 블록 안 배치 병렬
 						AddDirectPass<FSandSolveBlocksParCS>(GraphBuilder, RDG_EVENT_NAME("SandColorPar"), ShaderMap, TC, Sub * 64, 64);
@@ -501,6 +510,12 @@ namespace
 					AddDirectPass<FSandSolveBoundaryCS>(GraphBuilder, RDG_EVENT_NAME("SandBoundary"), ShaderMap, T, NumBoundaryDirect, 64);
 				}
 				AddDirectPass<FSandApplyBoundaryCS>(GraphBuilder, RDG_EVENT_NAME("SandApplyBoundary"), ShaderMap, T, N, 64);
+			}
+			if (IterArgs)
+			{
+				if (NumBonds > 0) { AddIndirectPass<FSandSolveBondsCS>(GraphBuilder, RDG_EVENT_NAME("SandBonds"), ShaderMap, T, IterArgs, 3 * sizeof(uint32)); }
+				AddIndirectPass<FSandApplyBondsCS>(GraphBuilder, RDG_EVENT_NAME("SandApplyBonds"), ShaderMap, T, IterArgs, 6 * sizeof(uint32));
+				continue;
 			}
 			if (NumBonds > 0)
 			{
@@ -1275,8 +1290,18 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 				T.BatchStatsRW   = GraphBuilder.CreateUAV(BatchStatsBuf);
 				AddDirectPass<FSandColorBatchCS>(GraphBuilder, RDG_EVENT_NAME("SandColorBatch"), ShaderMap, T, BlockTableSize * 64, 64);
 			}
+			FRDGBufferRef IterArgs = nullptr;
+			if (bColor8Par && P.bSleep)
+			{
+				// M4 T6 — 깬 것이 없으면 반복 패스 0 그룹
+				IterArgs = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateIndirectDesc<FRHIDispatchIndirectParameters>(3), TEXT("SandSim.IterArgs"));
+				FSandSolverParams TA = T; TA.BatchStatsRW = GraphBuilder.CreateUAV(BatchStatsBuf); TA.NumBlocks = BlockTableSize / 8;
+				AddDirectPass<FSandAnyAwakeCS>(GraphBuilder, RDG_EVENT_NAME("SandAnyAwake"), ShaderMap, TA, LN, 64);
+				TA.IterArgsRW = GraphBuilder.CreateUAV(IterArgs, PF_R32_UINT);
+				AddDirectPass<FSandIterArgsCS>(GraphBuilder, RDG_EVENT_NAME("SandIterArgs"), ShaderMap, TA, 1, 1);
+			}
 			Stamp(2);
-			AddSolverIterations(GraphBuilder, ShaderMap, T, P.Iterations, LN, BlockTableSize, LB, P.bMassSplit, IndirectArgs, 0, P.bColor8, P.FrameIndex, bColor8Par);
+			AddSolverIterations(GraphBuilder, ShaderMap, T, P.Iterations, LN, BlockTableSize, LB, P.bMassSplit, IndirectArgs, 0, P.bColor8, P.FrameIndex, bColor8Par, IterArgs);
 			Stamp(3);
 
 			// --- 파단 · 통계 ---

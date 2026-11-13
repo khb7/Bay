@@ -213,6 +213,22 @@ uint BatchSlot(uint p)
 }
 
 // 그룹 = 블록 (전 색 한 번에). 스레드 0 이 순차 greedy — 단계 0 CPU OrderContactsColor8 과 같은 규칙: k 오름차순, 두 입자 마스크의 첫 빈 비트
+// M4 T6 — 반복 패스 간접 인자. 깬 블록 0 · 깬 입자 0 이면 반복 패스가 0 그룹 (모두 잠든 프레임 비용 ≈ 0)
+RWBuffer<uint> IterArgsRW;   // [0..2] 색 블록 (그룹 = 블록) · [3..5] 결합 · [6..8] 결합 적용 (입자)
+[numthreads(64, 1, 1)]
+void AnyAwakeCS(uint3 Tid : SV_DispatchThreadID)
+{
+	if (Tid.x < NumParticles && PosRO[Tid.x].w > 0.f) { InterlockedOr(BatchStatsRW[5], 1u); }
+}
+[numthreads(1, 1, 1)]
+void IterArgsCS()
+{
+	const bool bGo = BatchStatsRW[4] > 0u || BatchStatsRW[5] > 0u;
+	IterArgsRW[0] = bGo ? NumBlocks : 0u;               IterArgsRW[1] = 1u; IterArgsRW[2] = 1u;
+	IterArgsRW[3] = bGo ? (NumBonds + 63u) / 64u : 0u;   IterArgsRW[4] = 1u; IterArgsRW[5] = 1u;
+	IterArgsRW[6] = bGo ? (NumParticles + 63u) / 64u : 0u; IterArgsRW[7] = 1u; IterArgsRW[8] = 1u;
+}
+
 [numthreads(64, 1, 1)]
 void ColorBatchCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
 {
