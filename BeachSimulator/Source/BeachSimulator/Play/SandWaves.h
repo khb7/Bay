@@ -90,14 +90,14 @@ private:
 	TArray<FVector4f> SandPos;
 	FVector2f SandC = FVector2f::ZeroVector;   // 블록 가운데 (m)
 	float SandNextLog = 0.f, SandGpuSum = 0.f; int32 SandGpuN = 0;
-	bool bSandTest = false, bSandPitDone = false, bSandNoMesh = false;
+	bool bSandTest = false, bSandPitDone = false, bSandNoMesh = false, bProfiled = false;
 	float Yaw = 0.f, Pitch = -20.f;
 	FVector2D LastMouse = FVector2D::ZeroVector;
 	bool bLooking = false;
 
 	FString ShotPath;
 	int32 Frames = 0, WallN = 0;
-	double LastWall = 0.0, WallSum = 0.0;
+	double LastWall = 0.0, WallSum = 0.0, GpuSumMs = 0.0, GameSumMs = 0.0, RenderSumMs = 0.0;
 	int32 LastDiag = -1;
 	TArray<float> ShotTimes;
 	int32 NextShot = 0;

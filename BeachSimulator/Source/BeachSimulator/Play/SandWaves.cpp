@@ -1,5 +1,7 @@
 ﻿#include "SandWaves.h"
 
+#include "RHI.h"
+#include "RenderCore.h"
 #include "Camera/CameraActor.h"
 #include "Components/LightComponent.h"
 #include "Engine/DirectionalLight.h"
@@ -495,6 +497,7 @@ void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
 	bSandNoMesh = FParse::Param(Cmd, TEXT("nosandmesh"));   // T6 프로파일: 표면 메시 갱신 끔
 	FSandParams SP;
 	SP.Substeps = 1; SP.WarmStart = 1.f; SP.WarmGapTol = 0.05f; SP.bGpuResident = true;
+	SP.bSleep = !FParse::Param(Cmd, TEXT("nosandsleep"));   // M4 T6: 입자 재우기 (C안, m0b-plan-sleep) — 파도 장면엔 꺼져 있었다
 	ApplySandGpuProfile(TEXT("-gpu2"), SP);
 	SP.bGatherApply = false; SP.bMassSplit = false;
 	const float R = SP.Radius, D = 2.f * R;
@@ -621,6 +624,7 @@ void USandWavesSubsystem::UpdateSand()
 			const double PV = FMath::Cube((double)Sand->GetParams().Radius * 2.0 / 100.0);
 			UE_LOG(LogSandWaves, Display, TEXT("M4 T5 %.0fs: 입자 %d × D³ = %.5f m³ · 격자 Δb 부피 %.5f · 부유사 %.5f · 합 %.5f m³ (처음 %.5f)"), SimTime, Alive, Alive * PV, DbVol, SusVol, Alive * PV + DbVol + SusVol, SandPos.Num() * PV);
 		}
+		UE_LOG(LogSandWaves, Display, TEXT("T6 입자 GPU 단계 %.0fs: 이웃·쌍 %.2f · 워밍·예측 %.2f · 반복 %.2f · 마무리 %.2f ms · 잠든 입자 %d · 깬 블록 %d"), SimTime, Sand->LastStageMs(0), Sand->LastStageMs(1), Sand->LastStageMs(2), Sand->LastStageMs(3), Sand->LastNumAsleep(), Sand->LastNumAwakeBlocks());
 		UE_LOG(LogSandWaves, Display, TEXT("M4 T1 %.0fs: 입자 %d (비유한 %d) · 처음 지면 위 최고 %.1f cm · 지면 최소 간극 %.2f cm · 구덩이 안 %d · 입자 GPU 평균 %.2f ms · 격자 GPU %.2f ms"),
 			SimTime, Alive, Bad, Top, MinGap, InPit, SandGpuSum / FMath::Max(SandGpuN, 1), Grid->LastGpuMs());
 		{
@@ -670,7 +674,7 @@ void USandWavesSubsystem::UpdateSwash()
 bool USandWavesSubsystem::Tick(float DeltaTime)
 {
 	++Frames;
-	{ const double Now = FPlatformTime::Seconds(); if (SimTime > 10.f && LastWall > 0.0) { WallSum += Now - LastWall; ++WallN; } LastWall = Now; }   // 프레임 시간 (T5 비용)
+	{ const double Now = FPlatformTime::Seconds(); if (SimTime > 10.f && LastWall > 0.0) { WallSum += Now - LastWall; ++WallN; GpuSumMs += FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles()); GameSumMs += FPlatformTime::ToMilliseconds(GGameThreadTime); RenderSumMs += FPlatformTime::ToMilliseconds(GRenderThreadTime); } LastWall = Now; }   // 프레임 시간 (T5 비용)
 	UWorld* World = GetWorld();
 	APlayerController* PC = World ? UGameplayStatics::GetPlayerController(World, 0) : nullptr;
 	if (!Grid.IsValid() || !PC || !Cam) { return true; }
@@ -686,6 +690,11 @@ bool USandWavesSubsystem::Tick(float DeltaTime)
 	{
 		GEngine->AddOnScreenDebugMessage(1, 0.f, FColor::White, FString::Printf(TEXT("파도 %.1fs · Hs %.2fm · 격자 GPU %.2f ms (서브스텝 %d) · 가운데 끌기 둘러보기 · WASDQE (Shift 빠르게)"), SimTime, Hs, Grid->LastGpuMs(), Grid->GetLastSubsteps()));
 	}
+	if (!bProfiled && SimTime >= 30.f && FParse::Param(FCommandLine::Get(), TEXT("t6profile")))
+	{
+		bProfiled = true;   // M4 T6 1단계: 패스별 GPU 시간 (로그에 계층으로)
+		GEngine->Exec(GetWorld(), TEXT("ProfileGPU"));
+	}
 	if (bAuto && NextShot < ShotTimes.Num() && SimTime >= ShotTimes[NextShot])
 	{
 		const FString Path = FString::Printf(TEXT("%s_%02.0fs.png"), *ShotPath.LeftChop(4), ShotTimes[NextShot]);
@@ -693,7 +702,7 @@ bool USandWavesSubsystem::Tick(float DeltaTime)
 		UE_LOG(LogSandWaves, Display, TEXT("T3 %.1fs: 스크린샷 %s · 격자 GPU %.2f ms · 서브스텝 %d"), SimTime, *Path, Grid->LastGpuMs(), Grid->GetLastSubsteps());
 		++NextShot;
 	}
-	if (bAuto && NextShot >= ShotTimes.Num() && SimTime > ShotTimes.Last() + 1.f) { UE_LOG(LogSandWaves, Display, TEXT("T5 프레임: 평균 %.2f ms (%d 프레임, 10 s 뒤) · 격자 GPU %.2f ms"), 1000.0 * WallSum / FMath::Max(WallN, 1), WallN, Grid->LastGpuMs()); UE_LOG(LogSandWaves, Display, TEXT("T6 도구: 파냄 %.1f L · 쌓음 %.1f L · 손 %.1f L · 부은 물 %.1f L"), DugM3 * 1e3, PiledM3 * 1e3, HandM3 * 1e3f, ToolWaterM3 * 1e3f); FPlatformMisc::RequestExit(false); return false; }   // 마지막 스크린샷이 찍힐 프레임을 남긴다
+	if (bAuto && NextShot >= ShotTimes.Num() && SimTime > ShotTimes.Last() + 1.f) { UE_LOG(LogSandWaves, Display, TEXT("T5 프레임: 평균 %.2f ms (%d 프레임, 10 s 뒤) · 격자 GPU %.2f ms · GPU 프레임 %.2f · 게임 스레드 %.2f · 렌더 스레드 %.2f ms"), 1000.0 * WallSum / FMath::Max(WallN, 1), WallN, Grid->LastGpuMs(), GpuSumMs / FMath::Max(WallN, 1), GameSumMs / FMath::Max(WallN, 1), RenderSumMs / FMath::Max(WallN, 1)); UE_LOG(LogSandWaves, Display, TEXT("T6 도구: 파냄 %.1f L · 쌓음 %.1f L · 손 %.1f L · 부은 물 %.1f L"), DugM3 * 1e3, PiledM3 * 1e3, HandM3 * 1e3f, ToolWaterM3 * 1e3f); FPlatformMisc::RequestExit(false); return false; }   // 마지막 스크린샷이 찍힐 프레임을 남긴다
 	return true;
 }
 
