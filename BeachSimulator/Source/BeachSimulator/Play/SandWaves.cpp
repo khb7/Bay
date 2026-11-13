@@ -494,7 +494,8 @@ void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
 	float Back = 2.5f; FParse::Value(Cmd, TEXT("sandback="), Back);   // 정지 물가에서 땅 쪽으로 (m)
 	const bool bTunnel = FParse::Param(Cmd, TEXT("sandtunnel"));      // M4 T2: 가운데 20 cm 폭 · 밑 5–20 cm 비운 터널 (x = 파도 방향)
 	bSandTest = FParse::Param(Cmd, TEXT("wavesandtest"));
-	bSandNoMesh = FParse::Param(Cmd, TEXT("nosandmesh"));   // T6 프로파일: 표면 메시 갱신 끔
+	bSandNoMesh = FParse::Param(Cmd, TEXT("nosandmesh"));
+	bSandMeshAlways = FParse::Param(Cmd, TEXT("sandmeshalways"));   // T6 비교: 매 프레임 메시   // T6 프로파일: 표면 메시 갱신 끔
 	FSandParams SP;
 	SP.Substeps = 1; SP.WarmStart = 1.f; SP.WarmGapTol = 0.05f; SP.bGpuResident = true;
 	SP.bSleep = !FParse::Param(Cmd, TEXT("nosandsleep"));   // M4 T6: 입자 재우기 (C안, m0b-plan-sleep) — 파도 장면엔 꺼져 있었다
@@ -580,10 +581,20 @@ void USandWavesSubsystem::UpdateSand()
 		UE_LOG(LogSandWaves, Display, TEXT("M4 T1 %.1fs: 구덩이 (%.2f, %.2f) R 0.30 m · 40 L"), SimTime, SandC.X, SandC.Y + 0.30f);
 	}
 	Sand->Step(1.f / 60.f);
-	if (!bSandNoMesh) { SandComp->UpdateFromSim(); }
 	SandGpuSum += Sand->LastGpuMs(); ++SandGpuN;
 	Sand->GetGpuSim()->RequestPositionsAsync();
 	const bool bGot = Sand->GetGpuSim()->TakePositionsAsync(SandPos);
+	if (bGot)
+	{
+		// M4 T6 3단계 — 메시는 깬 입자 (w > 0) 가 있거나 무덤 수가 바뀔 때만 다시. 위치 읽기가 늦으니 조용해진 뒤 몇 프레임 더
+		int32 NAwake = 0, NGrave = 0;
+		for (const FVector4f& X : SandPos) { if (SandPool::IsGrave(FVector3f(X))) { ++NGrave; } else if (X.W > 0.f) { ++NAwake; } }
+		if (NAwake > 0 || NGrave != LastGraveCount) { MeshQuietFrames = 0; } else { ++MeshQuietFrames; }
+		LastGraveCount = NGrave;
+	}
+	const bool bMeshNeeded = MeshQuietFrames < 8 || bSandMeshAlways;
+	if (!bSandNoMesh && bMeshNeeded) { SandComp->UpdateFromSim(); ++MeshBuilds; }
+	++MeshFrames;
 	if (bSandTest && bGot && SimTime >= SandNextLog)
 	{
 		SandNextLog = SimTime + 1.f;
@@ -624,6 +635,7 @@ void USandWavesSubsystem::UpdateSand()
 			const double PV = FMath::Cube((double)Sand->GetParams().Radius * 2.0 / 100.0);
 			UE_LOG(LogSandWaves, Display, TEXT("M4 T5 %.0fs: 입자 %d × D³ = %.5f m³ · 격자 Δb 부피 %.5f · 부유사 %.5f · 합 %.5f m³ (처음 %.5f)"), SimTime, Alive, Alive * PV, DbVol, SusVol, Alive * PV + DbVol + SusVol, SandPos.Num() * PV);
 		}
+		UE_LOG(LogSandWaves, Display, TEXT("T6 메시 %.0fs: 지난 1 s 다시 만듦 %d / %d 프레임 · 프레임 평균 %.2f ms"), SimTime, MeshBuilds, MeshFrames, 1000.0 * (FPlatformTime::Seconds() - SecWall0) / FMath::Max(MeshFrames, 1)); MeshBuilds = MeshFrames = 0; SecWall0 = FPlatformTime::Seconds();
 		UE_LOG(LogSandWaves, Display, TEXT("T6 입자 GPU 단계 %.0fs: 이웃·쌍 %.2f · 워밍·예측 %.2f · 반복 %.2f · 마무리 %.2f ms · 잠든 입자 %d · 깬 블록 %d"), SimTime, Sand->LastStageMs(0), Sand->LastStageMs(1), Sand->LastStageMs(2), Sand->LastStageMs(3), Sand->LastNumAsleep(), Sand->LastNumAwakeBlocks());
 		UE_LOG(LogSandWaves, Display, TEXT("M4 T1 %.0fs: 입자 %d (비유한 %d) · 처음 지면 위 최고 %.1f cm · 지면 최소 간극 %.2f cm · 구덩이 안 %d · 입자 GPU 평균 %.2f ms · 격자 GPU %.2f ms"),
 			SimTime, Alive, Bad, Top, MinGap, InPit, SandGpuSum / FMath::Max(SandGpuN, 1), Grid->LastGpuMs());

@@ -90,7 +90,8 @@ private:
 	TArray<FVector4f> SandPos;
 	FVector2f SandC = FVector2f::ZeroVector;   // 블록 가운데 (m)
 	float SandNextLog = 0.f, SandGpuSum = 0.f; int32 SandGpuN = 0;
-	bool bSandTest = false, bSandPitDone = false, bSandNoMesh = false, bProfiled = false;
+	bool bSandTest = false, bSandPitDone = false, bSandNoMesh = false, bProfiled = false, bSandMeshAlways = false;
+	double SecWall0 = 0.0; int32 LastGraveCount = -1, MeshQuietFrames = 0, MeshBuilds = 0, MeshFrames = 0;
 	float Yaw = 0.f, Pitch = -20.f;
 	FVector2D LastMouse = FVector2D::ZeroVector;
 	bool bLooking = false;
