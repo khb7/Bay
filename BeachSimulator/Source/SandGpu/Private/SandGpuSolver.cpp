@@ -65,6 +65,10 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandSolverParams, )
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, GroundStruct)
 	SHADER_PARAMETER(float, MaxDepenVel)
 	SHADER_PARAMETER(uint32, bMassSplit)
+	SHADER_PARAMETER(uint32, IterIndex)
+	SHADER_PARAMETER(uint32, ConvEvery)
+	SHADER_PARAMETER(float, ConvTol)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BlockConvRW)
 	SHADER_PARAMETER(float, BondAlphaTilde)
 	SHADER_PARAMETER(float, BondLambdaMax)
 	SHADER_PARAMETER(float, BondOmega)
@@ -475,6 +479,7 @@ namespace
 					FSandSolverParams TC = T;
 					TC.NumBlocks = Sub;
 					TC.BlockBase = ((c + FrameIndex) & 7) * Sub;   // 색 회전 (R5)
+					TC.IterIndex = (uint32)It;
 					if (bColor8Par && IterArgs)
 					{
 						// M4 T6 — 같은 패스를 간접으로 (모두 잠들면 0 그룹)
@@ -1289,6 +1294,11 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 				T.BatchStartRW   = GraphBuilder.CreateUAV(BatchStart);
 				T.BatchStartRO   = GraphBuilder.CreateSRV(BatchStart);
 				T.BatchStatsRW   = GraphBuilder.CreateUAV(BatchStatsBuf);
+				// D-M4-9 블록 조기 종료 — 반복 0 이 모든 블록을 푸므로 매 프레임 지울 필요 없다
+				FRDGBufferRef BlockConv = ScratchBuffer(GraphBuilder, TEXT("SandSim.BlockConv"), sizeof(uint32), P.ConvEvery > 0 ? BlockTableSize : 1);
+				T.BlockConvRW = GraphBuilder.CreateUAV(BlockConv);
+				T.ConvEvery = (uint32)FMath::Max(0, P.ConvEvery);
+				T.ConvTol   = P.ConvTol;
 				AddDirectPass<FSandColorBatchCS>(GraphBuilder, RDG_EVENT_NAME("SandColorBatch"), ShaderMap, T, BlockTableSize * 64, 64);
 			}
 			FRDGBufferRef IterArgs = nullptr;
@@ -1436,6 +1446,8 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 	Out.NumBatchBlocks  = (int32)BatchStats[2];
 	Out.BatchOverflow   = (int32)BatchStats[3];
 	Out.NumAwakeBlocks  = (int32)BatchStats[4];
+	Out.ConvSkipped     = (int32)BatchStats[6];
+	Out.ConvSolved      = (int32)BatchStats[7];
 	Out.NumAsleep       = (int32)Counters[3];
 	Out.HandCount = (int32)Hand[0]; Out.Dug = (int32)Hand[1]; Out.HandFull = (int32)Hand[2]; Out.Piled = (int32)Hand[3];
 	Out.BondsFormed = (int32)BondTot[1]; Out.BondFormRejected = (int32)BondTot[2];

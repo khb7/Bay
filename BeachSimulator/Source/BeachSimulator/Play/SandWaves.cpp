@@ -499,6 +499,8 @@ void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
 	FSandParams SP;
 	SP.Substeps = 1; SP.WarmStart = 1.f; SP.WarmGapTol = 0.05f; SP.bGpuResident = true;
 	SP.bSleep = !FParse::Param(Cmd, TEXT("nosandsleep"));
+	FParse::Value(Cmd, TEXT("-sandconv="), SP.ConvEvery);   // M4 T6 블록 조기 종료 (D-M4-9). 0 = 끔
+	FParse::Value(Cmd, TEXT("-sandconvtol="), SP.ConvTol);
 	SP.bRelMargin = !FParse::Param(Cmd, TEXT("absmargin"));   // M4 T6 깬 비용: 같이 떠밀리는 판의 쌍이 늘지 않게   // M4 T6: 입자 재우기 (C안, m0b-plan-sleep) — 파도 장면엔 꺼져 있었다
 	ApplySandGpuProfile(TEXT("-gpu2"), SP);
 	SP.bGatherApply = false; SP.bMassSplit = false;
@@ -637,7 +639,7 @@ void USandWavesSubsystem::UpdateSand()
 			UE_LOG(LogSandWaves, Display, TEXT("M4 T5 %.0fs: 입자 %d × D³ = %.5f m³ · 격자 Δb 부피 %.5f · 부유사 %.5f · 합 %.5f m³ (처음 %.5f)"), SimTime, Alive, Alive * PV, DbVol, SusVol, Alive * PV + DbVol + SusVol, SandPos.Num() * PV);
 		}
 		UE_LOG(LogSandWaves, Display, TEXT("T6 메시 %.0fs: 지난 1 s 다시 만듦 %d / %d 프레임 · 프레임 평균 %.2f ms"), SimTime, MeshBuilds, MeshFrames, 1000.0 * (FPlatformTime::Seconds() - SecWall0) / FMath::Max(MeshFrames, 1)); MeshBuilds = MeshFrames = 0; SecWall0 = FPlatformTime::Seconds();
-		UE_LOG(LogSandWaves, Display, TEXT("T6 입자 GPU 단계 %.0fs: 이웃·쌍 %.2f · 워밍·예측 %.2f · 반복 %.2f · 마무리 %.2f ms · 잠든 입자 %d · 깬 블록 %d · 배치 최대 %d 평균 %.1f · 쌍 %d"), SimTime, Sand->LastStageMs(0), Sand->LastStageMs(1), Sand->LastStageMs(2), Sand->LastStageMs(3), Sand->LastNumAsleep(), Sand->LastNumAwakeBlocks(), Sand->GetLastMaxBatch(), Sand->LastAvgBatch, Sand->LastPairs);
+		UE_LOG(LogSandWaves, Display, TEXT("T6 입자 GPU 단계 %.0fs: 이웃·쌍 %.2f · 워밍·예측 %.2f · 반복 %.2f · 마무리 %.2f ms · 잠든 입자 %d · 깬 블록 %d · 배치 최대 %d 평균 %.1f · 쌍 %d · 조기종료 건너뜀 %d / 풂 %d"), SimTime, Sand->LastStageMs(0), Sand->LastStageMs(1), Sand->LastStageMs(2), Sand->LastStageMs(3), Sand->LastNumAsleep(), Sand->LastNumAwakeBlocks(), Sand->GetLastMaxBatch(), Sand->LastAvgBatch, Sand->LastPairs, Sand->LastConvSkipped, Sand->LastConvSolved);
 		UE_LOG(LogSandWaves, Display, TEXT("M4 T1 %.0fs: 입자 %d (비유한 %d) · 처음 지면 위 최고 %.1f cm · 지면 최소 간극 %.2f cm · 구덩이 안 %d · 입자 GPU 평균 %.2f ms · 격자 GPU %.2f ms"),
 			SimTime, Alive, Bad, Top, MinGap, InPit, SandGpuSum / FMath::Max(SandGpuN, 1), Grid->LastGpuMs());
 		{

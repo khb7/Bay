@@ -45,6 +45,8 @@ struct FSandParams
 	bool   bSleep = false;
 	/** #50 입자별 탐색 여유 (-gpu2 만, Müller 2020) — 쌍 = 거리 < D + m_i + m_j */
 	bool   bParticleMargin = false;
+	int32  ConvEvery = 0;        // M4 T6 블록 조기 종료 재확인 주기 (D-M4-9). 0 = 끔
+	float  ConvTol = 1.e-3f;     // 불평형 비 문턱
 	bool   bRelMargin = false;   // M4 T6 쌍 여유 = 상대 속도 · 재우기와 같이 써도 전체 여유로 안 돌아감
 	float  MarginMinR = 0.1f;
 	/** #50 깬 첫 프레임은 접촉 워밍 임펄스 없이 (-gpu2 -sleep) */
@@ -512,7 +514,8 @@ public:
 	float LastGpuMs() const { return GpuMs; }
 	/** C안 — 마지막 GPU 프레임의 잠든 입자 수 · 풀이를 돈 블록 수 */
 	int32 LastNumAsleep() const { return LastAsleep; }
-	int32 LastPairs = 0; float LastAvgBatch = 0.f;   // M4 T6 깬 비용 조사
+	int32 LastPairs = 0; float LastAvgBatch = 0.f;
+	int32 LastConvSkipped = 0, LastConvSolved = 0;   // D-M4-9 건너뛴 / 푼 블록·반복   // M4 T6 깬 비용 조사
 	int32 GetLastMaxBatch() const { return LastMaxBatch; }
 	int32 LastNumAwakeBlocks() const { return LastAwakeBlocks; }
 	/** 3-4 — 마지막 GPU 프레임의 단계별 ms (이웃 · 워밍예측 · 반복 · 마무리) */

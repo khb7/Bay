@@ -86,6 +86,8 @@ struct FSandGpuFrameParams
 	bool  bSleep = false;              // C안 재우기 (m0b-plan-sleep.md) — -color8par 와 함께
 	bool  bParticleMargin = false;     // #50 입자별 탐색 여유 (Müller 2020)
 	bool  bRelMargin = false;          // M4 T6 쌍 여유 = 상대 속도 (닫히는 속도)
+	int32 ConvEvery = 0;               // M4 T6 블록 조기 종료 (D-M4-9): 수렴 블록 재확인 주기. 0 = 끔
+	float ConvTol = 1.e-3f;            // 불평형 비 Σ|Δλ|/Σλn 문턱 (준정적 DEM 표준 10⁻³, papers A-R7)
 	float MarginMinR = 0.1f;           // #50 입자별 여유 하한 (반경 배수)
 	bool  bWakeCold = false;           // #50 깬 첫 프레임은 접촉 워밍 없이
 	bool  bWakeZeroPairs = false;      // 조사 H9 — 깬 입자의 쌍 λ 를 버린다
@@ -153,6 +155,7 @@ struct FSandGpuStats
 	int32  NumPairs = 0, NumInternal = 0, NumBoundary = 0;
 	int32  PairOverflow = 0;          // > 0 이면 MaxPairs 초과 — 결과 무효
 	int32  MaxBatch = 0, SumBatch = 0, NumBatchBlocks = 0, BatchOverflow = 0;   // 단계 2 블록 안 배치 (접촉 있는 블록 기준)
+	int32  ConvSkipped = 0, ConvSolved = 0;   // 조기 종료: 건너뛴 / 푼 블록·반복
 	int32  NumAwakeBlocks = 0, NumAsleep = 0;   // C안 — 풀이를 돈 블록 · 잠든 입자
 	float  StageMs[4] = {};          // 3-4 GPU 타임스탬프: [0] 이웃·쌍·깨우기 [1] 워밍·예측·배치 [2] 반복 [3] 파단·통계
 	double GpuMs = 0.0;               // 스텝 벽시계 (통계 리드백 포함)

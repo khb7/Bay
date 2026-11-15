@@ -1397,7 +1397,7 @@ void FSandSpike::StepGpuResident(float Dt)
 		else if (bMarginGlobalMode && AsleepFrac < 0.5f) { bMarginGlobalMode = false; }
 	}
 	P.bParticleMargin = Params.bParticleMargin && !bMarginGlobalMode;
-	P.MarginMinR = Params.MarginMinR; P.bRelMargin = Params.bRelMargin;
+	P.MarginMinR = Params.MarginMinR; P.bRelMargin = Params.bRelMargin; P.ConvEvery = Params.ConvEvery; P.ConvTol = Params.ConvTol;
 	P.bWakeCold = Params.bWakeCold;
 	P.bWakeZeroPairs = Params.bWakeZeroPairs;
 	P.bSleepColdPairs = Params.bSleepColdPairs;
@@ -1474,7 +1474,7 @@ void FSandSpike::StepGpuResident(float Dt)
 			S.NumBatchBlocks > 0 ? (float)S.SumBatch / S.NumBatchBlocks : 0.f, S.BatchOverflow);
 	}
 
-	LastMaxBatch = S.MaxBatch; LastAvgBatch = S.NumBatchBlocks > 0 ? (float)S.SumBatch / S.NumBatchBlocks : 0.f; LastPairs = S.NumPairs;
+	LastMaxBatch = S.MaxBatch; LastAvgBatch = S.NumBatchBlocks > 0 ? (float)S.SumBatch / S.NumBatchBlocks : 0.f; LastPairs = S.NumPairs; LastConvSkipped = S.ConvSkipped; LastConvSolved = S.ConvSolved;
 	BondsBrokenTotal += S.BondsBroken;
 	HandCount = S.HandCount; LastDug = S.Dug; LastHandFull = S.HandFull;
 	LastBondsFormed = S.BondsFormed; LastBondFormRejected = S.BondFormRejected;

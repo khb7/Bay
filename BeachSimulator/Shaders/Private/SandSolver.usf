@@ -32,6 +32,12 @@ float Friction;
 float MaxDepenVel;      // #47 접촉 분리 속도 상한 (cm/s). 0 = 끔
 uint  bMassSplit;
 
+// M4 T6 — 블록별 조기 종료 (D-M4-9). 불평형 비 R = Σ|Δλ| / Σλn ≤ ConvTol 이면 블록이 수렴 — 다음 반복부터 건너뛰고, ConvEvery 마다 한 번 다시 풀어 확인
+uint  IterIndex;
+uint  ConvEvery;        // 0 = 끔
+float ConvTol;
+RWStructuredBuffer<uint> BlockConvRW;   // 블록 b: 1 = 수렴 (건너뜀)
+
 float BondAlphaTilde;
 float BondLambdaMax;
 float BondOmega;
@@ -81,7 +87,7 @@ RWStructuredBuffer<uint>   ContactOrderRW;   // 블록 구간 안에서 (배치,
 StructuredBuffer<uint>     ContactOrderRO;
 RWStructuredBuffer<uint>   BatchStartRW;     // b · BATCH_STRIDE + t
 StructuredBuffer<uint>     BatchStartRO;
-RWStructuredBuffer<uint>   BatchStatsRW;     // [0] 최대 배치 수 · [1] Σ배치 수 · [2] 접촉 있는 블록 · [3] 해시 넘침 블록 · [4] 깬 블록
+RWStructuredBuffer<uint>   BatchStatsRW;     // [0] 최대 배치 수 · [1] Σ배치 수 · [2] 접촉 있는 블록 · [3] 해시 넘침 블록 · [4] 깬 블록 · [5] 깬 입자 있음 · [6] 건너뛴 블록·반복 · [7] 푼 블록·반복 (조기 종료 켰을 때)
 
 RWStructuredBuffer<float>  GroundLambdaRW;
 RWStructuredBuffer<float4> WallLambdaRW;
@@ -141,7 +147,11 @@ float3 ContactImpulse(inout float4 InOutL, float WSum, float3 Pi, float3 Pj, flo
 }
 
 // 접촉 k 하나를 풀고 두 입자에 바로 쓴다 (GS). 블록 순차 · 배치 병렬이 같은 몸체를 쓴다
-void SolveContactGS(uint k)
+groupshared float GsConvRes[64];
+groupshared float GsConvLam[64];
+
+// 반환: x = |임펄스| (이번 반복 보정) · y = λn (풀린 뒤)
+float2 SolveContactGS(uint k)
 {
 	const uint i = ContactIJ[2 * k];
 	const uint j = ContactIJ[2 * k + 1];
@@ -150,7 +160,7 @@ void SolveContactGS(uint k)
 	const float WSum = Pi.w + Pj.w;
 	if (WSum <= 0.f)
 	{
-		return;
+		return 0;
 	}
 	float4 Vi = VelRW[i];
 	float4 Vj = VelRW[j];
@@ -166,6 +176,7 @@ void SolveContactGS(uint k)
 	VelRW[j] = Vj;
 	PosRW[i] = Pi;
 	PosRW[j] = Pj;
+	return float2(length(Impulse), L.w);
 }
 
 [numthreads(32, 1, 1)]
@@ -331,6 +342,13 @@ void SolveBlocksParCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
 	{
 		return;   // 빈 블록 — 그룹 전체가 같은 값을 읽으므로 배리어 앞 분기가 균일하다
 	}
+	const bool bConv = ConvEvery > 0u;
+	if (bConv && (IterIndex % ConvEvery) != 0u && BlockConvRW[b] != 0u)
+	{
+		if (Gtid.x == 0u) { InterlockedAdd(BatchStatsRW[6], 1u); }   // [6] 건너뛴 블록·반복
+		return;   // 수렴한 블록 — 확인 반복까지 건너뛴다 (블록 단위라 균일)
+	}
+	float Res = 0.f, Lam = 0.f;
 	for (uint t = 0; t < MAX_BATCH - 1u; ++t)
 	{
 		const uint S = BatchStartRO[Base + t];
@@ -341,7 +359,8 @@ void SolveBlocksParCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
 		}
 		for (uint k = S + Gtid.x; k < E; k += 64u)
 		{
-			SolveContactGS(ContactOrderRO[k]);
+			const float2 R2 = SolveContactGS(ContactOrderRO[k]);
+			Res += R2.x; Lam += R2.y;
 		}
 		DeviceMemoryBarrierWithGroupSync();
 	}
@@ -351,7 +370,22 @@ void SolveBlocksParCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
 		const uint E = BatchStartRO[Base + MAX_BATCH];
 		for (uint k = S; k < E; ++k)
 		{
-			SolveContactGS(ContactOrderRO[k]);
+			const float2 R2 = SolveContactGS(ContactOrderRO[k]);
+			Res += R2.x; Lam += R2.y;
+		}
+	}
+	if (bConv)
+	{
+		GsConvRes[Gtid.x] = Res;
+		GsConvLam[Gtid.x] = Lam;
+		GroupMemoryBarrierWithGroupSync();
+		if (Gtid.x == 0u)
+		{
+			float SR = 0.f, SL = 0.f;
+			for (uint q = 0; q < 64u; ++q) { SR += GsConvRes[q]; SL += GsConvLam[q]; }
+			const bool bDone = SR <= ConvTol * SL;
+			BlockConvRW[b] = bDone ? 1u : 0u;
+			InterlockedAdd(BatchStatsRW[7], 1u);   // [7] 푼 블록·반복
 		}
 	}
 }
