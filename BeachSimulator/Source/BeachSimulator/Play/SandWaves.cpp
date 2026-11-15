@@ -501,6 +501,7 @@ void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
 	SP.bSleep = !FParse::Param(Cmd, TEXT("nosandsleep"));
 	FParse::Value(Cmd, TEXT("-sandconv="), SP.ConvEvery);   // M4 T6 블록 조기 종료 (D-M4-9). 0 = 끔
 	FParse::Value(Cmd, TEXT("-sandconvtol="), SP.ConvTol);
+	FParse::Value(Cmd, TEXT("-sandskippass="), SP.DebugSkipMask);   // 진단 전용 (물리 깨짐)
 	SP.bRelMargin = !FParse::Param(Cmd, TEXT("absmargin"));   // M4 T6 깬 비용: 같이 떠밀리는 판의 쌍이 늘지 않게   // M4 T6: 입자 재우기 (C안, m0b-plan-sleep) — 파도 장면엔 꺼져 있었다
 	ApplySandGpuProfile(TEXT("-gpu2"), SP);
 	SP.bGatherApply = false; SP.bMassSplit = false;

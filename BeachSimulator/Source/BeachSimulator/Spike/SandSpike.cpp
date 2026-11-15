@@ -1397,7 +1397,7 @@ void FSandSpike::StepGpuResident(float Dt)
 		else if (bMarginGlobalMode && AsleepFrac < 0.5f) { bMarginGlobalMode = false; }
 	}
 	P.bParticleMargin = Params.bParticleMargin && !bMarginGlobalMode;
-	P.MarginMinR = Params.MarginMinR; P.bRelMargin = Params.bRelMargin; P.ConvEvery = Params.ConvEvery; P.ConvTol = Params.ConvTol;
+	P.MarginMinR = Params.MarginMinR; P.bRelMargin = Params.bRelMargin; P.ConvEvery = Params.ConvEvery; P.ConvTol = Params.ConvTol; P.DebugSkipMask = Params.DebugSkipMask;
 	P.bWakeCold = Params.bWakeCold;
 	P.bWakeZeroPairs = Params.bWakeZeroPairs;
 	P.bSleepColdPairs = Params.bSleepColdPairs;

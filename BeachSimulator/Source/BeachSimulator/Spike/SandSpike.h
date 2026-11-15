@@ -45,6 +45,7 @@ struct FSandParams
 	bool   bSleep = false;
 	/** #50 입자별 탐색 여유 (-gpu2 만, Müller 2020) — 쌍 = 거리 < D + m_i + m_j */
 	bool   bParticleMargin = false;
+	int32  DebugSkipMask = 0;    // 진단 전용 — 반복 패스 빼기 (SandGpuSolver.h)
 	int32  ConvEvery = 0;        // M4 T6 블록 조기 종료 재확인 주기 (D-M4-9). 0 = 끔
 	float  ConvTol = 1.e-3f;     // 불평형 비 문턱
 	bool   bRelMargin = false;   // M4 T6 쌍 여유 = 상대 속도 · 재우기와 같이 써도 전체 여유로 안 돌아감

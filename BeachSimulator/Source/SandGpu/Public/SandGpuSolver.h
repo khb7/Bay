@@ -86,6 +86,7 @@ struct FSandGpuFrameParams
 	bool  bSleep = false;              // C안 재우기 (m0b-plan-sleep.md) — -color8par 와 함께
 	bool  bParticleMargin = false;     // #50 입자별 탐색 여유 (Müller 2020)
 	bool  bRelMargin = false;          // M4 T6 쌍 여유 = 상대 속도 (닫히는 속도)
+	int32 DebugSkipMask = 0;           // 진단 전용 (물리 깨짐): 비트0 색 패스 · 비트1 결합 · 비트2 결합 적용 을 빼고 시간만 잰다
 	int32 ConvEvery = 0;               // M4 T6 블록 조기 종료 (D-M4-9): 수렴 블록 재확인 주기. 0 = 끔
 	float ConvTol = 1.e-3f;            // 불평형 비 Σ|Δλ|/Σλn 문턱 (준정적 DEM 표준 10⁻³, papers A-R7)
 	float MarginMinR = 0.1f;           // #50 입자별 여유 하한 (반경 배수)
