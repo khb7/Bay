@@ -1397,7 +1397,7 @@ void FSandSpike::StepGpuResident(float Dt)
 		else if (bMarginGlobalMode && AsleepFrac < 0.5f) { bMarginGlobalMode = false; }
 	}
 	P.bParticleMargin = Params.bParticleMargin && !bMarginGlobalMode;
-	P.MarginMinR = Params.MarginMinR; P.bRelMargin = Params.bRelMargin; P.ConvEvery = Params.ConvEvery; P.ConvTol = Params.ConvTol; P.DebugSkipMask = Params.DebugSkipMask;
+	P.MarginMinR = Params.MarginMinR; P.bRelMargin = Params.bRelMargin; P.ConvEvery = Params.ConvEvery; P.ConvTol = Params.ConvTol; P.DebugSkipMask = Params.DebugSkipMask; P.bPassStamps = Params.bPassStamps;
 	P.bWakeCold = Params.bWakeCold;
 	P.bWakeZeroPairs = Params.bWakeZeroPairs;
 	P.bSleepColdPairs = Params.bSleepColdPairs;
@@ -1484,6 +1484,7 @@ void FSandSpike::StepGpuResident(float Dt)
 	LastBoundaryFrac = S.NumPairs > 0 ? (float)S.NumBoundary / S.NumPairs : 0.f;
 	LastAsleep = S.NumAsleep; LastAwakeBlocks = S.NumAwakeBlocks;
 	for (int32 k = 0; k < 4; ++k) { LastStage[k] = S.StageMs[k]; }
+	for (int32 k = 0; k < 10; ++k) { LastPassMs[k] = S.PassMs[k]; }
 	GpuMs = (float)S.GpuMs;
 	ApplyFrameStats(S.SumSpeed, S.MaxSpeed, S.FreeCount, S.SumLambda);
 	bGpuStale = true;

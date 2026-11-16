@@ -86,6 +86,7 @@ struct FSandGpuFrameParams
 	bool  bSleep = false;              // C안 재우기 (m0b-plan-sleep.md) — -color8par 와 함께
 	bool  bParticleMargin = false;     // #50 입자별 탐색 여유 (Müller 2020)
 	bool  bRelMargin = false;          // M4 T6 쌍 여유 = 상대 속도 (닫히는 속도)
+	bool  bPassStamps = false;         // 진단 — 가운데 반복 하나의 패스별 GPU 타임스탬프 (m4-log #16)
 	int32 DebugSkipMask = 0;           // 진단 전용 (물리 깨짐): 비트0 색 패스 · 비트1 결합 · 비트2 결합 적용 을 빼고 시간만 잰다
 	int32 ConvEvery = 0;               // M4 T6 블록 조기 종료 (D-M4-9): 수렴 블록 재확인 주기. 0 = 끔
 	float ConvTol = 1.e-3f;            // 불평형 비 Σ|Δλ|/Σλn 문턱 (준정적 DEM 표준 10⁻³, papers A-R7)
@@ -158,6 +159,7 @@ struct FSandGpuStats
 	int32  MaxBatch = 0, SumBatch = 0, NumBatchBlocks = 0, BatchOverflow = 0;   // 단계 2 블록 안 배치 (접촉 있는 블록 기준)
 	int32  ConvSkipped = 0, ConvSolved = 0;   // 조기 종료: 건너뛴 / 푼 블록·반복
 	int32  NumAwakeBlocks = 0, NumAsleep = 0;   // C안 — 풀이를 돈 블록 · 잠든 입자
+	float  PassMs[10] = {};          // 진단 bPassStamps: 가운데 반복의 색 0..7 · 결합 · 결합 적용 ms
 	float  StageMs[4] = {};          // 3-4 GPU 타임스탬프: [0] 이웃·쌍·깨우기 [1] 워밍·예측·배치 [2] 반복 [3] 파단·통계
 	double GpuMs = 0.0;               // 스텝 벽시계 (통계 리드백 포함)
 	int32  Piled = 0;                 // M2 T3 — 이 프레임 쌓은 수

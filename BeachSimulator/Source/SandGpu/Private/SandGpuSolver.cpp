@@ -466,10 +466,13 @@ namespace
 	/** 반복 루프 — 1·2단계가 같은 패스 열을 쓴다. IndirectArgs 가 있으면 경계 패스는 간접(GPU 가 센 쌍 수), 없으면 NumBoundaryDirect */
 	void AddSolverIterations(FRDGBuilder& GraphBuilder, const FGlobalShaderMap* ShaderMap, const FSandSolverParams& T,
 		int32 Iterations, int32 N, int32 NumBlocks, int32 NumBonds, bool bMassSplit, FRDGBufferRef IndirectArgs, int32 NumBoundaryDirect,
-		bool bColor8 = false, int32 FrameIndex = 0, bool bColor8Par = false, FRDGBufferRef IterArgs = nullptr, int32 SkipMask = 0)
+		bool bColor8 = false, int32 FrameIndex = 0, bool bColor8Par = false, FRDGBufferRef IterArgs = nullptr, int32 SkipMask = 0, const TFunction<void(int32)>* PassStamp = nullptr)
 	{
+		const int32 StampIt = Iterations / 2;
 		for (int32 It = 0; It < Iterations; ++It)
 		{
+			auto PS = [&](int32 k) { if (PassStamp && It == StampIt) { (*PassStamp)(k); } };
+			PS(0);
 			if (bColor8)
 			{
 				// A안 — 색 0..7 을 차례로. 같은 색 블록은 입자를 공유하지 않아 동시에, 색 사이는 앞 색의 결과를 본다 (블록 GS). 경계 패스 없음
@@ -482,10 +485,13 @@ namespace
 					TC.IterIndex = (uint32)It;
 					if (bColor8Par && IterArgs)
 					{
-						if (SkipMask & 1) { continue; }
-						// M4 T6 — 같은 패스를 간접으로 (모두 잠들면 0 그룹)
-						FSandSolverParams TI = TC; TI.NumBlocks = Sub;
-						AddIndirectPass<FSandSolveBlocksParCS>(GraphBuilder, RDG_EVENT_NAME("SandColorPar"), ShaderMap, TI, IterArgs, 0);
+						if (!(SkipMask & 1))
+						{
+							// M4 T6 — 같은 패스를 간접으로 (모두 잠들면 0 그룹)
+							FSandSolverParams TI = TC; TI.NumBlocks = Sub;
+							AddIndirectPass<FSandSolveBlocksParCS>(GraphBuilder, RDG_EVENT_NAME("SandColorPar"), ShaderMap, TI, IterArgs, 0);
+						}
+						PS(c + 1);
 					}
 					else if (bColor8Par)
 					{
@@ -521,7 +527,9 @@ namespace
 			if (IterArgs)
 			{
 				if (NumBonds > 0 && !(SkipMask & 2)) { AddIndirectPass<FSandSolveBondsCS>(GraphBuilder, RDG_EVENT_NAME("SandBonds"), ShaderMap, T, IterArgs, 3 * sizeof(uint32)); }
+				PS(9);
 				if (!(SkipMask & 4)) { AddIndirectPass<FSandApplyBondsCS>(GraphBuilder, RDG_EVENT_NAME("SandApplyBonds"), ShaderMap, T, IterArgs, 6 * sizeof(uint32)); }
+				PS(10);
 				continue;
 			}
 			if (NumBonds > 0)
@@ -733,7 +741,7 @@ struct FSandGpuSim::FState
 	FRHIGPUBufferReadback BondTotalRB{ TEXT("SandGpu.BondTotal") };
 	bool bCompactedThisStep = false;
 	// A5 — 통계 비동기 (P.bAsyncStats). 렌더 스레드가 준비된 리드백을 Latest 로 옮기고, 게임 스레드는 Step 끝에 한 번 가져간다
-	struct FRaw { TArray<FVector4f> Partial; uint32 Counters[4] = {}, FrameCounts[4] = {}, BatchStats[8] = {}, Hand[4] = {}, BondTot[4] = {}; float StageMs[4] = {}; bool bValid = false; };
+	struct FRaw { TArray<FVector4f> Partial; uint32 Counters[4] = {}, FrameCounts[4] = {}, BatchStats[8] = {}, Hand[4] = {}, BondTot[4] = {}; float StageMs[4] = {}; float PassMs[10] = {}; bool bValid = false; };
 	FRaw Latest;
 	FCriticalSection StatsLock;
 	bool bStatsInFlight = false;
@@ -756,6 +764,8 @@ struct FSandGpuSim::FState
 	FRHIGPUBufferReadback CountersRB{ TEXT("SandGpu.Counters") };
 	FRHIGPUBufferReadback FrameCountsRB{ TEXT("SandGpu.FrameCounts") };
 	FRHIGPUBufferReadback BatchStatsRB{ TEXT("SandGpu.BatchStats") };
+	FRenderQueryRHIRef PassTs[11];   // 진단 — 가운데 반복의 패스 경계
+	bool bPassTsIssued = false;
 	FRenderQueryRHIRef StageTs[5];   // 3-4 단계별 GPU 타임스탬프 (이웃 · 워밍예측 · 반복 · 마무리 경계)
 	FRHIGPUBufferReadback DlPos{ TEXT("SandGpu.DlPos") }, DlVel{ TEXT("SandGpu.DlVel") }, DlPairIJ{ TEXT("SandGpu.DlPairIJ") },
 		DlLambda{ TEXT("SandGpu.DlLambda") }, DlBond{ TEXT("SandGpu.DlBond") }, DlGround{ TEXT("SandGpu.DlGround") }, DlWall{ TEXT("SandGpu.DlWall") }, DlSleep{ TEXT("SandGpu.DlSleep") };
@@ -1313,7 +1323,16 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 				AddDirectPass<FSandIterArgsCS>(GraphBuilder, RDG_EVENT_NAME("SandIterArgs"), ShaderMap, TA, 1, 1);
 			}
 			Stamp(2);
-			AddSolverIterations(GraphBuilder, ShaderMap, T, P.Iterations, LN, BlockTableSize, LB, P.bMassSplit, IndirectArgs, 0, P.bColor8, P.FrameIndex, bColor8Par, IterArgs, P.DebugSkipMask);
+			// 진단 — 가운데 반복 하나의 패스 경계 (색 패스가 반복의 ~80 %, m4-log #13 · 추정 네 번 빗나감 #12–15)
+			const bool bPassTs = bStamps && P.bPassStamps && bColor8Par && IterArgs;
+			if (bPassTs && !S->PassTs[0].IsValid()) { for (FRenderQueryRHIRef& Q : S->PassTs) { Q = RHICreateRenderQuery(RQT_AbsoluteTime); } }
+			S->bPassTsIssued = bPassTs;
+			const TFunction<void(int32)> PassStampFn = [&](int32 k)
+			{
+				FRHIRenderQuery* Q = S->PassTs[k].GetReference();
+				GraphBuilder.AddPass(RDG_EVENT_NAME("SandPassStamp%d", k), ERDGPassFlags::NeverCull, [Q](FRHICommandListImmediate& Cmd) { Cmd.EndRenderQuery(Q); });
+			};
+			AddSolverIterations(GraphBuilder, ShaderMap, T, P.Iterations, LN, BlockTableSize, LB, P.bMassSplit, IndirectArgs, 0, P.bColor8, P.FrameIndex, bColor8Par, IterArgs, P.DebugSkipMask, bPassTs ? &PassStampFn : nullptr);
 			Stamp(3);
 
 			// --- 파단 · 통계 ---
@@ -1455,6 +1474,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 	if (State->bCompactedThisStep) { NumB = (int32)BondTot[0]; Out.BondsCompacted = (int32)BondTot[3]; State->bCompactedThisStep = false; }   // A2 압축 — 죽은 칸이 빠졌다
 	else { NumB = FMath::Max(NumB, (int32)BondTot[0]); }   // 사건 결합이 덧붙인 칸 (죽은 칸 포함 — CPU 가 내려받아 다시 올릴 때 압축)
 	for (int32 k = 0; k < 4; ++k) { Out.StageMs[k] = StageMs[k]; }
+	for (int32 k = 0; k < 10; ++k) { Out.PassMs[k] = R.PassMs[k]; }
 	LastNumPairs = Out.NumPairs;
 	Out.GpuMs = (FPlatformTime::Seconds() - T0) * 1000.0;
 }
@@ -1482,6 +1502,13 @@ namespace
 			bool bOk = true;
 			for (int32 k = 0; k < 5; ++k) { bOk &= RHIGetRenderQueryResult(S->StageTs[k].GetReference(), Us[k], bWait); }
 			if (bOk) { for (int32 k = 0; k < 4; ++k) { R.StageMs[k] = (float)(Us[k + 1] - Us[k]) * 0.001f; } }
+		}
+		if (S->bPassTsIssued && S->PassTs[0].IsValid())
+		{
+			uint64 Us[11] = {};
+			bool bOk = true;
+			for (int32 k = 0; k < 11; ++k) { bOk &= RHIGetRenderQueryResult(S->PassTs[k].GetReference(), Us[k], bWait); }
+			if (bOk) { for (int32 k = 0; k < 10; ++k) { R.PassMs[k] = (float)(Us[k + 1] - Us[k]) * 0.001f; } }
 		}
 		R.bValid = true;
 		FScopeLock L(&S->StatsLock);

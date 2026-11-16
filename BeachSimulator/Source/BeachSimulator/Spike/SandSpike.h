@@ -45,6 +45,7 @@ struct FSandParams
 	bool   bSleep = false;
 	/** #50 입자별 탐색 여유 (-gpu2 만, Müller 2020) — 쌍 = 거리 < D + m_i + m_j */
 	bool   bParticleMargin = false;
+	bool   bPassStamps = false;  // 진단 — 가운데 반복 패스별 GPU 시간 (m4-log #16)
 	int32  DebugSkipMask = 0;    // 진단 전용 — 반복 패스 빼기 (SandGpuSolver.h)
 	int32  ConvEvery = 0;        // M4 T6 블록 조기 종료 재확인 주기 (D-M4-9). 0 = 끔
 	float  ConvTol = 1.e-3f;     // 불평형 비 문턱
@@ -521,6 +522,7 @@ public:
 	int32 LastNumAwakeBlocks() const { return LastAwakeBlocks; }
 	/** 3-4 — 마지막 GPU 프레임의 단계별 ms (이웃 · 워밍예측 · 반복 · 마무리) */
 	float LastStageMs(int32 k) const { return LastStage[k]; }
+	float LastPassMs[10] = {};   // 진단 bPassStamps: 색 0..7 · 결합 · 결합 적용
 	/** 3-4 — GPU 상태 전량 내려받기를 강제로 한 번 하고 그 벽시계 ms (M1 위치 리드백 비용) */
 	double MeasureDownloadMs();
 	const TArray<float>& GetGpuLiveW() const { SyncFromGpu(); return GpuLiveW; }
