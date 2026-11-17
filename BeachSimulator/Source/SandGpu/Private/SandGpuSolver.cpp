@@ -321,6 +321,8 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandToolParams, )
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, Stamps)
 	SHADER_PARAMETER(uint32, NumPileTargets)
 	SHADER_PARAMETER(float, PileDropVel)
+	SHADER_PARAMETER(uint32, PileBonus)
+	SHADER_PARAMETER(float, PileBonusW)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, PileTargets)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, PosRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, VelRW)
@@ -1167,6 +1169,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 					TP.PileTargets = GraphBuilder.CreateSRV(PtBuf);
 					TP.NumPileTargets = P.PileTargets.Num();
 					TP.PileDropVel = P.PileDropVel;
+					TP.PileBonus = (uint32)FMath::Max(0, P.PileBonus); TP.PileBonusW = P.PileBonusW;
 					TP.PosRW = GraphBuilder.CreateUAV(Pos);
 					TP.VelRW = GraphBuilder.CreateUAV(Vel);
 					TP.PrevPosRW = GraphBuilder.CreateUAV(PrevPos);

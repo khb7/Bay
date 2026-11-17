@@ -62,6 +62,8 @@ float MorrisonCd(float Re)
 
 uint  NumPileTargets;
 float PileDropVel;
+uint  PileBonus;                 // M4 T1 — 손 밖에서 온 입자 수 (격자를 판 모래). 손 재고보다 먼저 쓴다
+float PileBonusW;
 StructuredBuffer<float4>   PileTargets;  // 쌓기 놓을 자리 (CPU 가 지터 격자로 만든다)
 StructuredBuffer<float4>   Stamps;       // 스탬프마다 2 개: (중심 xyz, 반지름) · (종류, 세기, W 증가, 충격 속도)
 RWStructuredBuffer<float4> PosRW;
@@ -310,12 +312,12 @@ void PileCS(uint3 Tid : SV_DispatchThreadID)
 	if (p >= NumParticles) { return; }
 	if (!IsGrave(PosRW[p].xyz)) { return; }
 	const uint H = HandCountRW[0];   // 이 패스에선 아무도 [0] 을 쓰지 않는다 (PileFinishCS 가 뒤에)
-	const uint K = min(H, NumPileTargets);
+	const uint K = min(H + PileBonus, NumPileTargets);
 	if (K == 0u) { return; }
 	uint c;
 	InterlockedAdd(HandCountRW[3], 1u, c);
 	if (c >= K) { return; }
-	const float W = HandWRW[H - 1u - c];   // 뒤에 넣은 것부터 (손 위에 있는 모래)
+	const float W = (c < PileBonus) ? PileBonusW : HandWRW[H - 1u - (c - PileBonus)];   // 손 밖 몫 먼저, 그다음 뒤에 넣은 것부터 (손 위에 있는 모래)
 	const float3 X = PileTargets[c].xyz;
 	PosRW[p] = float4(X, 1.f);
 	PrevPosRW[p] = float4(X, 1.f);
@@ -330,8 +332,8 @@ void PileCS(uint3 Tid : SV_DispatchThreadID)
 [numthreads(1, 1, 1)]
 void PileFinishCS(uint3 Tid : SV_DispatchThreadID)
 {
-	const uint Taken = min(HandCountRW[3], min(HandCountRW[0], NumPileTargets));
-	HandCountRW[0] -= Taken;
+	const uint Taken = min(HandCountRW[3], min(HandCountRW[0] + PileBonus, NumPileTargets));
+	HandCountRW[0] -= Taken - min(Taken, PileBonus);
 	HandCountRW[3] = Taken;
 }
 

@@ -1448,6 +1448,7 @@ void FSandSpike::StepGpuResident(float Dt)
 		P.Stamps.Add(FVector4f((float)(uint8)T.Kind, T.Strength, T.WetAdd, T.ImpulseVel));
 	}
 	PendingStamps.Reset();
+	P.PileBonus = FMath::Min(PendingPileBonus, P.PileTargets.Num()); P.PileBonusW = PileBonusW; PendingPileBonus = 0;
 	P.StampSeed = (uint32)Frame;
 	P.HandCap = HandCap;
 	P.GraveZ = SandPool::GraveZ; P.GraveSpacing = SandPool::GraveSpacing;

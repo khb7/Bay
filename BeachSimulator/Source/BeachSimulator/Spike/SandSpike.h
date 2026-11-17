@@ -370,6 +370,8 @@ public:
 
 	/** M2 T2 — 도구 스탬프를 다음 Step 에 보낸다 (GPU 상주만). 물붓기는 입자별 W 모드로 바꾼다 */
 	void  QueueStamp(const FSandToolStamp& S);
+	/** M4 T1 — 손 재고가 아니라 밖(격자를 판 모래)에서 온 입자로 쌓는다. 무덤 풀에서 꺼낸다 (ReservePool) */
+	void  QueuePileOutside(const FSandToolStamp& S, float W) { PendingStamps.Add(S); PendingPileBonus += FMath::Max(0, FMath::RoundToInt(S.Strength)); PileBonusW = W; }
 	int32 GetHandCount() const { return HandCount; }   // 손 재고 (GPU 가 센 값, Step 마다 갱신)
 	int32 GetLastDug() const { return LastDug; }
 	int32 GetLastBondsFormed() const { return LastBondsFormed; }
@@ -553,6 +555,7 @@ private:
 	TArray<uint8>     Dead;     // M2 T1 — 1 = 죽은 칸 (무덤에 고정). 짧으면 전부 산 것
 	int32             NumDead = 0;
 	TArray<FSandToolStamp> PendingStamps;
+	int32 PendingPileBonus = 0; float PileBonusW = 0.f;
 	int32 HandCount = 0, LastDug = 0, LastHandFull = 0;
 	int32 LastBondsFormed = 0, LastBondFormRejected = 0, LastPiled = 0, LastBondsCompacted = 0;
 	bool bWetPerParticle = false;   // SetWet 뒤 — 결합 점착을 쌍의 W 로 (W3). 아니면 WGlobal 하나 (M0 시험의 W 서서히 낮추기)

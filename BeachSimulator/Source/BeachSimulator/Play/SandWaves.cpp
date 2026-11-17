@@ -407,6 +407,33 @@ void USandWavesSubsystem::ApplyStamp(const FSandToolStamp& T)
 		Grid->QueueBedStamp(T.Center.X, T.Center.Y, T.Radius, -V);
 		HandM3 += V; DugM3 += V;
 	}
+	else if (T.Kind == ESandTool::Pile && Sand && bPileParticles)
+	{
+		// M4 T1 — 쌓기 = 입자 (M2 경로). 판 모래 부피를 입자 D³ 단위로 꺼내 무덤 풀에서 놓는다 (T5 환원과 같은 부피 정의)
+		const float Rcm = Sand->GetParams().Radius, PV = FMath::Cube(2.f * Rcm / 100.f);
+		const int32 N = FMath::Min(FMath::RoundToInt(T.Strength), FMath::FloorToInt(HandM3 / PV));
+		if (N <= 0) { return; }
+		// 놓을 높이 = 처음 바닥과 반지름 안 입자 꼭대기 중 높은 쪽 (지난 위치 리드백 + 이번 프레임에 이미 놓은 몫). 낮으면 겹쳐 튀고, 높으면 떨어질 뿐
+		const FVector2f Ccm(T.Center.X * 100.f, T.Center.Y * 100.f);
+		const float Rr = T.Radius * 100.f;
+		float Top = 100.f * BedAt(BCorner, T.Center.X, T.Center.Y);
+		const bool bPrev = PrevSandPos.Num() == SandPos.Num();
+		for (int32 i = 0; i < SandPos.Num(); ++i)
+		{
+			const FVector4f& X = SandPos[i];
+			if (SandPool::IsGrave(FVector3f(X))) { continue; }
+			if (bPrev && FMath::Abs(X.Z - PrevSandPos[i].Z) > 0.5f * Rcm) { continue; }   // 떨어지는 중인 입자는 바닥이 아니다 (방금 놓은 것 위에 또 놓아 공중 기둥이 선다)
+			if (FVector2f::DistSquared(FVector2f(X.X, X.Y), Ccm) <= Rr * Rr) { Top = FMath::Max(Top, X.Z + Rcm); }
+		}
+		float& Extra = PileStackCm.FindOrAdd(FIntPoint(FMath::RoundToInt(Ccm.X / Rr), FMath::RoundToInt(Ccm.Y / Rr)));
+		FSandToolStamp S = T;
+		S.Center = FVector3f(Ccm.X, Ccm.Y, Top + Extra);
+		S.Radius = Rr;
+		S.Strength = (float)N;
+		Sand->QueuePileOutside(S, PileW);
+		Extra += 2.f * Rcm * N / FMath::Max(1.f, UE_PI * Rr * Rr / FMath::Square(2.f * Rcm));   // 같은 프레임 다음 스탬프는 그 위에
+		HandM3 -= N * PV; PiledM3 += N * PV;
+	}
 	else if (T.Kind == ESandTool::Pile)
 	{
 		const float V = FMath::Min(T.Strength * 4.19e-3f / 600.f, HandM3);   // 입자 하나 = 손 용량 600 입자 ≈ 반지름 10 cm 구 (m2-plan)
@@ -446,6 +473,7 @@ void USandWavesSubsystem::UpdateTools(APlayerController* PC, float Mul)
 		else if (PC->IsInputKeyDown(EKeys::RightMouseButton)) { Tool = 1; }
 		else if (PC->IsInputKeyDown(EKeys::F)) { Tool = 2; }
 	}
+	PileStackCm.Reset();
 	if (bHit && Tool >= 0)
 	{
 		// 연속 브러시 (M2 ApplyStroke): 같은 도구로 끌면 지난 점 → 지금 점을 반지름 0.4 배 간격으로. 한 프레임 양을 나눠 놓는다. 너무 먼 점프는 잇지 않는다
@@ -459,7 +487,7 @@ void USandWavesSubsystem::UpdateTools(APlayerController* PC, float Mul)
 			T.Radius = BrushR;
 			// 세기는 격자 손맛 임시값 — 사용자 화면 판정 (M2 세기 0.15 는 5 cm 칸에서 프레임당 3 cm 로 너무 빠름)
 			if (Tool == 0) { T.Kind = ESandTool::Dig; T.Strength = 0.02f * Mul / K; }
-			else if (Tool == 1) { T.Kind = ESandTool::Pile; T.Radius = FMath::Max(2.f * Dx, 0.4f * BrushR); T.Strength = 40.f * Mul / K; }
+			else if (Tool == 1) { T.Kind = ESandTool::Pile; T.Radius = FMath::Max(2.f * Dx, 0.4f * BrushR); T.Strength = (bPileParticles ? 4.f : 40.f) * Mul / K; }   // 입자 쌓기 = M2 놀이와 같은 프레임당 4 개 (한 번에 기둥이 서지 않게)
 			else { T.Kind = ESandTool::Pour; T.WetAdd = 0.02f * Mul / K; }
 			ApplyStamp(T);
 		}
@@ -538,6 +566,15 @@ void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
 		Sand->GroundSrc.bDrag = !FParse::Param(Cmd, TEXT("nodrag"));
 	}
 	Sand->InitCustom(SP, Pos, Inv);
+	// M4 T1 — 쌓기 입자 풀. 손 용량 (m³) 을 입자 D³ 로 나눈 수의 몇 배 — 쌓은 것이 T5 환원으로 무덤에 돌아오면 다시 쓴다
+	bPileParticles = !FParse::Param(Cmd, TEXT("gridpile"));
+	PileW = Wet;
+	if (bPileParticles)
+	{
+		int32 Pool = 4 * FMath::CeilToInt(HandCapM3 / FMath::Cube(D / 100.f));
+		FParse::Value(Cmd, TEXT("sandpool="), Pool);
+		Sand->ReservePool(Pos.Num() + Pool);
+	}
 	if (FParse::Param(Cmd, TEXT("nowetting")))
 	{
 		Sand->SetWGlobal(Wet);
@@ -588,7 +625,9 @@ void USandWavesSubsystem::UpdateSand()
 	Sand->Step(1.f / 60.f);
 	SandGpuSum += Sand->LastGpuMs(); ++SandGpuN;
 	Sand->GetGpuSim()->RequestPositionsAsync();
+	TArray<FVector4f> Before = SandPos;
 	const bool bGot = Sand->GetGpuSim()->TakePositionsAsync(SandPos);
+	if (bGot) { PrevSandPos = MoveTemp(Before); }
 	if (bGot)
 	{
 		// M4 T6 3단계 — 메시는 깬 입자 (w > 0) 가 있거나 무덤 수가 바뀔 때만 다시. 위치 읽기가 늦으니 조용해진 뒤 몇 프레임 더
@@ -638,7 +677,7 @@ void USandWavesSubsystem::UpdateSand()
 		}
 		{
 			const double PV = FMath::Cube((double)Sand->GetParams().Radius * 2.0 / 100.0);
-			UE_LOG(LogSandWaves, Display, TEXT("M4 T5 %.0fs: 입자 %d × D³ = %.5f m³ · 격자 Δb 부피 %.5f · 부유사 %.5f · 합 %.5f m³ (처음 %.5f)"), SimTime, Alive, Alive * PV, DbVol, SusVol, Alive * PV + DbVol + SusVol, SandPos.Num() * PV);
+			UE_LOG(LogSandWaves, Display, TEXT("M4 T5 %.0fs: 입자 %d × D³ = %.5f m³ · 격자 Δb 부피 %.5f · 부유사 %.5f · 합 %.5f m³ (처음 %.5f)"), SimTime, Alive, Alive * PV, DbVol, SusVol, Alive * PV + DbVol + SusVol + HandM3, SandPos.Num() * PV);
 		}
 		UE_LOG(LogSandWaves, Display, TEXT("T6 메시 %.0fs: 지난 1 s 다시 만듦 %d / %d 프레임 · 프레임 평균 %.2f ms"), SimTime, MeshBuilds, MeshFrames, 1000.0 * (FPlatformTime::Seconds() - SecWall0) / FMath::Max(MeshFrames, 1)); MeshBuilds = MeshFrames = 0; SecWall0 = FPlatformTime::Seconds();
 		UE_LOG(LogSandWaves, Display, TEXT("T6 입자 GPU 단계 %.0fs: 이웃·쌍 %.2f · 워밍·예측 %.2f · 반복 %.2f · 마무리 %.2f ms · 잠든 입자 %d · 깬 블록 %d · 배치 최대 %d 평균 %.1f · 쌍 %d · 조기종료 건너뜀 %d / 풂 %d"), SimTime, Sand->LastStageMs(0), Sand->LastStageMs(1), Sand->LastStageMs(2), Sand->LastStageMs(3), Sand->LastNumAsleep(), Sand->LastNumAwakeBlocks(), Sand->GetLastMaxBatch(), Sand->LastAvgBatch, Sand->LastPairs, Sand->LastConvSkipped, Sand->LastConvSolved);

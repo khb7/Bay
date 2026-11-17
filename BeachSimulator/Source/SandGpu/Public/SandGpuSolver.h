@@ -127,6 +127,8 @@ struct FSandGpuFrameParams
 	int32  BondSlots = 12;
 	// M2 T3 쌓기 — 놓을 자리 (xyz). GPU 가 손 재고 수만큼만 채운다 (뒤에 넣은 것부터)
 	TArray<FVector4f> PileTargets;
+	int32  PileBonus = 0;             // M4 T1 — 손 밖 (격자에서 판 모래) 입자 수. 손 재고보다 먼저
+	float  PileBonusW = 0.f;
 	float  PileDropVel = 0.f;         // 놓을 때 아래로 주는 속도 (cm/s)
 	// A5 — 통계를 기다리지 않는다 (한 프레임 이상 늦은 값). 사건 결합 프레임만 동기. 결정성 시험(커맨드릿)은 끈다
 	bool   bAsyncStats = false;
