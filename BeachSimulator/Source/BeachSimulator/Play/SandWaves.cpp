@@ -524,6 +524,7 @@ void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
 	const bool bTunnel = FParse::Param(Cmd, TEXT("sandtunnel"));      // M4 T2: 가운데 20 cm 폭 · 밑 5–20 cm 비운 터널 (x = 파도 방향)
 	bSandTest = FParse::Param(Cmd, TEXT("wavesandtest"));
 	bSandNoMesh = FParse::Param(Cmd, TEXT("nosandmesh"));
+	bWakeDiag = FParse::Param(Cmd, TEXT("sandwakediag"));   // M4 검증: 깨우기 지연 · 1 프레임 지연 오차 (매 프레임 동기 읽기 — 느림)
 	bSandMeshAlways = FParse::Param(Cmd, TEXT("sandmeshalways"));   // T6 비교: 매 프레임 메시   // T6 프로파일: 표면 메시 갱신 끔
 	FSandParams SP;
 	SP.Substeps = 1; SP.WarmStart = 1.f; SP.WarmGapTol = 0.05f; SP.bGpuResident = true;
@@ -613,6 +614,42 @@ void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
 	UE_LOG(LogSandWaves, Display, TEXT("M4 T1 모래 블록: 입자 %d · 반지름 %.2f cm · %d×%d×%d · 가운데 (%.2f, %.2f) m · W %.2f · 결합 %d"), Pos.Num(), R, 2 * Nh, 2 * Nh, Nz, SandC.X, SandC.Y, Wet, Bonds);
 }
 
+// M4 검증 (milestones "sleep/wake" · "1프레임 지연"): 매 프레임 동기 — 블록 둘레 (b_struct > 0 칸과 그 1 칸 이웃) 젖은 칸 수 · 잠든 입자 수 · 입자 프레임 이동 최대 / 99 %.
+// 물이 처음 닿은 프레임부터 120 프레임, 그 뒤 잠든 수가 바뀌는 프레임만. 마스크 · 하중은 지난 프레임 위치를 쓰므로 프레임 이동 = 그 지연이 만드는 위치 오차
+void USandWavesSubsystem::WakeDiag()
+{
+	TArray<float> Bc, Sc, Wd, Hu, Hv; Grid->DownloadBed(Bc); Grid->DownloadBed(Sc, true); Grid->Download(Wd, Hu, Hv);
+	const int32 W1 = NX + 1;
+	int32 NWet = 0;
+	const int32 I0 = FMath::Max(1, (int32)((SandC.X - 2.f) / Dx)), I1 = FMath::Min(NX - 2, (int32)((SandC.X + 2.f) / Dx)), J0 = FMath::Max(1, (int32)((SandC.Y - 2.f) / Dx)), J1 = FMath::Min(NY - 2, (int32)((SandC.Y + 2.f) / Dx));
+	for (int32 j = J0; j <= J1; ++j) for (int32 i = I0; i <= I1; ++i)
+	{
+		bool bNear = false;
+		for (int32 dj = -1; dj <= 2 && !bNear; ++dj) for (int32 di = -1; di <= 2; ++di) { if (Sc[(j + dj) * W1 + i + di] > 0.f) { bNear = true; break; } }
+		if (!bNear) { continue; }
+		const int32 c = j * W1 + i;
+		NWet += Wd[j * NX + i] - 0.25f * (Bc[c] + Bc[c + 1] + Bc[c + W1] + Bc[c + W1 + 1]) > 0.003f;
+	}
+	const TArray<FVector3f>& P = Sand->GetPositions();
+	TArray<float> Dz; Dz.Reserve(P.Num());
+	if (WakePrev.Num() == P.Num())
+	{
+		for (int32 i = 0; i < P.Num(); ++i) { if (!SandPool::IsGrave(P[i]) && !SandPool::IsGrave(WakePrev[i])) { Dz.Add(FVector3f::Dist(P[i], WakePrev[i])); } }
+	}
+	WakePrev = P;
+	Dz.Sort();
+	const float DMax = Dz.Num() ? Dz.Last() : 0.f, D99 = Dz.Num() ? Dz[(int32)(0.99f * (Dz.Num() - 1))] : 0.f;
+	const int32 Asleep = Sand->LastNumAsleep();
+	++WakeFrame;
+	if (WakeFirstWet < 0 && NWet > 0) { WakeFirstWet = WakeFrame; }
+	const bool bWindow = WakeFirstWet >= 0 && WakeFrame - WakeFirstWet < 120;
+	if (bWindow || Asleep != WakeLastAsleep)
+	{
+		UE_LOG(LogSandWaves, Display, TEXT("M4 깨우기 f%d %.3fs: 둘레 젖은 칸 %d · 잠든 입자 %d · 깬 블록 %d · 프레임 이동 최대 %.2f / 99%% %.3f cm"), WakeFrame, SimTime, NWet, Asleep, Sand->LastNumAwakeBlocks(), DMax, D99);
+	}
+	WakeLastAsleep = Asleep;
+}
+
 void USandWavesSubsystem::UpdateSand()
 {
 	if (!Sand.IsValid()) { return; }
@@ -637,6 +674,7 @@ void USandWavesSubsystem::UpdateSand()
 		if (NAwake > 0 || NGrave != LastGraveCount) { MeshQuietFrames = 0; } else { ++MeshQuietFrames; }
 		LastGraveCount = NGrave;
 	}
+	if (bWakeDiag) { WakeDiag(); }
 	const bool bMeshNeeded = MeshQuietFrames < 8 || bSandMeshAlways;
 	if (!bSandNoMesh && bMeshNeeded) { SandComp->UpdateFromSim(); ++MeshBuilds; }
 	++MeshFrames;
