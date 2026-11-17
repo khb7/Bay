@@ -339,6 +339,7 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 	if (FParse::Param(Cmd, TEXT("wavesand"))) { InitSand(Cmd); }
 	FParse::Value(Cmd, TEXT("sandwavesshot="), ShotPath);
 	ShotTimes = { 20.f, 35.f, 50.f };
+	{ float End = 50.f; if (FParse::Value(Cmd, TEXT("sandwavesend="), End) && End > 50.f) { ShotTimes = { 20.f, 35.f, 50.f, End }; } }   // 세굴 — 처오름 여러 번
 	TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &USandWavesSubsystem::Tick));
 }
 
@@ -518,7 +519,7 @@ void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
 {
 	// 젖은 모래 블록 (기본 50 × 50 × 40 cm) 을 물가 위 마른 땅에 — 기둥마다 바닥은 그 자리 지면 위 (경사를 따른다). 결합을 맺어 선다
 	float Half = 25.f, Tall = 40.f, Wet = 0.4f;
-	FParse::Value(Cmd, TEXT("sandhalf="), Half); FParse::Value(Cmd, TEXT("sandtall="), Tall); FParse::Value(Cmd, TEXT("sandwet="), Wet);
+	FParse::Value(Cmd, TEXT("sandhalf="), Half); SandHalfCm = Half; FParse::Value(Cmd, TEXT("sandtall="), Tall); FParse::Value(Cmd, TEXT("sandwet="), Wet);
 	float Back = 2.5f; FParse::Value(Cmd, TEXT("sandback="), Back);   // 정지 물가에서 땅 쪽으로 (m)
 	const bool bTunnel = FParse::Param(Cmd, TEXT("sandtunnel"));      // M4 T2: 가운데 20 cm 폭 · 밑 5–20 cm 비운 터널 (x = 파도 방향)
 	bSandTest = FParse::Param(Cmd, TEXT("wavesandtest"));
@@ -615,7 +616,7 @@ void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
 void USandWavesSubsystem::UpdateSand()
 {
 	if (!Sand.IsValid()) { return; }
-	if (bSandTest && !bSandPitDone && SimTime >= 3.f)
+	if (bSandTest && !bSandPitDone && SimTime >= 3.f && !FParse::Param(FCommandLine::Get(), TEXT("nosandpit")))
 	{
 		// 블록 +y 가장자리에 구덩이 (반지름 30 cm, 40 L) — 밑동이 걸친 쪽이 무너져 들어가야 한다
 		Grid->QueueBedStamp(SandC.X, SandC.Y + 0.30f, 0.3f, -0.04f);
@@ -687,6 +688,26 @@ void USandWavesSubsystem::UpdateSand()
 			UE_LOG(LogSandWaves, Display, TEXT("T6 반복 패스 %.0fs (가운데 반복, µs): 색 %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f · 결합 %.1f · 적용 %.1f · 합 %.1f"), SimTime,
 				M[0]*1e3f, M[1]*1e3f, M[2]*1e3f, M[3]*1e3f, M[4]*1e3f, M[5]*1e3f, M[6]*1e3f, M[7]*1e3f, M[8]*1e3f, M[9]*1e3f,
 				(M[0]+M[1]+M[2]+M[3]+M[4]+M[5]+M[6]+M[7]+M[8]+M[9])*1e3f);
+		}
+		{
+			// M4 세굴 (milestones M4 검증): 블록 발자국 밖 30 cm 띠의 처음 대비 모래 바닥 변화 — 앞 (바다 +X) · 옆 (±Y) · 뒤 (−X) — 과 발자국 안 (기단). 평균 · 최저 cm
+			const float Hm = SandHalfCm / 100.f, Ring = 0.3f;
+			double Sum[4] = {}; float Min[4] = { 1e9f, 1e9f, 1e9f, 1e9f }; int32 Cnt[4] = {};
+			for (int32 j = 0; j <= NY; ++j) for (int32 i = 0; i <= NX; ++i)
+			{
+				const float dx = i * Dx - SandC.X, dy = j * Dx - SandC.Y;
+				const float ax = FMath::Abs(dx), ay = FMath::Abs(dy);
+				int32 k = -1;
+				if (ax <= Hm && ay <= Hm) { k = 3; }
+				else if (ax <= Hm + Ring && ay <= Hm + Ring) { k = ay > Hm && ax <= Hm ? 1 : (dx > 0.f ? 0 : 2); }
+				if (k < 0) { continue; }
+				const int32 c = j * (NX + 1) + i;
+				const float d = 100.f * (Bc[c] - BCorner[c]);
+				Sum[k] += d; Min[k] = FMath::Min(Min[k], d); ++Cnt[k];
+			}
+			auto Avg = [&](int32 k) { return Cnt[k] ? (float)(Sum[k] / Cnt[k]) : 0.f; };
+			UE_LOG(LogSandWaves, Display, TEXT("M4 세굴 %.0fs: 바닥 변화 cm (평균/최저) 앞 %.2f/%.2f · 옆 %.2f/%.2f · 뒤 %.2f/%.2f · 기단 %.2f/%.2f"), SimTime,
+				Avg(0), Min[0], Avg(1), Min[1], Avg(2), Min[2], Avg(3), Min[3]);
 		}
 		UE_LOG(LogSandWaves, Display, TEXT("M4 T1 %.0fs: 입자 %d (비유한 %d) · 처음 지면 위 최고 %.1f cm · 지면 최소 간극 %.2f cm · 구덩이 안 %d · 입자 GPU 평균 %.2f ms · 격자 GPU %.2f ms"),
 			SimTime, Alive, Bad, Top, MinGap, InPit, SandGpuSum / FMath::Max(SandGpuN, 1), Grid->LastGpuMs());

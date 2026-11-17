@@ -80,7 +80,8 @@ private:
 	FVector GridBase = FVector::ZeroVector;
 	bool  bPileParticles = true; float PileW = 0.f;   // M4 T1 쌓기 = 입자
 	TMap<FIntPoint, float> PileStackCm;
-	TArray<FVector4f> PrevSandPos;   // 바로 전 위치 리드백 — 움직이는 입자 거르기
+	TArray<FVector4f> PrevSandPos;
+	float SandHalfCm = 25.f;   // M4 세굴 로그 — 블록 발자국 반폭   // 바로 전 위치 리드백 — 움직이는 입자 거르기
 	float BrushR = 0.2f, HandM3 = 0.f, HandCapM3 = 0.05f, Xs1 = 0.f, ToolWaterM3 = 0.f;
 	double DugM3 = 0.0, PiledM3 = 0.0;
 	FVector2f LastToolXY = FVector2f::ZeroVector;
