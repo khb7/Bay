@@ -98,6 +98,9 @@ public:
 	/** M4 T5 파괴 환원: 꼭짓점 uint 누적 (1/65536 입자). Scale = 1/65536 입자의 바닥 높이 (m). 0 = 끔. 마스크 패스 (SetStructSource) 와 같이 돈다 */
 	TRefCountPtr<FRDGPooledBuffer> GetReturnBuffer() const;
 	void SetReturnScale(float S) { ReturnScale = S; }
+	float GetReturnScale() const { return ReturnScale; }
+	/** 진단: 환원 누적 (꼭짓점 uint, 1/65536 입자) — 처음부터 되돌린 양 */
+	void DownloadReturnTot(TArray<uint32>& Out) const;
 	void DownloadLoad(TArray<FVector2f>& Out) const;   // 동기 (시험용)
 	/** M4 T2: 꼭짓점 b_struct 버퍼 (m) — 입자 지면은 Bed − Struct */
 	TRefCountPtr<FRDGPooledBuffer> GetStructBuffer() const;

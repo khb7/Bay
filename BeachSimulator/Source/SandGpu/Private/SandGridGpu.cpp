@@ -52,6 +52,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER(float, StructR)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FVector2f>, LoadRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ReturnAccRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ReturnTotRW)
 	SHADER_PARAMETER(float, ReturnScale)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, BSort)
 	SHADER_PARAMETER(uint32, bMorph)
@@ -199,7 +200,7 @@ GRID_SHADER(FSandGridLoadCS, "LoadCS")
 struct FSandGridGpu::FState
 {
 	TRefCountPtr<FRDGPooledBuffer> SusC, SusC2, SusE, SedAcc, Wet;
-	TRefCountPtr<FRDGPooledBuffer> SCorner, Occ, StructPos, Load, ReturnAcc;   // M4 T2 — b_struct · 점유 비트 · 시험용 고정 위치
+	TRefCountPtr<FRDGPooledBuffer> SCorner, Occ, StructPos, Load, ReturnAcc, ReturnTot;   // M4 T2 — b_struct · 점유 비트 · 시험용 고정 위치
 	FTextureRenderTargetResource* ExportRt = nullptr; float ExportDry = 0.f;   // T5
 	TUniquePtr<FRHIGPUBufferReadback> RbW; bool bRbWBusy = false;              // 비동기 수면 (렌더 스레드)
 	std::atomic<bool> bWantW{ false };
@@ -351,7 +352,7 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 		S->SedB0 = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.SedB0"), BC.GetData());
 		{ TArray<float> Z; Z.Init(0.f, BC.Num()); S->SedDel = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.SedDel"), Z.GetData()); S->SCorner = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.SCorner"), Z.GetData()); }
 		{ TArray<FVector2f> Z; Z.Init(FVector2f::ZeroVector, N); S->Load = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.Load"), Z.GetData()); }
-		{ TArray<uint32> Z; Z.Init(0u, BC.Num()); S->ReturnAcc = MakeBuffer(GraphBuilder, sizeof(uint32), Z.Num(), TEXT("SandGrid.ReturnAcc"), Z.GetData()); }
+		{ TArray<uint32> Z; Z.Init(0u, BC.Num()); S->ReturnAcc = MakeBuffer(GraphBuilder, sizeof(uint32), Z.Num(), TEXT("SandGrid.ReturnAcc"), Z.GetData()); S->ReturnTot = MakeBuffer(GraphBuilder, sizeof(uint32), Z.Num(), TEXT("SandGrid.ReturnTot"), Z.GetData()); }
 		{ TArray<uint32> Z; Z.Init(0u, 2 * BC.Num()); S->Occ = MakeBuffer(GraphBuilder, sizeof(uint32), Z.Num(), TEXT("SandGrid.Occ"), Z.GetData()); }
 		S->U0 = MakeBuffer(GraphBuilder, sizeof(FVector4f), N, TEXT("SandGrid.U0"), U.GetData());
 		S->U1 = MakeBuffer(GraphBuilder, sizeof(FVector4f), N, TEXT("SandGrid.U1"));
@@ -406,6 +407,25 @@ TRefCountPtr<FRDGPooledBuffer> FSandGridGpu::GetStructBuffer() const { return St
 TRefCountPtr<FRDGPooledBuffer> FSandGridGpu::GetWaterBuffer() const { return State->U0; }
 TRefCountPtr<FRDGPooledBuffer> FSandGridGpu::GetLoadBuffer() const { return State->Load; }
 TRefCountPtr<FRDGPooledBuffer> FSandGridGpu::GetReturnBuffer() const { return State->ReturnAcc; }
+void FSandGridGpu::DownloadReturnTot(TArray<uint32>& Out) const
+{
+	const int32 N = (Params.NX + 1) * (Params.NY + 1);
+	Out.SetNum(N);
+	FState* S = State;
+	ENQUEUE_RENDER_COMMAND(SandGridDownloadRet)([S, N, &Out](FRHICommandListImmediate& RHICmdList)
+	{
+		FRHIGPUBufferReadback Rb(TEXT("SandGrid.DlRet"));
+		{
+			FRDGBuilder GraphBuilder(RHICmdList, RDG_EVENT_NAME("SandGridDownloadRet"));
+			AddEnqueueCopyPass(GraphBuilder, &Rb, GraphBuilder.RegisterExternalBuffer(S->ReturnTot), N * sizeof(uint32));
+			GraphBuilder.Execute();
+		}
+		RHICmdList.SubmitAndBlockUntilGPUIdle();
+		if (const void* Src = Rb.Lock(N * sizeof(uint32))) { FMemory::Memcpy(Out.GetData(), Src, N * sizeof(uint32)); }
+		Rb.Unlock();
+	});
+	FlushRenderingCommands();
+}
 void FSandGridGpu::DownloadLoad(TArray<FVector2f>& Out) const
 {
 	const int32 N = Params.NX * Params.NY;
@@ -646,7 +666,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 				if (RetScale > 0.f)
 				{
 					// M4 T5 파괴 환원 — 입자가 모은 부피 → DB (b 증가, b_struct 아님)
-					FSandGridParams R = B; R.DBRW = GraphBuilder.CreateUAV(Db); R.ReturnAccRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->ReturnAcc)); R.ReturnScale = RetScale;
+					FSandGridParams R = B; R.DBRW = GraphBuilder.CreateUAV(Db); R.ReturnAccRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->ReturnAcc)); R.ReturnTotRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->ReturnTot)); R.ReturnScale = RetScale;
 					AddGridPass<FSandGridReturnCS>(GraphBuilder, RDG_EVENT_NAME("SandGridReturn"), ShaderMap, R, GK);
 				}
 				FSandGridParams Z = B; Z.BCorner = nullptr; Z.DBRO = GraphBuilder.CreateSRV(Db); Z.BCornerRW = GraphBuilder.CreateUAV(BC); Z.B0RO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->SedB0)); Z.BDelRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SedDel));

@@ -693,6 +693,8 @@ void USandWavesSubsystem::UpdateSand()
 			// M4 세굴 (milestones M4 검증): 블록 발자국 밖 30 cm 띠의 처음 대비 모래 바닥 변화 — 앞 (바다 +X) · 옆 (±Y) · 뒤 (−X) — 과 발자국 안 (기단). 평균 · 최저 cm
 			const float Hm = SandHalfCm / 100.f, Ring = 0.3f;
 			double Sum[4] = {}; float Min[4] = { 1e9f, 1e9f, 1e9f, 1e9f }; int32 Cnt[4] = {};
+			double SumR[4] = {}, SumX[4] = {}; float MinX[4] = { 1e9f, 1e9f, 1e9f, 1e9f };   // 환원 몫 · 환원 뺀 변화 (= 흐름이 만든 변화)
+			TArray<uint32> Rt; Grid->DownloadReturnTot(Rt); const float RtCm = 100.f * Grid->GetReturnScale();
 			for (int32 j = 0; j <= NY; ++j) for (int32 i = 0; i <= NX; ++i)
 			{
 				const float dx = i * Dx - SandC.X, dy = j * Dx - SandC.Y;
@@ -704,10 +706,15 @@ void USandWavesSubsystem::UpdateSand()
 				const int32 c = j * (NX + 1) + i;
 				const float d = 100.f * (Bc[c] - BCorner[c]);
 				Sum[k] += d; Min[k] = FMath::Min(Min[k], d); ++Cnt[k];
+				const float r = Rt.IsValidIndex(c) ? Rt[c] * RtCm : 0.f;
+				SumR[k] += r; SumX[k] += d - r; MinX[k] = FMath::Min(MinX[k], d - r);
 			}
 			auto Avg = [&](int32 k) { return Cnt[k] ? (float)(Sum[k] / Cnt[k]) : 0.f; };
 			UE_LOG(LogSandWaves, Display, TEXT("M4 세굴 %.0fs: 바닥 변화 cm (평균/최저) 앞 %.2f/%.2f · 옆 %.2f/%.2f · 뒤 %.2f/%.2f · 기단 %.2f/%.2f"), SimTime,
 				Avg(0), Min[0], Avg(1), Min[1], Avg(2), Min[2], Avg(3), Min[3]);
+			auto Av = [&](const double* S, int32 k) { return Cnt[k] ? (float)(S[k] / Cnt[k]) : 0.f; };
+			UE_LOG(LogSandWaves, Display, TEXT("M4 세굴 환원 %.0fs: 환원 몫 cm 앞 %.2f · 옆 %.2f · 뒤 %.2f · 기단 %.2f | 환원 뺀 변화 (평균/최저) 앞 %.2f/%.2f · 옆 %.2f/%.2f · 뒤 %.2f/%.2f · 기단 %.2f/%.2f"), SimTime,
+				Av(SumR, 0), Av(SumR, 1), Av(SumR, 2), Av(SumR, 3), Av(SumX, 0), MinX[0], Av(SumX, 1), MinX[1], Av(SumX, 2), MinX[2], Av(SumX, 3), MinX[3]);
 		}
 		UE_LOG(LogSandWaves, Display, TEXT("M4 T1 %.0fs: 입자 %d (비유한 %d) · 처음 지면 위 최고 %.1f cm · 지면 최소 간극 %.2f cm · 구덩이 안 %d · 입자 GPU 평균 %.2f ms · 격자 GPU %.2f ms"),
 			SimTime, Alive, Bad, Top, MinGap, InPit, SandGpuSum / FMath::Max(SandGpuN, 1), Grid->LastGpuMs());
