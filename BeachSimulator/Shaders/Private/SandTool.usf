@@ -275,8 +275,18 @@ void ReturnCS(uint3 Tid : SV_DispatchThreadID)
 	const uint p = Tid.x;
 	if (p >= NumParticles || ReturnMode == 0u) { return; }
 	const float4 P4 = PosRW[p];
-	if (IsGrave(P4.xyz) || P4.w <= 0.f) { return; }   // 고정 · 잠든 입자 (w = 0) 제외
-	if (dot(VelRW[p].xyz, VelRW[p].xyz) >= ReturnVel * ReturnVel) { return; }   // 움직이는 입자는 입자로 남는다 — 무너지는 모습이 보이게
+	if (IsGrave(P4.xyz)) { return; }
+	if (ReturnMode == 2u && SleepFrames > 0u)
+	{
+		// T5 개정 (m4-plan, papers D-M4-12 · D-M4-13 AGX delay time): 잠들기 카운터 충족 = 자기와 접촉 이웃이 SleepVel 미만으로 SleepFrames 프레임.
+		// 잠든 입자도 대상 (고정 입자는 카운터가 늘 0). 밑이 파여 내려앉는 동안은 입자로 남는다
+		if ((SleepRW[p] & 0x1FFFFFFFu) < SleepFrames) { return; }
+	}
+	else
+	{
+		if (P4.w <= 0.f) { return; }   // 옛 판정 (-returnnow): 고정 · 잠든 입자 제외, 이번 프레임 속도만
+		if (dot(VelRW[p].xyz, VelRW[p].xyz) >= ReturnVel * ReturnVel) { return; }
+	}
 	if (GroundLambdaRW[p] <= 0.f) { return; }
 	if (NumBonds > 0u)
 	{

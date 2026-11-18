@@ -1191,7 +1191,7 @@ void FSandGpuSim::Step(const FSandGpuFrameParams& P, FSandGpuStats& Out)
 					if (bReturn)
 					{
 						// M4 T5 파괴 환원 — 산 결합 확인에 결합 데이터 · 인접 목록
-						FSandToolParams TR = TP; TR.ReturnMode = 1u; TR.ReturnVel = P.SleepVel; TR.ReturnAccRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(P.GroundReturn));
+						FSandToolParams TR = TP; TR.ReturnMode = P.bReturnNow ? 1u : 2u; TR.ReturnVel = P.SleepVel; TR.ReturnAccRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(P.GroundReturn));
 						TR.HandWRW = nullptr; TR.HandCountRW = nullptr; TR.BondTrigRW = nullptr;
 						TR.BondDataRW = GraphBuilder.CreateUAV(BondData); TR.OldAdjOffset = GraphBuilder.CreateSRV(BondAdjOffset); TR.OldAdj = GraphBuilder.CreateSRV(BondAdj);
 						AddDirectPass<FSandReturnCS>(GraphBuilder, RDG_EVENT_NAME("SandReturn"), ShaderMap, TR, LN, 64);

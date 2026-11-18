@@ -601,6 +601,7 @@ void USandWavesSubsystem::InitSand(const TCHAR* Cmd)
 		{
 			// M4 T5 파괴 환원 — 입자 하나 = 지름 D 정육면체 (격자 b 와 같은 공극 포함 부피). 1/65536 단위의 바닥 높이 (m)
 			Sand->GroundSrc.GroundReturn = Grid->GetReturnBuffer();
+			Sand->GroundSrc.bReturnNow = FParse::Param(Cmd, TEXT("returnnow"));
 			Grid->SetReturnScale(FMath::Cube(D / 100.f) / (Dx * Dx) / 65536.f);
 		}
 	}
@@ -770,6 +771,7 @@ void USandWavesSubsystem::UpdateSand()
 			const float Rp = Sand->GetParams().Radius;
 			const int32 NCell = NX * NY;
 			TArray<float> ColZ; ColZ.Init(1e9f, NCell);
+			TArray<float> ColTop; ColTop.Init(-1e9f, NCell);   // 기둥 꼭대기 (판 윗면) — 주저앉음 · 기울기
 			auto CellOf = [&](const FVector3f& X) { const int32 i = FMath::Clamp((int32)(X.X / 100.f / Dx), 0, NX - 1), j = FMath::Clamp((int32)(X.Y / 100.f / Dx), 0, NY - 1); return j * NX + i; };
 			int32 NAlive = 0, NRet = 0, NRetHang = 0, NRetLow = 0;
 			if (ScourCell.Num() != SandPos.Num()) { ScourCell.Init(-1, SandPos.Num()); }
@@ -783,7 +785,7 @@ void USandWavesSubsystem::UpdateSand()
 					ScourCell[i] = -1; continue;
 				}
 				const int32 c = CellOf(X); ScourCell[i] = c; ++NAlive;
-				ColZ[c] = FMath::Min(ColZ[c], X.Z);
+				ColZ[c] = FMath::Min(ColZ[c], X.Z); ColTop[c] = FMath::Max(ColTop[c], X.Z);
 			}
 			ScourColGap.Init(-1e9f, NCell);
 			int32 NCol = 0, NHang = 0; float GapMax = 0.f;
@@ -813,6 +815,22 @@ void USandWavesSubsystem::UpdateSand()
 					if (d < 999) { OvMaxCells = FMath::Max(OvMaxCells, d); }
 					NOv10 += d < 999 && d * Dx * 100.f >= 10.f;
 				}
+			}
+			{
+				// 판 윗면: 발자국 안 기둥 꼭대기의 처음 바닥 대비 높이 — 가장자리 30 cm 띠를 앞 (+X) · 옆 · 뒤 로, 가운데. 평균 cm (기둥 수)
+				double TS[4] = {}; int32 TN[4] = {};
+				for (int32 c = 0; c < NCell; ++c)
+				{
+					if (ColTop[c] < -1e8f) { continue; }
+					const float x = ((c % NX) + 0.5f) * Dx - SandC.X, y = ((c / NX) + 0.5f) * Dx - SandC.Y;
+					const float ax = FMath::Abs(x), ay = FMath::Abs(y);
+					if (ax > Hm || ay > Hm) { continue; }
+					const float In = Hm - FMath::Max(ax, ay);
+					const int32 k = In >= 0.3f ? 3 : (ay > ax ? 1 : (x > 0.f ? 0 : 2));
+					TS[k] += ColTop[c] - 100.f * BedAt(BCorner, x + SandC.X, y + SandC.Y); ++TN[k];
+				}
+				UE_LOG(LogSandWaves, Display, TEXT("M4 판 윗면 %.0fs: 처음 바닥 위 cm (기둥) 앞 %.1f (%d) · 옆 %.1f (%d) · 뒤 %.1f (%d) · 가운데 %.1f (%d)"), SimTime,
+					TN[0] ? TS[0] / TN[0] : 0.0, TN[0], TN[1] ? TS[1] / TN[1] : 0.0, TN[1], TN[2] ? TS[2] / TN[2] : 0.0, TN[2], TN[3] ? TS[3] / TN[3] : 0.0, TN[3]);
 			}
 			UE_LOG(LogSandWaves, Display, TEXT("M4 내민 길이 %.0fs: 매달린 기둥 중 받친 기둥까지 최대 %.0f cm · 10 cm 이상 %d 기둥"), SimTime, OvMaxCells * Dx * 100.f, NOv10);
 			UE_LOG(LogSandWaves, Display, TEXT("M4 주저앉음 %.0fs: 기단 흐름 변화 (평균/최저) 가장자리 0–10 %.2f/%.2f · 10–30 %.2f/%.2f · 30+ %.2f/%.2f cm | 매달린 기둥 %d / %d (간극 최대 %.1f cm) · 산 %d | 지난 1 s 환원 %d (매달린 칸 %d · 바닥 닿은 칸 %d)"), SimTime,
