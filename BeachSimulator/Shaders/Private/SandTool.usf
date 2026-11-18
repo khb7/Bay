@@ -56,7 +56,7 @@ float MorrisonCd(float Re)
 {
 	Re = max(Re, 1e-3f);
 	const float a = Re / 5.f, b = Re / 263000.f, c = Re / 1e6f;
-	return 24.f / Re + 2.6f * a / (1.f + pow(a, 1.52f)) + 0.411f * pow(b, -7.94f) / (1.f + pow(b, -8.f)) + 0.25f * c / (1.f + c);
+	return 24.f / Re + 2.6f * a / (1.f + pow(a, 1.52f)) + 0.411f * pow(b, 0.06f) / (1.f + pow(b, 8.f))   /* = 0.411 b^-7.94/(1+b^-8), b⁸ 약분 — 원식은 Re<3.7 에서 inf/inf = NaN */ + 0.25f * c / (1.f + c);
 }
 
 
