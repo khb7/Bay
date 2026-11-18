@@ -753,6 +753,49 @@ void USandWavesSubsystem::UpdateSand()
 			auto Av = [&](const double* S, int32 k) { return Cnt[k] ? (float)(S[k] / Cnt[k]) : 0.f; };
 			UE_LOG(LogSandWaves, Display, TEXT("M4 세굴 환원 %.0fs: 환원 몫 cm 앞 %.2f · 옆 %.2f · 뒤 %.2f · 기단 %.2f | 환원 뺀 변화 (평균/최저) 앞 %.2f/%.2f · 옆 %.2f/%.2f · 뒤 %.2f/%.2f · 기단 %.2f/%.2f"), SimTime,
 				Av(SumR, 0), Av(SumR, 1), Av(SumR, 2), Av(SumR, 3), Av(SumX, 0), MinX[0], Av(SumX, 1), MinX[1], Av(SumX, 2), MinX[2], Av(SumX, 3), MinX[3]);
+			// 주저앉음 진단 ① 기단 안쪽 띠 (발자국 가장자리에서 안으로 0–10 · 10–30 · 30 cm+) 의 흐름 변화 (환원 뺀) 평균/최저
+			double SI[3] = {}; float MI[3] = { 1e9f, 1e9f, 1e9f }; int32 CI[3] = {};
+			for (int32 j = 0; j <= NY; ++j) for (int32 i = 0; i <= NX; ++i)
+			{
+				const float ax = FMath::Abs(i * Dx - SandC.X), ay = FMath::Abs(j * Dx - SandC.Y);
+				if (ax > Hm || ay > Hm) { continue; }
+				const float In = Hm - FMath::Max(ax, ay);
+				const int32 k = In < 0.1f ? 0 : (In < 0.3f ? 1 : 2);
+				const int32 c = j * (NX + 1) + i;
+				const float x = 100.f * (Bc[c] - BCorner[c]) - (Rt.IsValidIndex(c) ? Rt[c] * RtCm : 0.f);
+				SI[k] += x; MI[k] = FMath::Min(MI[k], x); ++CI[k];
+			}
+			// ② 기둥 (격자 칸) 마다 가장 낮은 산 입자의 간극 = 입자 바닥 (z − R) − 칸 가운데 모래 b. 매달린 기둥 = 간극 > R (밑이 파여 지지 잃음)
+			// ③ 지난 1 s 에 무덤으로 간 입자: 그 칸의 지난 초 기둥 간극으로 분류 (매달린 칸 · 바닥에 닿은 칸)
+			const float Rp = Sand->GetParams().Radius;
+			const int32 NCell = NX * NY;
+			TArray<float> ColZ; ColZ.Init(1e9f, NCell);
+			auto CellOf = [&](const FVector3f& X) { const int32 i = FMath::Clamp((int32)(X.X / 100.f / Dx), 0, NX - 1), j = FMath::Clamp((int32)(X.Y / 100.f / Dx), 0, NY - 1); return j * NX + i; };
+			int32 NAlive = 0, NRet = 0, NRetHang = 0, NRetLow = 0;
+			if (ScourCell.Num() != SandPos.Num()) { ScourCell.Init(-1, SandPos.Num()); }
+			for (int32 i = 0; i < SandPos.Num(); ++i)
+			{
+				const FVector3f X(SandPos[i]);
+				if (SandPool::IsGrave(X))
+				{
+					const int32 pc = ScourCell[i];
+					if (pc >= 0 && ScourColGap.IsValidIndex(pc)) { ++NRet; NRetHang += ScourColGap[pc] > Rp; NRetLow += ScourColGap[pc] <= 0.5f * Rp; }
+					ScourCell[i] = -1; continue;
+				}
+				const int32 c = CellOf(X); ScourCell[i] = c; ++NAlive;
+				ColZ[c] = FMath::Min(ColZ[c], X.Z);
+			}
+			ScourColGap.Init(-1e9f, NCell);
+			int32 NCol = 0, NHang = 0; float GapMax = 0.f;
+			for (int32 c = 0; c < NCell; ++c)
+			{
+				if (ColZ[c] > 1e8f) { continue; }
+				const float G = (ColZ[c] - Rp) - 100.f * BedAt(Bc, ((c % NX) + 0.5f) * Dx, ((c / NX) + 0.5f) * Dx);
+				ScourColGap[c] = G; ++NCol;
+				if (G > Rp) { ++NHang; GapMax = FMath::Max(GapMax, G); }
+			}
+			UE_LOG(LogSandWaves, Display, TEXT("M4 주저앉음 %.0fs: 기단 흐름 변화 (평균/최저) 가장자리 0–10 %.2f/%.2f · 10–30 %.2f/%.2f · 30+ %.2f/%.2f cm | 매달린 기둥 %d / %d (간극 최대 %.1f cm) · 산 %d | 지난 1 s 환원 %d (매달린 칸 %d · 바닥 닿은 칸 %d)"), SimTime,
+				CI[0] ? SI[0] / CI[0] : 0.0, MI[0], CI[1] ? SI[1] / CI[1] : 0.0, MI[1], CI[2] ? SI[2] / CI[2] : 0.0, MI[2], NHang, NCol, GapMax, NAlive, NRet, NRetHang, NRetLow);
 		}
 		UE_LOG(LogSandWaves, Display, TEXT("M4 T1 %.0fs: 입자 %d (비유한 %d) · 처음 지면 위 최고 %.1f cm · 지면 최소 간극 %.2f cm · 구덩이 안 %d · 입자 GPU 평균 %.2f ms · 격자 GPU %.2f ms"),
 			SimTime, Alive, Bad, Top, MinGap, InPit, SandGpuSum / FMath::Max(SandGpuN, 1), Grid->LastGpuMs());
