@@ -794,6 +794,27 @@ void USandWavesSubsystem::UpdateSand()
 				ScourColGap[c] = G; ++NCol;
 				if (G > Rp) { ++NHang; GapMax = FMath::Max(GapMax, G); }
 			}
+			// ④ 내민 길이: 매달린 기둥에서 가장 가까운 받친 기둥 (간극 ≤ R) 까지 칸 거리 (4 이웃 BFS, 입자 있는 칸만 지남) × 칸 폭.
+			//    사방이 받친 작은 구멍이면 1–2 칸, 내민 보면 길다. 문헌 L_max ≈ 12 cm (t 0.4 m, σ_t 2 kPa — D-M4-12)
+			int32 OvMaxCells = 0, NOv10 = 0;
+			{
+				TArray<int32> Dist; Dist.Init(-1, NCell); TArray<int32> Q; Q.Reserve(NCell);
+				for (int32 c = 0; c < NCell; ++c) { if (ScourColGap[c] > -1e8f && ScourColGap[c] <= Rp) { Dist[c] = 0; Q.Add(c); } }
+				for (int32 h = 0; h < Q.Num(); ++h)
+				{
+					const int32 c = Q[h], ci = c % NX, cj = c / NX;
+					const int32 Nb[4] = { ci > 0 ? c - 1 : -1, ci < NX - 1 ? c + 1 : -1, cj > 0 ? c - NX : -1, cj < NY - 1 ? c + NX : -1 };
+					for (int32 n : Nb) { if (n >= 0 && Dist[n] < 0 && ScourColGap[n] > Rp) { Dist[n] = Dist[c] + 1; Q.Add(n); } }
+				}
+				for (int32 c = 0; c < NCell; ++c)
+				{
+					if (ScourColGap[c] <= Rp) { continue; }
+					const int32 d = Dist[c] < 0 ? 999 : Dist[c];   // 999 = 받친 기둥과 이어지지 않음 (떨어진 덩어리)
+					if (d < 999) { OvMaxCells = FMath::Max(OvMaxCells, d); }
+					NOv10 += d < 999 && d * Dx * 100.f >= 10.f;
+				}
+			}
+			UE_LOG(LogSandWaves, Display, TEXT("M4 내민 길이 %.0fs: 매달린 기둥 중 받친 기둥까지 최대 %.0f cm · 10 cm 이상 %d 기둥"), SimTime, OvMaxCells * Dx * 100.f, NOv10);
 			UE_LOG(LogSandWaves, Display, TEXT("M4 주저앉음 %.0fs: 기단 흐름 변화 (평균/최저) 가장자리 0–10 %.2f/%.2f · 10–30 %.2f/%.2f · 30+ %.2f/%.2f cm | 매달린 기둥 %d / %d (간극 최대 %.1f cm) · 산 %d | 지난 1 s 환원 %d (매달린 칸 %d · 바닥 닿은 칸 %d)"), SimTime,
 				CI[0] ? SI[0] / CI[0] : 0.0, MI[0], CI[1] ? SI[1] / CI[1] : 0.0, MI[1], CI[2] ? SI[2] / CI[2] : 0.0, MI[2], NHang, NCol, GapMax, NAlive, NRet, NRetHang, NRetLow);
 		}
