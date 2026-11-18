@@ -369,6 +369,11 @@ namespace
 			T.CovARW = GraphBuilder.CreateUAV(CovA);
 			T.CovBRW = GraphBuilder.CreateUAV(CovB);
 
+			// 계수 버퍼는 이웃 단계부터 쓴다 (6 비유한 위치 · 7 최대 버킷) — 맨 앞에서 지운다
+			FRDGBufferRef Counters = MeshBuffer(GraphBuilder, TEXT("SandMesh.Counters"), sizeof(uint32), 8);
+			T.CountersRW = GraphBuilder.CreateUAV(Counters);
+			T.CountersRO = GraphBuilder.CreateSRV(Counters);
+			AddClearUAVPass(GraphBuilder, T.CountersRW, 0u);
 			AddClearUAVPass(GraphBuilder, T.CellCountRW, 0u);
 			AddMeshPass<FSandMeshCellKeyCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshCellKey"), ShaderMap, T, N, 64);
 			AddMeshScan(GraphBuilder, ShaderMap, T, CellCount, CellStart, TableSize);
@@ -378,7 +383,6 @@ namespace
 
 			Stamp(1);
 			// ── G1-2 커널 · k_s · 등위값 ──
-			FRDGBufferRef Counters  = MeshBuffer(GraphBuilder, TEXT("SandMesh.Counters"), sizeof(uint32), 8);
 			FRDGBufferRef EigVal    = MeshBuffer(GraphBuilder, TEXT("SandMesh.EigVal"), sizeof(FVector4f), N);
 			FRDGBufferRef EigVec    = MeshBuffer(GraphBuilder, TEXT("SandMesh.EigVec"), sizeof(FVector4f), 3 * N);
 			FRDGBufferRef Partial   = MeshBuffer(GraphBuilder, TEXT("SandMesh.Partial"), sizeof(FVector2f), NumPartials);
@@ -389,8 +393,6 @@ namespace
 			T.SmoothedRO = GraphBuilder.CreateSRV(Smoothed);
 			T.CovARO = GraphBuilder.CreateSRV(CovA);
 			T.CovBRO = GraphBuilder.CreateSRV(CovB);
-			T.CountersRW = GraphBuilder.CreateUAV(Counters);
-			T.CountersRO = GraphBuilder.CreateSRV(Counters);
 			T.EigValRW = GraphBuilder.CreateUAV(EigVal);
 			T.EigValRO = GraphBuilder.CreateSRV(EigVal);
 			T.EigVecRW = GraphBuilder.CreateUAV(EigVec);
@@ -403,7 +405,6 @@ namespace
 			T.KernelRO = GraphBuilder.CreateSRV(Kernel);
 			T.SamplePhiRW = GraphBuilder.CreateUAV(SamplePhi);
 			T.SamplePhiRO = GraphBuilder.CreateSRV(SamplePhi);
-			AddClearUAVPass(GraphBuilder, T.CountersRW, 0u);
 			AddClearUAVPass(GraphBuilder, T.ScalarsRW, 0u);
 			AddMeshPass<FSandMeshMaxCountCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshMaxCount"), ShaderMap, T, N, 64);
 			AddMeshPass<FSandMeshEigenCS>(GraphBuilder, RDG_EVENT_NAME("SandMeshEigen"), ShaderMap, T, N, 64);
@@ -596,6 +597,7 @@ namespace
 					if (const uint32* C = static_cast<const uint32*>(RenderOut->CountReadback->Lock(8 * sizeof(uint32))))
 					{
 						RenderOut->LastIndexCount = (int32)C[4];
+						for (int32 k = 0; k < 8; ++k) { RenderOut->LastCounters[k] = C[k]; }
 						if (C[5] > 0) { RenderOut->SlotScale *= 2; }   // 슬롯이 넘쳤다 — 다음 프레임부터 두 배 (#24)
 					}
 					RenderOut->CountReadback->Unlock();

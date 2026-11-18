@@ -67,7 +67,8 @@ namespace
 			Reserve(RHICmdList, Sim.NumParticles());
 			SandGpuMesh::BuildFromSimToRenderBuffers(RHICmdList, Sim, Params, Buffers);
 			bReady = true;
-			if (++NumBuilds % 60 == 0) { UE_LOG(LogTemp, Display, TEXT("SandSurface: 색인 %d · 그리는 삼각형 %d · 용량 %d"), Buffers.LastIndexCount, Buffers.DrawPrimitives(), Buffers.MaxIndices / 3); }
+			if (++NumBuilds % 20 == 0) { UE_LOG(LogTemp, Display, TEXT("SandSurface: 색인 %d · 그리는 삼각형 %d · 용량 %d · 계수 %u %u %u %u %u %u %u %u · 슬롯 배수 %d"), Buffers.LastIndexCount, Buffers.DrawPrimitives(), Buffers.MaxIndices / 3,
+				Buffers.LastCounters[0], Buffers.LastCounters[1], Buffers.LastCounters[2], Buffers.LastCounters[3], Buffers.LastCounters[4], Buffers.LastCounters[5], Buffers.LastCounters[6], Buffers.LastCounters[7], Buffers.SlotScale); }
 		}
 
 		void Reserve(FRHICommandListImmediate& RHICmdList, int32 NumParticles)

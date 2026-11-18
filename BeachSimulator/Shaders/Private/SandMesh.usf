@@ -164,7 +164,12 @@ void CellKeyCS(uint3 Tid : SV_DispatchThreadID)
 {
 	const uint i = Tid.x;
 	if (i >= NumParticles) { return; }
-	const uint Key = HashCell(CellOf(GridPosRO[i].xyz, GridCell), TableSize);
+	const float3 Gp = GridPosRO[i].xyz;
+	// 유한하지 않은 위치 (NaN · Inf) 는 모두 같은 셀 → 한 버킷에 몰려 SortCells · 이웃 순회가 O(n²) 로 GPU 를 멈춘다 (m4-log #25).
+	// 입자 번호로 서로 다른 먼 셀에 흩고 수를 센다 (거리 비교는 NaN 이라 이웃이 되지 않는다)
+	const bool bFinite = all(abs(Gp) < 1e30f);
+	if (!bFinite) { InterlockedAdd(CountersRW[6], 1u); }
+	const uint Key = HashCell(bFinite ? CellOf(Gp, GridCell) : int3((int)i, 0x3FFFFFFF, -0x3FFFFFFF), TableSize);
 	CellKeyRW[i] = Key;
 	uint Slot;
 	InterlockedAdd(CellCountRW[Key], 1u, Slot);
@@ -187,6 +192,8 @@ void SortCellsCS(uint3 Tid : SV_DispatchThreadID)
 	const uint k = Tid.x;
 	if (k >= TableSize) { return; }
 	const uint S0 = CellStart[k], S1 = CellStart[k + 1];
+	InterlockedMax(CountersRW[7], S1 >= S0 ? S1 - S0 : 0xFFFFFFFFu);   // 진단: 가장 큰 버킷
+	if (S1 < S0 || S1 > NumParticles || S1 - S0 > 256u) { return; }   // 비정상 · 과대 버킷은 정렬 생략 — 결정성만 잃는다 (멈춤 방지)
 	for (uint a = S0 + 1; a < S1; ++a)
 	{
 		const uint V = SortedIdxRW[a];

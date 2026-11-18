@@ -832,6 +832,22 @@ void USandWavesSubsystem::UpdateSand()
 				UE_LOG(LogSandWaves, Display, TEXT("M4 판 윗면 %.0fs: 처음 바닥 위 cm (기둥) 앞 %.1f (%d) · 옆 %.1f (%d) · 뒤 %.1f (%d) · 가운데 %.1f (%d)"), SimTime,
 					TN[0] ? TS[0] / TN[0] : 0.0, TN[0], TN[1] ? TS[1] / TN[1] : 0.0, TN[1], TN[2] ? TS[2] / TN[2] : 0.0, TN[2], TN[3] ? TS[3] / TN[3] : 0.0, TN[3]);
 			}
+			{
+				// 진단: 메셔 SortCellsCS (해시 버킷마다 삽입 정렬) 와 같은 해시 — 가장 큰 버킷 · 무덤 수 · Σn² (정렬 일)
+				const int32 N = SandPos.Num();
+				const uint32 Table = FMath::RoundUpToPowerOfTwo((uint32)FMath::Max(64, 2 * N));
+				TArray<int32> HC, CntG; HC.Init(0, Table); CntG.Init(0, Table);
+				for (const FVector4f& X : SandPos)
+				{
+					const int32 cx = FMath::FloorToInt(X.X / 10.f), cy = FMath::FloorToInt(X.Y / 10.f), cz = FMath::FloorToInt(X.Z / 10.f);
+					const uint32 H = ((uint32)(cx * 73856093)) ^ ((uint32)(cy * 19349663)) ^ ((uint32)(cz * 83492791));
+					const uint32 K = H & (Table - 1u);
+					++HC[K]; CntG[K] += SandPool::IsGrave(FVector3f(X));
+				}
+				int32 MaxB = 0, MaxG = 0; double Sum2 = 0;
+				for (uint32 k = 0; k < Table; ++k) { Sum2 += (double)HC[k] * HC[k]; if (HC[k] > MaxB) { MaxB = HC[k]; MaxG = CntG[k]; } }
+				UE_LOG(LogSandWaves, Display, TEXT("M4 메시 해시 %.0fs: 표 %u · 최대 버킷 %d (무덤 %d) · Σn² %.0f"), SimTime, Table, MaxB, MaxG, Sum2);
+			}
 			UE_LOG(LogSandWaves, Display, TEXT("M4 내민 길이 %.0fs: 매달린 기둥 중 받친 기둥까지 최대 %.0f cm · 10 cm 이상 %d 기둥"), SimTime, OvMaxCells * Dx * 100.f, NOv10);
 			UE_LOG(LogSandWaves, Display, TEXT("M4 주저앉음 %.0fs: 기단 흐름 변화 (평균/최저) 가장자리 0–10 %.2f/%.2f · 10–30 %.2f/%.2f · 30+ %.2f/%.2f cm | 매달린 기둥 %d / %d (간극 최대 %.1f cm) · 산 %d | 지난 1 s 환원 %d (매달린 칸 %d · 바닥 닿은 칸 %d)"), SimTime,
 				CI[0] ? SI[0] / CI[0] : 0.0, MI[0], CI[1] ? SI[1] / CI[1] : 0.0, MI[1], CI[2] ? SI[2] / CI[2] : 0.0, MI[2], NHang, NCol, GapMax, NAlive, NRet, NRetHang, NRetLow);

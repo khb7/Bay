@@ -70,6 +70,7 @@ struct FSandGpuMeshRenderBuffers
 	 */
 	int32 DrawPrimitives() const { return LastIndexCount < 0 ? MaxIndices / 3 : FMath::Min(MaxIndices / 3, LastIndexCount / 3 + LastIndexCount / 12 + 256); }
 	int32 LastIndexCount = -1;
+	uint32 LastCounters[8] = {};   // 진단: 메셔 계수 (1 KList 넘친 영역 · 2 커널쌍 넘침 · 3 정점 · 4 색인 · 5 슬롯 넘침)
 	class FRHIGPUBufferReadback* CountReadback = nullptr;   // SandGpuMesh::ReleaseRenderBuffers 가 지운다
 	bool bCountPending = false;
 	int32 SlotScale = 1;   // 활성 영역 슬롯 용량 배수 — 넘치면 비동기 계수를 보고 두 배 (#24)
