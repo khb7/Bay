@@ -895,6 +895,10 @@ float SedPor;            // 공극률 p
 float Morfac;            // 지형 과장 배수 (XBeach morfac, 기본 1)
 float AvalDry;           // 사태 임계 기울기 — 마름 1.0 · 젖음 0.3 (XBeach dryslp · wetslp)
 float AvalWet;
+float SedPhiCos;         // Nielsen 위상 앞섬 cos φτ (끄면 1) — papers D-M6-1
+float SedPhiSinW;        // sin φτ / ω_p (s, 끄면 0)
+RWStructuredBuffer<float4> SedVPrevRW;  // xy 지난 서브스텝 칸 속도 · zw 거른 가속도. 마른 칸 = x 3.4e38 표시
+float SedAccTau;         // 가속도 저역 통과 τ = 0.1/ω_p (s) — 서브스텝 잡음 제거, ω_p 에서 위상 지연 ~6°
 RWStructuredBuffer<float2> SedQRW;  // 칸 소류사 q (m²/s)
 StructuredBuffer<float2>   SedQRO;
 RWStructuredBuffer<float>  DBRW;    // 꼭짓점 Δb
@@ -928,11 +932,25 @@ void SedQCS(uint3 Tid : SV_DispatchThreadID)
 	if (h > HDry)
 	{
 		const float2 V = U.yz / h;
-		const float Sp = length(V);
 		const float Rg = (SedS - 1.f) * Gravity * SedD;
-		const float Th = CfAt(i, h) * Sp * Sp / Rg;
-		if (Th > SedThc && Sp > 0.f) { Q = 8.f * pow(Th - SedThc, 1.5f) * sqrt(Rg * SedD * SedD) * V / Sp; }
+		// Nielsen (2002, 2006): u_eff = cos φτ·u + sin φτ/ω_p·du/dt — 급가속 오름물의 큰 바닥 전단. 막 젖은 칸 (지난 값 없음) 은 가속 항 0
+		const float4 Vp = SedVPrevRW[Idx(i, j)];
+		const float Dt = TimeRO[0];
+		float2 Acc = 0.f;
+		if (SedPhiSinW > 0.f && Dt > 0.f && Vp.x < 1e38f && h > 0.02f)   // 얇은 물 (V = hu/h 흔들림) 은 뺌
+		{
+			const float2 Raw = (V - Vp.xy) / Dt;
+			Acc = Vp.zw + (Raw - Vp.zw) * (Dt / (SedAccTau + Dt));
+			if (!all(isfinite(Acc))) { Acc = 0.f; }
+			const float Am = length(Acc); if (Am > Gravity) { Acc *= Gravity / Am; }   // |a| ≤ g
+		}
+		const float2 Ve = SedPhiCos * V + SedPhiSinW * Acc;
+		const float Se = length(Ve);
+		const float Th = CfAt(i, h) * Se * Se / Rg;
+		if (Th > SedThc && Se > 0.f) { Q = 8.f * pow(Th - SedThc, 1.5f) * sqrt(Rg * SedD * SedD) * Ve / Se; }
+		SedVPrevRW[Idx(i, j)] = float4(V, Acc);
 	}
+	else { SedVPrevRW[Idx(i, j)] = float4(3.4e38f, 0.f, 0.f, 0.f); }   // 마름 표시 — 다음에 젖으면 가속 항 건너뜀
 	SedQRW[Idx(i, j)] = Q;
 }
 

@@ -48,6 +48,8 @@ struct FSandGridGpuInit
 	bool  bSus = false;             // T4b 부유사 (papers D-M3-25)
 	float SedD90 = 3e-4f;           // m — XBeach 예제 값 (근거 약함)
 	float SusTsfac = 0.1f, SusTsmin = 0.5f, SusCmax = 0.1f;   // XBeach 기본
+	float SedPhaseDeg = 0.f;        // Nielsen 전단 위상 앞섬 φτ (도, 0 = 끔 · Nielsen 2006 은 51) — papers D-M6-1
+	float SedOmega = 0.f;           // ω_p = 2π/T_p (rad/s)
 	float AvalDry = 1.f, AvalWet = 0.3f;   // 사태 임계 기울기 (XBeach dryslp · wetslp)
 	TArray<float> GwInit;           // 처음 지하수면 NX·NY (비면 min(B, SeaLevel)) — 시험용
 	TArray<float> BCorner;          // (NX+1)·(NY+1)

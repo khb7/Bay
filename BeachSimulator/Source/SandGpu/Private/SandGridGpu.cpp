@@ -63,6 +63,10 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER(float, Morfac)
 	SHADER_PARAMETER(float, AvalDry)
 	SHADER_PARAMETER(float, AvalWet)
+	SHADER_PARAMETER(float, SedPhiCos)
+	SHADER_PARAMETER(float, SedPhiSinW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FVector4f>, SedVPrevRW)
+	SHADER_PARAMETER(float, SedAccTau)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, SedAccRW)
 	SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float4>, ExportRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, WetRW)
@@ -205,7 +209,7 @@ struct FSandGridGpu::FState
 	TUniquePtr<FRHIGPUBufferReadback> RbW; bool bRbWBusy = false;              // 비동기 수면 (렌더 스레드)
 	std::atomic<bool> bWantW{ false };
 	FCriticalSection WLock; TArray<float> WReady; bool bWReady = false;
-	TRefCountPtr<FRDGPooledBuffer> BCorner, BSort, SedQ, SedDB, SedB0, SedDel, U0, U1, Level, FX, FY, Drain, AMax, Time, Waves;
+	TRefCountPtr<FRDGPooledBuffer> BCorner, BSort, SedQ, SedVPrev, SedDB, SedB0, SedDel, U0, U1, Level, FX, FY, Drain, AMax, Time, Waves;
 	TRefCountPtr<FRDGPooledBuffer> Dst, UV0, UV1, FsPrev, FsT, Disp;   // T3c 분산
 	TRefCountPtr<FRDGPooledBuffer> Nu, BrkDiag;                                // Kennedy 와점성 (D-M3-19)
 	TRefCountPtr<FRDGPooledBuffer> Brk, BrkB;                         // 쇄파 상태 (지속, D-M3-17/18) — 핑퐁
@@ -347,6 +351,7 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 		S->BCorner = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.BCorner"), BC.GetData());
 		S->BSort = MakeBuffer(GraphBuilder, sizeof(float), BS.Num(), TEXT("SandGrid.BSort"), BS.GetData());
 		S->SedQ = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.SedQ"));
+		{ TArray<FVector4f> Vp; Vp.Init(FVector4f(3.4e38f, 0.f, 0.f, 0.f), N); S->SedVPrev = MakeBuffer(GraphBuilder, sizeof(FVector4f), N, TEXT("SandGrid.SedVPrev"), Vp.GetData()); }
 		{ TArray<float> Z; Z.Init(0.f, N); S->SusC = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.SusC"), Z.GetData()); S->SusC2 = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.SusC2"), Z.GetData()); S->SusE = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.SusE"), Z.GetData()); S->SedAcc = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.SedAcc"), Z.GetData()); S->Wet = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.Wet"), Z.GetData()); }
 		S->SedDB = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.SedDB"));
 		S->SedB0 = MakeBuffer(GraphBuilder, sizeof(float), BC.Num(), TEXT("SandGrid.SedB0"), BC.GetData());
@@ -596,6 +601,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 				B.SusWs = 1e-6f / P.SedD50 * (FMath::Sqrt(10.36f * 10.36f + 1.049f * Ds * Ds * Ds) - 10.36f);
 			}
 			B.bMorph = P.bMorph ? 1u : 0u; B.SedS = P.SedS; B.SedD = P.SedD50; B.SedPor = P.SedPor; B.Morfac = P.Morfac; B.AvalDry = P.AvalDry; B.AvalWet = P.AvalWet;
+			{ const float Ph = FMath::DegreesToRadians(P.SedPhaseDeg); B.SedPhiCos = FMath::Cos(Ph); B.SedPhiSinW = P.SedOmega > 0.f ? FMath::Sin(Ph) / P.SedOmega : 0.f; B.SedAccTau = P.SedOmega > 0.f ? 0.1f / P.SedOmega : 0.f; }
 			{
 				// θc — Soulsby & Whitehouse (1997): 0.30/(1 + 1.2D*) + 0.055[1 − exp(−0.020D*)], D* = (g(s−1)/ν²)^⅓·D (ν = 1e-6)
 				const float Ds = FMath::Pow(P.Gravity * (P.SedS - 1.f) / 1e-12f, 1.f / 3.f) * P.SedD50;
@@ -776,7 +782,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 					// T4a 모래 — 서브스텝 끝 U0 에서 (약결합, m3-plan T4)
 					FRDGBufferRef Sq = GraphBuilder.RegisterExternalBuffer(S->SedQ), Db = GraphBuilder.RegisterExternalBuffer(S->SedDB), Bs = GraphBuilder.RegisterExternalBuffer(S->BSort);
 					const FIntVector GK(FMath::DivideAndRoundUp(P.NX + 1, 8), FMath::DivideAndRoundUp(P.NY + 1, 8), 1);
-					FSandGridParams X = B; X.URO = GraphBuilder.CreateSRV(U0); X.SedQRW = GraphBuilder.CreateUAV(Sq);
+					FSandGridParams X = B; X.URO = GraphBuilder.CreateSRV(U0); X.SedQRW = GraphBuilder.CreateUAV(Sq); X.TimeRO = GraphBuilder.CreateSRV(Tm); X.SedVPrevRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SedVPrev));
 					AddGridPass<FSandGridSedQCS>(GraphBuilder, RDG_EVENT_NAME("SandGridSedQ"), ShaderMap, X, GC);
 					FRDGBufferRef Se = GraphBuilder.RegisterExternalBuffer(S->SusE);
 					if (P.bSus)
