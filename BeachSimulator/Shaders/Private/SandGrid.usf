@@ -1012,7 +1012,7 @@ float SusEAt(int i, int j)
 // T5 렌더: 프레임 끝에 칸마다 (w, h, b, 젖음) 를 텍스처로 — 재질 WPO 가 읽는다 (CPU 왕복 없음)
 RWTexture2D<float4>       ExportRW;
 RWStructuredBuffer<float> WetRW;    // 칸 젖음 (1 = 물 닿음, 서서히 마름)
-float ExportDryRate;                // 이번 프레임 줄어드는 양
+float ExportDryRate;                // 마름 이완 Δt/τ (이번 프레임)
 [numthreads(8, 8, 1)]
 void ExportCS(uint3 Tid : SV_DispatchThreadID)
 {
@@ -1020,7 +1020,18 @@ void ExportCS(uint3 Tid : SV_DispatchThreadID)
 	if (i >= NX || j >= NY) { return; }
 	const uint k = Idx(i, j);
 	const float W = URO[k].x, B = BCell(i, j), h = W - B;
-	const float Wt = h > 0.003f ? 1.f : max(0.f, WetRW[k] - ExportDryRate);
+	// 표면 수분 (papers D-M5-1): 평형 Se = van Genuchten (Carsel & Parrish 1988 sand: α 14.5 /m · n 2.68), z = 지면 − 지하수면.
+	//   물 닿음 (h > 3 mm) 또는 z ≤ 0 → 1 (포화 · 물막). 젖을 땐 바로, 마를 땐 τ (Schmutz & Namikas 2013, 30 분 하한) 지수 이완.
+	//   머티리얼은 Se 를 그대로 받는다: 어두워짐 (Ångström) · 0.8 넘어 광택 (SandMaterialBuilder).
+	float Eq = 0.f;
+	if (h > 0.003f) { Eq = 1.f; }
+	else if (bGround != 0u)
+	{
+		const float z = B - GwRO[k].x;
+		Eq = z <= 0.f ? 1.f : pow(1.f + pow(14.5f * z, 2.68f), -(1.f - 1.f / 2.68f));
+	}
+	const float Wp = WetRW[k];
+	const float Wt = Eq >= Wp ? Eq : Wp + (Eq - Wp) * ExportDryRate;
 	WetRW[k] = Wt;
 	const uint c = j * (NX + 1) + i;
 	const float Sm = 0.25f * (SCorner[c] + SCorner[c + 1] + SCorner[c + NX + 1] + SCorner[c + NX + 2]);

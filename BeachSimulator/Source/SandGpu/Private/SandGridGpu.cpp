@@ -811,7 +811,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 			{
 				// T5 — 렌더 텍스처로 내보내기 (m3-plan T5)
 				FRDGTextureRef Tx = GraphBuilder.RegisterExternalTexture(CreateRenderTarget(S->ExportRt->GetRenderTargetTexture(), TEXT("SandGrid.Export")));
-				FSandGridParams X = B; X.URO = GraphBuilder.CreateSRV(U0); X.ExportRW = GraphBuilder.CreateUAV(Tx); X.WetRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->Wet)); X.ExportDryRate = S->ExportDry;
+				FSandGridParams X = B; X.URO = GraphBuilder.CreateSRV(U0); X.ExportRW = GraphBuilder.CreateUAV(Tx); X.WetRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->Wet)); X.ExportDryRate = S->ExportDry; X.GwRO = GraphBuilder.CreateSRV(GwB);
 				AddGridPass<FSandGridExportCS>(GraphBuilder, RDG_EVENT_NAME("SandGridExport"), ShaderMap, X, GC);
 				GraphBuilder.SetTextureAccessFinal(Tx, ERHIAccess::SRVMask);
 			}

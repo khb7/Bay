@@ -301,7 +301,7 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 	GridRt->ClearColor = FLinearColor::Black;
 	GridRt->InitCustomFormat(NX, NY, PF_A32B32G32R32F, false);
 	GridRt->UpdateResourceImmediate(true);
-	Grid->SetExportTarget(GridRt->GameThread_GetRenderTargetResource(), 1.f / 60.f / 20.f);   // 물이 빠지면 20 초에 걸쳐 마른 색으로 (M5 증발 전까지의 눈요기)
+	Grid->SetExportTarget(GridRt->GameThread_GetRenderTargetResource(), 1.f / 60.f / 1800.f);   // 마름 이완 Δt/τ, τ 30 분 (papers D-M5-1 — 젖은 표면은 게임 몇 분 동안 거의 안 마른다)
 	auto Mid = [&](const FString& Path, int32 Section, const TCHAR* Name)
 	{
 		UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr, *(Path + TEXT(".") + Name));
