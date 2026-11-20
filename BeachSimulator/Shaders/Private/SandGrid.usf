@@ -895,9 +895,11 @@ float SedPor;            // 공극률 p
 float Morfac;            // 지형 과장 배수 (XBeach morfac, 기본 1)
 float AvalDry;           // 사태 임계 기울기 — 마름 1.0 · 젖음 0.3 (XBeach dryslp · wetslp)
 float AvalWet;
+uint  bSedClosed;        // 바다 경계 모래 플럭스 0 (시험용, -sedclosed)
 float SedPhiCos;         // Nielsen 위상 앞섬 cos φτ (끄면 1) — papers D-M6-1
 float SedPhiSinW;        // sin φτ / ω_p (s, 끄면 0)
 RWStructuredBuffer<float4> SedVPrevRW;  // xy 지난 서브스텝 칸 속도 · zw 거른 가속도. 마른 칸 = x 3.4e38 표시
+float SedAccHMin;        // 가속 항을 쓰는 최소 수심 (기본 0.02 m, 임의)
 float SedAccTau;         // 가속도 저역 통과 τ = 0.1/ω_p (s) — 서브스텝 잡음 제거, ω_p 에서 위상 지연 ~6°
 RWStructuredBuffer<float2> SedQRW;  // 칸 소류사 q (m²/s)
 StructuredBuffer<float2>   SedQRO;
@@ -937,7 +939,7 @@ void SedQCS(uint3 Tid : SV_DispatchThreadID)
 		const float4 Vp = SedVPrevRW[Idx(i, j)];
 		const float Dt = TimeRO[0];
 		float2 Acc = 0.f;
-		if (SedPhiSinW > 0.f && Dt > 0.f && Vp.x < 1e38f && h > 0.02f)   // 얇은 물 (V = hu/h 흔들림) 은 뺌
+		if (SedPhiSinW > 0.f && Dt > 0.f && Vp.x < 1e38f && h > SedAccHMin)   // 얇은 물 (V = hu/h 흔들림) 은 뺌
 		{
 			const float2 Raw = (V - Vp.xy) / Dt;
 			Acc = Vp.zw + (Raw - Vp.zw) * (Dt / (SedAccTau + Dt));
@@ -958,6 +960,7 @@ float2 SedQAt(int i, int j)
 {
 	// 육지 쪽 밖 = 0 (무유량). 바다 쪽 밖 = 끝 칸 (영구배 — 모래가 드나듦, papers D-M3-24). y 주기면 감싼다
 	if (i < 0) { return 0.f; }
+	if (i >= (int)NX && bSedClosed != 0u) { return 0.f; }
 	i = min(i, (int)NX - 1);
 	if (j < 0 || j >= (int)NY) { if (bPeriodicY == 0u) { return 0.f; } j = WJ(j); }
 	return SedQRO[Idx((uint)i, (uint)j)];
@@ -989,7 +992,7 @@ float SusFlux(int ia, int ja, int ib, int jb, uint Axis, float Dt, float Dl)
 float SusFx(int i, int j, float Dt)
 {
 	if (i < 0) { return 0.f; }                                                   // 육지 쪽 벽
-	if (i >= (int)NX - 1) { return bOpenEast != 0u ? SusFlux(i, j, i, j, 0u, Dt, Dx) : 0.f; }   // 바다 쪽: 영구배 (매뉴얼 Neumann)
+	if (i >= (int)NX - 1) { return (bOpenEast != 0u && bSedClosed == 0u) ? SusFlux(i, j, i, j, 0u, Dt, Dx) : 0.f; }   // 바다 쪽: 영구배 (매뉴얼 Neumann)
 	return SusFlux(i, j, i + 1, j, 0u, Dt, Dx);
 }
 float SusFy(int i, int j, float Dt)

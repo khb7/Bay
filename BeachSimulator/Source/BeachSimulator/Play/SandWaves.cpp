@@ -228,7 +228,8 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	Out.NX = NX; Out.NY = NY; Out.Dx = Dx; Out.H0 = H0; Out.Hs = Hs; Out.Xs = Xs; Out.Slope = Slope; Out.DeepH0 = DeepH0;
 	Out.Tp = SwellFrac >= 0.5 ? SwellTp : WindTp;
 	// A ① (papers D-M6-1): -nielsen 이면 MPM 전단에 위상 앞섬 φτ 51° (Nielsen 2006) · ω_p = 2π/T_p. -nielsenphi= 로 각 바꿈
-	if (FParse::Param(Cmd, TEXT("nielsen"))) { G.SedPhaseDeg = 51.f; FParse::Value(Cmd, TEXT("nielsenphi="), G.SedPhaseDeg); G.SedOmega = (float)(2.0 * PI / Out.Tp); }
+	G.bSedClosed = FParse::Param(Cmd, TEXT("sedclosed"));
+	if (FParse::Param(Cmd, TEXT("nielsen"))) { G.SedPhaseDeg = 51.f; FParse::Value(Cmd, TEXT("nielsenphi="), G.SedPhaseDeg); G.SedOmega = (float)(2.0 * PI / Out.Tp); FParse::Value(Cmd, TEXT("nielsenh="), G.SedAccHMin); FParse::Value(Cmd, TEXT("nielsentau="), G.SedAccTauW); }
 	const FString NestInfo = Out.bNest ? FString::Printf(TEXT(" · nesting 바깥 %d×%d (칸 %.0fcm, %.0fm, 경계 수심 %.2fm, Hs %.2fm, 묶인 IG %s)"),
 		Out.GO.NX, Out.GO.NY, Out.GO.Dx * 100, Out.GO.NX * Out.GO.Dx, Out.GO.BoundaryDepth, DeepH0, Out.GO.bBoundIg ? TEXT("켬") : TEXT("끔")) : FString();
 	Out.Info = FString::Printf(TEXT("T3 파도 — 격자 %d×%d (칸 %.0fcm, %.1f×%.1fm) · 해변 1:%.0f · 경계 수심 %.2fm · 경계 Hs %.2fm%s · 먼바다 H0 %.2fm · 너울 %.0f%% Tp %.0fs · 풍파 Tp %.0fs · Manning %.3f · IG 계수 %.2f (이득 %.2f)"),
