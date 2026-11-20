@@ -4276,3 +4276,14 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - **약점**: Othman et al. (ICCE 2014 △ 본문) — 댐 붕괴 실험에서 Nielsen 2002 예측 나쁨 (오름물 압력경사 부호가 반대). Chen 2017: D 커지면 f 커져 φ 가 비현실적으로 큼.
 - **Hoefel & Elgar (2003)** Science 299 ✓: 쇄파대 사주 이동 (가속 비대칭) — 스워시가 아니라 참고만.
 - **우리에게**: 우리 MPM 은 순간 u 만 쓴다 (SandGrid.usf SedQCS). φτ = 51° (Nielsen 2006 ✓) · ω_p = 2π/T_p (입력 파) 로 θ 의 속도를 u_eff 로 바꾼다. 맞춤 계수 없음. 부유사는 그대로 (Puleo k_a 는 오차 범위가 커서 안 씀).
+
+### D-M6-2. XBeach 스워시 수송 (Nielsen 소류사 + Bagnold 부유사 · bore 난류) — 식 확인
+- **van Rooijen, Reniers, van Thiel de Vries, Blenkinsopp, McCall (2012)**, "Modeling swash zone sediment transport at Truc Vert beach", ICCE 2012, icce-ojs-tamu.tdl.org/icce/article/view/6816 ✓ **본문 추출**:
+  - 식 (4) q_b = 12 [max(θ' − θcr, 0)]·u*·√... (MPM-Nielsen 꼴, θcr 0.05) · 식 (5) θ' = (u*² + k_b)/(ΔgD50) — **쇄파 난류 k_b 가 θ 에 더해짐**.
+  - 식 (6) **u* = √(0.5 f_2.5)·(cos φ_t·u + sin φ_t/ω_p·∂u/∂t)** ✓ (D-M6-1 의 [미확인] 식 꼴 확인됨). f_2.5 = Swart (1974) 식 (7), 거칠기 2.5 D50.
+  - 식 (8) **가속도 = 이전 스텝 차분 + 수치 안정용 이동 평균 T_a 0.5 s** — 우리 저역 통과 (#42) 와 같은 처방, 문헌 근거 생김.
+  - 식 (9) 경사 보정 Fredsøe & Deigaard (1992), tan φ 0.3.
+  - 부유사 식 (10) Galappatti & Vreugdenhil · T_s = max(0.05 h/w_s, 0.2 s) · 식 (12) c_eq = ε_s/(g w_s n_p)·(k_b·E_d + c_f u²)^{3/2}·|u| 꼴 (Roelvink & Stive 1989 Bagnold 형) [식 렌더 깨짐 — 정확한 지수 원문 확인 필요]. 난류 k_b 는 수면 경사 > 임계 경사면 생성, 바닥까지 지수 감쇠 (Reniers et al. submitted) → **오름물 농도가 높아져 육지 쪽 수송 증가**.
+  - Table 1: C 55 · E_d 0.01 · ε_s 0.01 · **φ_t 28°** · T_a 0.5 s · θcr 0.05 · tan φ 0.3.
+  - 결과: 퇴적 조석 (너울) · 침식 조석 (풍파) 모두 "합리적" 재현, 단 퇴적 조석에서 런업 과소 → 퇴적이 8 m 바다 쪽으로 밀림.
+- **우리에게**: ① φ: 51° (Nielsen 2006 sheet flow) vs 28° (Truc Vert swash 적용) — 둘 다 문헌, swash 적용례는 28°. ② 우리 부유사는 C_eq 가 |u| 만 (XBeach 식 87–88, k_b 뺌) → **bore 난류 k_b 가 빠져 오름물 부유가 약하다** — #43 의 "부유사가 swash 를 깎음" 과 들어맞는 후보. k_b 생성 식 (Reniers et al.) 원문 확인 필요.
