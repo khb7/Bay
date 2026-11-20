@@ -922,6 +922,27 @@ RWStructuredBuffer<float>  SusCRW;
 StructuredBuffer<float>    SusERO;   // 이번 서브스텝 순 침식 (m)
 RWStructuredBuffer<float>  SusERW;
 
+float SedKbOn;           // 1: 쇄파 난류 k_b 를 모래에 (papers D-M6-3, -kb)
+// 바닥 난류 k_b (m²/s²): 와점성 소산 ε = ν|∇u|² → D/ρ = hε → k_s = (D/ρ)^⅔ (XBeach 식 33, Battjes 1975) → 바닥 k_s/(e^{h/L}−1), L = h 가정 → ×1/(e−1)
+float2 SedVel(int i, int j)
+{
+	i = clamp(i, 0, (int)NX - 1);
+	if (bPeriodicY != 0u) { j = WJ(j); } else { j = clamp(j, 0, (int)NY - 1); }
+	const float4 U = URO[Idx((uint)i, (uint)j)];
+	const float h = U.x - BCell((uint)i, (uint)j);
+	return h > HDry ? U.yz / h : 0.f;
+}
+float SedKb(int i, int j, float h)
+{
+	if (SedKbOn <= 0.f) { return 0.f; }
+	const float Nu = NuRO[Idx((uint)i, (uint)j)];
+	if (Nu <= 0.f) { return 0.f; }
+	const float2 Ux = (SedVel(i + 1, j) - SedVel(i - 1, j)) / (2.f * Dx), Uy = (SedVel(i, j + 1) - SedVel(i, j - 1)) / (2.f * Dy);
+	const float S2 = 2.f * Ux.x * Ux.x + 2.f * Uy.y * Uy.y + (Ux.y + Uy.x) * (Ux.y + Uy.x);   // 2 S:S
+	const float Ks = pow(max(h * Nu * S2, 0.f), 2.f / 3.f);
+	return min(Ks * 0.58198f, 1.f);   // 1/(e−1) · 상한 1 m²/s² (안전)
+}
+
 [numthreads(8, 8, 1)]
 void SedQCS(uint3 Tid : SV_DispatchThreadID)
 {
@@ -948,8 +969,9 @@ void SedQCS(uint3 Tid : SV_DispatchThreadID)
 		}
 		const float2 Ve = SedPhiCos * V + SedPhiSinW * Acc;
 		const float Se = length(Ve);
-		const float Th = CfAt(i, h) * Se * Se / Rg;
-		if (Th > SedThc && Se > 0.f) { Q = 8.f * pow(Th - SedThc, 1.5f) * sqrt(Rg * SedD * SedD) * Ve / Se; }
+		const float Kb = SedKb(i, j, h);
+		const float Th = (CfAt(i, h) * Se * Se + Kb) / Rg;   // van Rooijen 2012 식 5 θ' = (u*² + k_b)/(ΔgD)
+		if (Th > SedThc && (Se > 0.f || Kb > 0.f)) { Q = Se > 0.f ? 8.f * pow(Th - SedThc, 1.5f) * sqrt(Rg * SedD * SedD) * Ve / Se : 0.f; }
 		SedVPrevRW[Idx(i, j)] = float4(V, Acc);
 	}
 	else { SedVPrevRW[Idx(i, j)] = float4(3.4e38f, 0.f, 0.f, 0.f); }   // 마름 표시 — 다음에 젖으면 가속 항 건너뜀
@@ -1015,7 +1037,8 @@ void SusCS(uint3 Tid : SV_DispatchThreadID)
 	float Sn = 0.f;   // 마른 칸: 뜬 모래 전부 내려앉음
 	if (h > HDry)
 	{
-		const float Ex = max(length(U.yz / h) - 0.19f * pow(SedD, 0.1f) * log10(max(4.f * h / SusD90, 1.f)), 0.f);
+		const float Kb = SedKb(i, j, h);
+		const float Ex = max(sqrt(dot(U.yz / h, U.yz / h) + 1.45f * Kb) - 0.19f * pow(SedD, 0.1f) * log10(max(4.f * h / SusD90, 1.f)), 0.f);
 		const float Ceq = min(SusAss / h * pow(Ex, 2.4f), 0.5f * SusCmax);
 		const float A = Dt / max(SusTsfac * h / SusWs, SusTsmin);
 		Sn = (Sa + A * h * Ceq) / (1.f + A);

@@ -4287,3 +4287,9 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
   - Table 1: C 55 · E_d 0.01 · ε_s 0.01 · **φ_t 28°** · T_a 0.5 s · θcr 0.05 · tan φ 0.3.
   - 결과: 퇴적 조석 (너울) · 침식 조석 (풍파) 모두 "합리적" 재현, 단 퇴적 조석에서 런업 과소 → 퇴적이 8 m 바다 쪽으로 밀림.
 - **우리에게**: ① φ: 51° (Nielsen 2006 sheet flow) vs 28° (Truc Vert swash 적용) — 둘 다 문헌, swash 적용례는 28°. ② 우리 부유사는 C_eq 가 |u| 만 (XBeach 식 87–88, k_b 뺌) → **bore 난류 k_b 가 빠져 오름물 부유가 약하다** — #43 의 "부유사가 swash 를 깎음" 과 들어맞는 후보. k_b 생성 식 (Reniers et al.) 원문 확인 필요.
+
+### D-M6-3. 바닥 난류 k_b — XBeach 식 (2026-11-20)
+- **XBeach 매뉴얼** (xbeach.readthedocs.io/en/latest/xbeach_manual.html) ✓ 본문: 식 30 k_b = k/(exp(h/H_rms) − 1) (Roelvink & Stive 1989) · 식 31 wave_averaged k_b = k̄_s/(exp(h/L_mix) − 1) · 식 32 bore_averaged ×(T_rep/T_bore) · 식 33 **k̄_s = (D_r/ρ)^{2/3}** (Battjes 1975) · 식 34 L_mix = √(2E_r T_rep/(ρ c)) · 식 92 u_rms,2² = u_rms² + 1.45 k_b → 식 105 C_eq 에 들어감. nonh 쇄파 판정 dη/dt 기준 maxbrsteep 0.6 · secbrsteep 0.3.
+- van Rooijen 2012 식 12 (Bagnold 형) — 추출 깨짐, **β_d k_b^{3/2} + c_f|u|³ 꼴 추정 [미확인]**, β_d 0.01.
+- Reniers et al. (2013, 난류 균형) · Roelvink & Stive (1989) 원문 미열람.
+- **우리에게**: 우리 식 (SusCS) 은 XBeach 식 105 의 u_rms 없는 꼴 → 식 92 처럼 **속도² 에 1.45 k_b 를 더하는 것** 이 가장 작은 변경. k_b 원천은 bore 의 국소 에너지 소산 D (우리 쇄파 처리에서 얻을 수 있는지 확인) → k_s = (D/ρ)^{2/3}, 바닥으로 exp 감쇠 (L_mix ≈ h 근사는 가정).

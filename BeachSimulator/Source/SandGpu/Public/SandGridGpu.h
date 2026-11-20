@@ -48,7 +48,8 @@ struct FSandGridGpuInit
 	bool  bSus = false;             // T4b 부유사 (papers D-M3-25)
 	float SedD90 = 3e-4f;           // m — XBeach 예제 값 (근거 약함)
 	float SusTsfac = 0.1f, SusTsmin = 0.5f, SusCmax = 0.1f;   // XBeach 기본
-	bool  bSedClosed = false;       // 바다 경계 모래 플럭스 0 (시험용)
+	bool  bSedClosed = false;
+	bool  bSedKb = false;           // 쇄파 난류 k_b 를 모래 수송에 (papers D-M6-3)       // 바다 경계 모래 플럭스 0 (시험용)
 	float SedPhaseDeg = 0.f;        // Nielsen 전단 위상 앞섬 φτ (도, 0 = 끔 · Nielsen 2006 은 51) — papers D-M6-1
 	float SedOmega = 0.f;
 	float SedAccTauW = 0.1f;        // 가속도 저역 통과 τ·ω_p (임의)

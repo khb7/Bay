@@ -64,6 +64,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER(float, AvalDry)
 	SHADER_PARAMETER(float, AvalWet)
 	SHADER_PARAMETER(uint32, bSedClosed)
+	SHADER_PARAMETER(float, SedKbOn)
 	SHADER_PARAMETER(float, SedPhiCos)
 	SHADER_PARAMETER(float, SedPhiSinW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FVector4f>, SedVPrevRW)
@@ -603,7 +604,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 				B.SusWs = 1e-6f / P.SedD50 * (FMath::Sqrt(10.36f * 10.36f + 1.049f * Ds * Ds * Ds) - 10.36f);
 			}
 			B.bMorph = P.bMorph ? 1u : 0u; B.SedS = P.SedS; B.SedD = P.SedD50; B.SedPor = P.SedPor; B.Morfac = P.Morfac; B.AvalDry = P.AvalDry; B.AvalWet = P.AvalWet;
-			B.bSedClosed = P.bSedClosed ? 1u : 0u;
+			B.bSedClosed = P.bSedClosed ? 1u : 0u; B.SedKbOn = P.bSedKb ? 1.f : 0.f;
 			{ const float Ph = FMath::DegreesToRadians(P.SedPhaseDeg); B.SedPhiCos = FMath::Cos(Ph); B.SedPhiSinW = P.SedOmega > 0.f ? FMath::Sin(Ph) / P.SedOmega : 0.f; B.SedAccTau = P.SedOmega > 0.f ? P.SedAccTauW / P.SedOmega : 0.f; B.SedAccHMin = P.SedAccHMin; }
 			{
 				// θc — Soulsby & Whitehouse (1997): 0.30/(1 + 1.2D*) + 0.055[1 − exp(−0.020D*)], D* = (g(s−1)/ν²)^⅓·D (ν = 1e-6)
@@ -785,12 +786,12 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 					// T4a 모래 — 서브스텝 끝 U0 에서 (약결합, m3-plan T4)
 					FRDGBufferRef Sq = GraphBuilder.RegisterExternalBuffer(S->SedQ), Db = GraphBuilder.RegisterExternalBuffer(S->SedDB), Bs = GraphBuilder.RegisterExternalBuffer(S->BSort);
 					const FIntVector GK(FMath::DivideAndRoundUp(P.NX + 1, 8), FMath::DivideAndRoundUp(P.NY + 1, 8), 1);
-					FSandGridParams X = B; X.URO = GraphBuilder.CreateSRV(U0); X.SedQRW = GraphBuilder.CreateUAV(Sq); X.TimeRO = GraphBuilder.CreateSRV(Tm); X.SedVPrevRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SedVPrev));
+					FSandGridParams X = B; X.URO = GraphBuilder.CreateSRV(U0); X.SedQRW = GraphBuilder.CreateUAV(Sq); X.TimeRO = GraphBuilder.CreateSRV(Tm); X.SedVPrevRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SedVPrev)); X.NuRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Nu));
 					AddGridPass<FSandGridSedQCS>(GraphBuilder, RDG_EVENT_NAME("SandGridSedQ"), ShaderMap, X, GC);
 					FRDGBufferRef Se = GraphBuilder.RegisterExternalBuffer(S->SusE);
 					if (P.bSus)
 					{
-						FSandGridParams Su = B; Su.URO = GraphBuilder.CreateSRV(U0); Su.TimeRO = GraphBuilder.CreateSRV(Tm); Su.SusCRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->SusC)); Su.SusCRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SusC2)); Su.SusERW = GraphBuilder.CreateUAV(Se);
+						FSandGridParams Su = B; Su.URO = GraphBuilder.CreateSRV(U0); Su.TimeRO = GraphBuilder.CreateSRV(Tm); Su.SusCRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->SusC)); Su.SusCRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SusC2)); Su.SusERW = GraphBuilder.CreateUAV(Se); Su.NuRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Nu));
 						AddGridPass<FSandGridSusCS>(GraphBuilder, RDG_EVENT_NAME("SandGridSus"), ShaderMap, Su, GC);
 						Swap(S->SusC, S->SusC2);
 					}
