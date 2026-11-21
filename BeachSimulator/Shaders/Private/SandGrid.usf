@@ -729,7 +729,8 @@ uint bSedDiag;
 RWStructuredBuffer<float4> SedDiag0RW;
 RWStructuredBuffer<float4> SedDiag1RW;
 RWStructuredBuffer<float4> SedDiag2RW;
-RWStructuredBuffer<float4> SedDiag3RW;   // 물 수지 (GwApplyCS): ∫침투 m · ∫침출 m (지표로 나옴) · ∫(지표 − 지하수면) dt · ∫dt   // (최소 u_x = 가장 센 오름, 최대 u_x = 가장 센 내림, ∫h dt 오름, ∫h dt 내림)
+RWStructuredBuffer<float4> SedDiag3RW;
+RWStructuredBuffer<float4> SedDiag4RW;   // 현장 비교 젖은 시간 (Hughes & Baldock 2004 센서 높이): h > 1 cm 오름 · 내림 · h > 2 cm 오름 · 내림   // 물 수지 (GwApplyCS): ∫침투 m · ∫침출 m (지표로 나옴) · ∫(지표 − 지하수면) dt · ∫dt   // (최소 u_x = 가장 센 오름, 최대 u_x = 가장 센 내림, ∫h dt 오름, ∫h dt 내림)
 static const float GW_EPS = 1e-4f;
 
 void GwHead(uint i, uint j, out float H, out float Hg)
@@ -1009,6 +1010,7 @@ void SedQCS(uint3 Tid : SV_DispatchThreadID)
 			D0.x += max(Q.x, 0.f) * Dt; D0.y += min(Q.x, 0.f) * Dt;
 			if (V.x < 0.f) { D1.x += Kr * Dt; D1.z += Dt; } else { D1.y += Kr * Dt; D1.w += Dt; }
 			SedDiag0RW[Idx(i, j)] = D0; SedDiag1RW[Idx(i, j)] = D1;
+			float4 D4 = SedDiag4RW[Idx(i, j)]; if (h > 0.01f) { if (V.x < 0.f) { D4.x += Dt; } else { D4.y += Dt; } } if (h > 0.02f) { if (V.x < 0.f) { D4.z += Dt; } else { D4.w += Dt; } } SedDiag4RW[Idx(i, j)] = D4;
 			float4 D2 = SedDiag2RW[Idx(i, j)]; D2.x = min(D2.x, V.x); D2.y = max(D2.y, V.x); if (V.x < 0.f) { D2.z += h * Dt; } else { D2.w += h * Dt; } SedDiag2RW[Idx(i, j)] = D2;
 		}
 	}
