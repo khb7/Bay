@@ -812,6 +812,58 @@ void GwApplyCS(uint3 Tid : SV_DispatchThreadID)
 	GwRW[k] = G;
 }
 
+// TKE 쇄파 와점성 (papers D-M7-3, Kazolea & Ricchiuto 2018 식 15–20): k 1 방정식, 판정 영역 (정적 ν > 0, BreakCS · RollerCS) 에서 생성.
+// k_t + u·∇k = σ ν_t ∇²k + B ℓ²/√C_D |u_z^s|³ − C_D k^{3/2}/ℓ,  ν_t = C_ν √k ℓ,  ℓ = κ H,  C_ν = 0.55, C_D = C_ν³,  u_z^s = −η ∇(∇·u) − ∇(∇·(d u))
+uint  bTke;
+float TkeKappa;
+float TkeSigma;
+StructuredBuffer<float>   TkeRO;
+RWStructuredBuffer<float> TkeRW;
+float2 TkeVel(int i, int j, out float D)
+{
+	i = clamp(i, 0, (int)NX - 1); j = bPeriodicY != 0u ? WJ(j) : clamp(j, 0, (int)NY - 1);
+	const float4 U = URO[Idx((uint)i, (uint)j)];
+	const float B = BCell((uint)i, (uint)j), h = U.x - B;
+	D = max(SeaLevel - B, 0.f);
+	return h > HDry ? U.yz / h : 0.f;
+}
+float TkeK(int i, int j) { i = clamp(i, 0, (int)NX - 1); j = bPeriodicY != 0u ? WJ(j) : clamp(j, 0, (int)NY - 1); return TkeRO[Idx((uint)i, (uint)j)]; }
+[numthreads(8, 8, 1)]
+void TkeCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const int i = (int)Tid.x, j = (int)Tid.y;
+	if (i >= (int)NX || j >= (int)NY) { return; }
+	const uint k = Idx((uint)i, (uint)j);
+	const float4 U = URO[k];
+	const float B = BCell((uint)i, (uint)j), H = U.x - B;
+	if (H <= HDry) { TkeRW[k] = 0.f; NuRW[k] = 0.f; return; }
+	const float Dt = TimeRO[0], Cnu = 0.55f, Cd = Cnu * Cnu * Cnu, L = TkeKappa * H, Eta = U.x - SeaLevel;
+	// ∇(∇·v) — v = u 와 d u, 3×3 중심 차분
+	float d00, dp0, dm0, d0p, d0m, dpp, dpm, dmp, dmm;
+	const float2 u00 = TkeVel(i, j, d00), up0 = TkeVel(i + 1, j, dp0), um0 = TkeVel(i - 1, j, dm0), u0p = TkeVel(i, j + 1, d0p), u0m = TkeVel(i, j - 1, d0m);
+	const float2 upp = TkeVel(i + 1, j + 1, dpp), upm = TkeVel(i + 1, j - 1, dpm), ump = TkeVel(i - 1, j + 1, dmp), umm = TkeVel(i - 1, j - 1, dmm);
+	const float ix2 = 1.f / (Dx * Dx), iy2 = 1.f / (Dy * Dy), ixy = 1.f / (4.f * Dx * Dy);
+	const float2 Gu = float2((up0.x - 2.f * u00.x + um0.x) * ix2 + (upp.y - upm.y - ump.y + umm.y) * ixy,
+	                         (u0p.y - 2.f * u00.y + u0m.y) * iy2 + (upp.x - upm.x - ump.x + umm.x) * ixy);
+	const float2 Gd = float2((dp0 * up0.x - 2.f * d00 * u00.x + dm0 * um0.x) * ix2 + (dpp * upp.y - dpm * upm.y - dmp * ump.y + dmm * umm.y) * ixy,
+	                         (d0p * u0p.y - 2.f * d00 * u00.y + d0m * u0m.y) * iy2 + (dpp * upp.x - dpm * upm.x - dmp * ump.x + dmm * umm.x) * ixy);
+	const float2 Uz = -Eta * Gu - Gd;
+	const float Bflag = NuRW[k] > 0.f ? 1.f : 0.f;   // BreakCS · RollerCS 가 방금 쓴 정적 ν > 0 = 판정 영역
+	const float Uzm = length(Uz);
+	const float P = Bflag * L * L * rsqrt(Cd) * Uzm * Uzm * Uzm;
+	const float k0 = TkeRO[k];
+	const float kxp = TkeK(i + 1, j), kxm = TkeK(i - 1, j), kyp = TkeK(i, j + 1), kym = TkeK(i, j - 1);
+	const float Adv = (u00.x > 0.f ? (k0 - kxm) / Dx : (kxp - k0) / Dx) * u00.x + (u00.y > 0.f ? (k0 - kym) / Dy : (kyp - k0) / Dy) * u00.y;   // 풍상
+	const float Nut0 = Cnu * sqrt(max(k0, 0.f)) * L;
+	const float Dif = TkeSigma * Nut0 * ((kxp - 2.f * k0 + kxm) * ix2 + (kyp - 2.f * k0 + kym) * iy2);
+	float kn = max(k0 + Dt * (Dif - Adv + P), 0.f);
+	kn = kn / (1.f + Dt * Cd * sqrt(kn) / max(L, 1e-4f));   // 소멸 반암시적
+	if (!isfinite(kn)) { kn = 0.f; }
+	kn = min(kn, 10.f * Gravity * H);   // 안전 상한 (√k ≤ ~3√(gH))
+	TkeRW[k] = kn;
+	NuRW[k] = Cnu * sqrt(kn) * L;
+}
+
 // Kennedy 와점성 확산 (papers D-M3-19 · m3-plan c9): ∂P/∂t = ∂x(ν ∂x P) + ∂y(ν ∂y P) (FUNWAVE-TVD 식 (1)(2), 교차 미분 없음).
 // 5 cm 칸에선 명시적 안정 한계 (Δt ≤ Δx²/4ν ~ 0.6 ms) 가 Δt 보다 작다 → 줄마다 암시적 (후진 오일러, Thomas). x 줄 → y 줄 (Lie 분리).
 // 면 ν = 두 칸 평균 (마른 칸은 ν = 0). 줄 끝은 유속 기울기 0.

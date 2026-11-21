@@ -25,7 +25,9 @@ struct FSandGridGpuInit
 	float BreakStop = 0.3f;         // 쇄파 종료 ε — 켜진 칸은 ε < 이 값까지 NSW 유지 (Tonelli & Petti, papers D-M3-17). 0 이면 순간 판정
 	float BreakSlope = 0.f;         // BreakMode 2 기울기 조건 tan φ_c (Kazolea & Ricchiuto 2018: φ_c 30° → 0.577). 0 이면 끔
 	float EddyDelta = 1.2f;
-	bool  bBreakRoller = false;     // 쇄파 칸 묶음 → roller 길이로 넓힘 (papers D-M3-22)
+	bool  bBreakRoller = false;
+	bool  bTke = false;             // TKE 쇄파 와점성 (Kazolea & Ricchiuto 2018, papers D-M7-3) — 분산 격자에서만
+	float TkeKappa = 0.8f, TkeSigma = 0.4f;   // Hansen & Svendsen 평면 해변 · Nwogu 값     // 쇄파 칸 묶음 → roller 길이로 넓힘 (papers D-M3-22)
 	float BreakTbrk = 12.f;         // BreakMode 3 (FUNWAVE 나이 · 번짐 와점성) 쇄파 지속 T_brk (s)         // BreakMode 2 Kennedy 와점성 δ_b (Kennedy et al. 2000 · FUNWAVE-TVD)
 	int32 BreakMode = 1;            // 1: 시작 (∂η/∂t)/√(gh) > BreakRatio (SWASH · Kazolea, D-M3-18) · 0: |η|/h (Tonelli & Petti)
 	float BreakRatio = 0.8f;        // 쇄파 전환 |η|/h (Tonelli & Petti 2009). 0 이면 끔

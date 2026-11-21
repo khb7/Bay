@@ -141,6 +141,8 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	if (FParse::Param(Cmd, TEXT("breakfw"))) { G.BreakMode = 3; G.BreakRatio = 0.65f; G.BreakStop = 0.15f; G.BreakTbrk = (float)SwellTp; }
 	if (FParse::Param(Cmd, TEXT("breakeps"))) { G.BreakMode = 0; G.BreakRatio = 0.8f; G.BreakStop = 0.3f; }
 	if (FParse::Param(Cmd, TEXT("breakdedt"))) { G.BreakMode = 1; G.BreakRatio = 0.6f; G.BreakStop = 0.3f; }
+	// -tke (papers D-M7-3): Kazolea & Ricchiuto 2018 TKE 와점성 — Hansen & Svendsen 평면 해변 값 γ 0.5 · κ 0.8 · σ 0.4, 영역 = roller 넓힘 + Fr 종료
+	if (FParse::Param(Cmd, TEXT("tke"))) { G.bTke = true; G.BreakRatio = 0.5f; G.bBreakRoller = true; FParse::Value(Cmd, TEXT("tkekappa="), G.TkeKappa); FParse::Value(Cmd, TEXT("tkesigma="), G.TkeSigma); }
 	FParse::Value(Cmd, TEXT("breakratio="), G.BreakRatio);
 	FParse::Value(Cmd, TEXT("eddydelta="), G.EddyDelta);
 	FParse::Value(Cmd, TEXT("breaktbrk="), G.BreakTbrk);
@@ -191,7 +193,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 		const int32 NXo = FMath::CeilToInt(XEnd / NestDx), NYo = FMath::Max(8, FMath::RoundToInt(Ly / NestDx));
 		const double Dyo = Ly / NYo;
 		FSandGridGpuInit& O = Out.GO;
-		O.NX = NXo; O.NY = NYo; O.Dx = (float)NestDx; O.Dy = (float)Dyo; O.Manning = Manning; O.Ks = G.Ks; O.BreakStop = G.BreakStop; O.BreakMode = G.BreakMode; O.BreakRatio = G.BreakRatio; O.BreakSlope = G.BreakSlope; O.EddyDelta = G.EddyDelta; O.BreakTbrk = G.BreakTbrk; O.bBreakRoller = G.bBreakRoller;
+		O.NX = NXo; O.NY = NYo; O.Dx = (float)NestDx; O.Dy = (float)Dyo; O.Manning = Manning; O.Ks = G.Ks; O.BreakStop = G.BreakStop; O.BreakMode = G.BreakMode; O.BreakRatio = G.BreakRatio; O.BreakSlope = G.BreakSlope; O.EddyDelta = G.EddyDelta; O.BreakTbrk = G.BreakTbrk; O.bBreakRoller = G.bBreakRoller; O.bTke = G.bTke; O.TkeKappa = G.TkeKappa; O.TkeSigma = G.TkeSigma;
 		O.bOpenEast = true; O.bPeriodicY = true; O.bDispersive = true; O.bBoundIg = !FParse::Param(Cmd, TEXT("igoff"));
 		O.BCorner.SetNum((NXo + 1) * (NYo + 1));
 		for (int32 j = 0; j <= NYo; ++j)
