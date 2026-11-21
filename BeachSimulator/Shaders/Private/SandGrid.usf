@@ -941,6 +941,8 @@ StructuredBuffer<float>    SusERO;   // 이번 서브스텝 순 침식 (m)
 RWStructuredBuffer<float>  SusERW;
 
 float SedKbOn;
+float SedCfUp;          // > 0: 소류 마찰 c_f (τ = ρ c_f u²) 를 오름 / 내림 상수로 — Conley & Griffin 2004 · Barnes 2009 (papers D-M6-11), -cfasym
+float SedCfBack;
 uint  bVrBed;           // van Rooijen 2012 소류사 (식 4–9): q = 12 max(θ'−θcr,0) u* D50 · u* = √(½f_2.5)·u_eff · 경사 보정 식 9 (papers D-M6-2/6)
 float VrF25;            // f_2.5 Swart (식 7), CPU 계산           // 1: 쇄파 난류 k_b 를 모래에 (papers D-M6-3, -kb)
 // 바닥 난류 k_b (m²/s²): 와점성 소산 ε = ν|∇u|² → D/ρ = hε → k_s = (D/ρ)^⅔ (XBeach 식 33, Battjes 1975) → 바닥 k_s/(e^{h/L}−1), L = h 가정 → ×1/(e−1)
@@ -1002,7 +1004,8 @@ void SedQCS(uint3 Tid : SV_DispatchThreadID)
 		}
 		else
 		{
-		const float Th = (CfAt(i, h) * Se * Se + Kb) / Rg;   // van Rooijen 2012 식 5 θ' = (u*² + k_b)/(ΔgD)
+		const float CfS = SedCfUp > 0.f ? (V.x < 0.f ? SedCfUp : SedCfBack) : CfAt(i, h);   // x− = 육지쪽 = 오름
+		const float Th = (CfS * Se * Se + Kb) / Rg;   // van Rooijen 2012 식 5 θ' = (u*² + k_b)/(ΔgD)
 		if (Th > SedThc && (Se > 0.f || Kb > 0.f)) { Q = Se > 0.f ? 8.f * pow(Th - SedThc, 1.5f) * sqrt(Rg * SedD * SedD) * Ve / Se : 0.f; }
 		}
 		SedVPrevRW[Idx(i, j)] = float4(V, Acc);

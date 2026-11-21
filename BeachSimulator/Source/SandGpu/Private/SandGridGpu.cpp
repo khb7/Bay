@@ -65,6 +65,8 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER(float, AvalWet)
 	SHADER_PARAMETER(uint32, bSedClosed)
 	SHADER_PARAMETER(float, SedKbOn)
+	SHADER_PARAMETER(float, SedCfUp)
+	SHADER_PARAMETER(float, SedCfBack)
 	SHADER_PARAMETER(uint32, bVrBed)
 	SHADER_PARAMETER(float, VrF25)
 	SHADER_PARAMETER(uint32, bSedDiag)
@@ -615,7 +617,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 				B.SusWs = 1e-6f / P.SedD50 * (FMath::Sqrt(10.36f * 10.36f + 1.049f * Ds * Ds * Ds) - 10.36f);
 			}
 			B.bMorph = P.bMorph ? 1u : 0u; B.SedS = P.SedS; B.SedD = P.SedD50; B.SedPor = P.SedPor; B.Morfac = P.Morfac; B.AvalDry = P.AvalDry; B.AvalWet = P.AvalWet;
-			B.bSedClosed = P.bSedClosed ? 1u : 0u; B.SedKbOn = P.bSedKb ? 1.f : 0.f; B.bSedDiag = P.bSedDiag ? 1u : 0u; B.bVrBed = P.VrF25 > 0.f ? 1u : 0u; B.VrF25 = P.VrF25;
+			B.bSedClosed = P.bSedClosed ? 1u : 0u; B.SedKbOn = P.bSedKb ? 1.f : 0.f; B.bSedDiag = P.bSedDiag ? 1u : 0u; B.bVrBed = P.VrF25 > 0.f ? 1u : 0u; B.SedCfUp = P.SedCfUp; B.SedCfBack = P.SedCfBack; B.VrF25 = P.VrF25;
 			{ const float Ph = FMath::DegreesToRadians(P.SedPhaseDeg); B.SedPhiCos = FMath::Cos(Ph); B.SedPhiSinW = P.SedOmega > 0.f ? FMath::Sin(Ph) / P.SedOmega : 0.f; B.SedAccTau = P.SedOmega > 0.f ? P.SedAccTauW / P.SedOmega : 0.f; B.SedAccHMin = P.SedAccHMin; }
 			{
 				// θc — Soulsby & Whitehouse (1997): 0.30/(1 + 1.2D*) + 0.055[1 − exp(−0.020D*)], D* = (g(s−1)/ν²)^⅓·D (ν = 1e-6)

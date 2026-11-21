@@ -231,6 +231,8 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	G.bSedClosed = FParse::Param(Cmd, TEXT("sedclosed"));
 	G.bSedKb = FParse::Param(Cmd, TEXT("kb"));
 	G.bSedDiag = FParse::Param(Cmd, TEXT("seddiag"));
+	// -cfasym (papers D-M6-11): 소류 c_f 를 오름 / 내림 상수로 — 오름 f_c 0.0037 (Conley & Griffin 2004 현장 평균, τ = ½ρf_c u²) · 내림 = 오름 / 2 (Barnes 2009 위상 평균 비). 우리 정의 c_f = f_c / 2
+	if (FParse::Param(Cmd, TEXT("cfasym"))) { G.SedCfUp = 0.5f * 0.0037f; G.SedCfBack = 0.5f * G.SedCfUp; float R = 0.f; if (FParse::Value(Cmd, TEXT("cfratio="), R) && R > 0.f) { G.SedCfBack = G.SedCfUp / R; } }
 	// -vrbed: van Rooijen et al. (2012) 소류사 통째 (papers D-M6-2/6) — φ 28° · T_a 0.5 s 도 함께 (-nielsenphi= 로 바꿈). f_2.5 = exp(5.5 (2.5 D50/S)^0.2 − 6.3) (Swart 1974, 식 7),
 	// S = swash 수평 이동 거리 = Stockdon (2006) 수직 swash 높이 / 경사 [Stockdon 식 기억 — 미확인]: S_inc = 0.75 β √(H0 L0) · S_ig = 0.06 √(H0 L0)
 	if (FParse::Param(Cmd, TEXT("vrbed")))

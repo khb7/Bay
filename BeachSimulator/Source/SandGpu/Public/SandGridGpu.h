@@ -51,6 +51,7 @@ struct FSandGridGpuInit
 	bool  bSedClosed = false;
 	bool  bSedKb = false;
 	bool  bSedDiag = false;
+	float SedCfUp = 0.f, SedCfBack = 0.f;   // > 0: 소류 c_f 오름 / 내림 상수 (τ = ρ c_f u²)
 	float VrF25 = 0.f;              // > 0: van Rooijen 2012 소류사 (식 4–9), f_2.5 Swart         // 수송 분해 진단 누적 (-seddiag)           // 쇄파 난류 k_b 를 모래 수송에 (papers D-M6-3)       // 바다 경계 모래 플럭스 0 (시험용)
 	float SedPhaseDeg = 0.f;        // Nielsen 전단 위상 앞섬 φτ (도, 0 = 끔 · Nielsen 2006 은 51) — papers D-M6-1
 	float SedOmega = 0.f;
