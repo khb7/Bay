@@ -4293,3 +4293,11 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - van Rooijen 2012 식 12 (Bagnold 형) — 추출 깨짐, **β_d k_b^{3/2} + c_f|u|³ 꼴 추정 [미확인]**, β_d 0.01.
 - Reniers et al. (2013, 난류 균형) · Roelvink & Stive (1989) 원문 미열람.
 - **우리에게**: 우리 식 (SusCS) 은 XBeach 식 105 의 u_rms 없는 꼴 → 식 92 처럼 **속도² 에 1.45 k_b 를 더하는 것** 이 가장 작은 변경. k_b 원천은 bore 의 국소 에너지 소산 D (우리 쇄파 처리에서 얻을 수 있는지 확인) → k_s = (D/ρ)^{2/3}, 바닥으로 exp 감쇠 (L_mix ≈ h 근사는 가정).
+
+### D-M6-4. XBeach 기본값 · Truc Vert 2008 기준 (2026-11-21)
+- **XBeach input_parameters** (xbeach.readthedocs.io/en/latest/input_parameters.html) ✓ 표: eps 0.005 m (젖음 판정) · hmin 0 (Stokes drift 문턱, 수송 문턱 아님) · hswitch 0.1 · dryslp 1.0 · wetslp **0.15** (매뉴얼 본문 0.3 과 불일치) · facsl 1.6 · Tsmin 0.5 · cmax 0.1 · turb wave_averaged · lwt 0 · betad 1.0 · turbadv none · maxbrsteep **0.4** (본문 예 0.6) · morfac 1 · morstart 0.
+  - **얇은 물 전용 소류사 문턱 없음** — eps 만. → 우리 2 cm 는 XBeach 에 대응값 없음 (eps 5 mm 가 가장 가까움).
+  - **바다 경계 모래: 모든 경계 Neumann (경계 수직 기울기 0)** ✓ 매뉴얼 본문 — 우리 "열림" (#37) 이 XBeach 와 같다. swash 에 morfac 경고 없음 · nonh 사질 지형은 "extensively validated 아님".
+- **Truc Vert 2008** (van Rooijen 2012 ✓ 본문): HT5 너울 Hs 0.82 m · Tp 11.3 s → swash **약 +5 cm/조석, 육지쪽** · HT6 풍파 Hs 1.5 m · Tp 4.7 s → **약 −15 cm, 바다쪽**. D50 0.3 mm (현장 0.2–0.7). 경사 ~1:15 △ (Incelli 2015 요약만).
+- **Blenkinsopp et al. (2011)** Coast. Eng. 58(1) 28–44 ✓ 초록: swash 이벤트 순수송 대부분 < ±50 kg/m, 평균 O(±1 kg/m), 드물게 수백 kg/m · 육지/바다 이벤트 수 거의 같음 · 큰 수송은 아래 swash.
+- **우리에게**: E1 너울 조건 (Hs 대략 0.8–1, Tp 12) 은 HT5 와 비슷 → 목표 = 한 조석 (~6 h) swash **+수 cm**. 우리 900 s × morfac 10 = 2.5 h 상당에서 −1 m²/m (최저 −22 cm) 는 방향·크기 모두 어긋남.
