@@ -230,6 +230,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	// A ① (papers D-M6-1): -nielsen 이면 MPM 전단에 위상 앞섬 φτ 51° (Nielsen 2006) · ω_p = 2π/T_p. -nielsenphi= 로 각 바꿈
 	G.bSedClosed = FParse::Param(Cmd, TEXT("sedclosed"));
 	G.bSedKb = FParse::Param(Cmd, TEXT("kb"));
+	G.bSedDiag = FParse::Param(Cmd, TEXT("seddiag"));
 	if (FParse::Param(Cmd, TEXT("nielsen"))) { G.SedPhaseDeg = 51.f; FParse::Value(Cmd, TEXT("nielsenphi="), G.SedPhaseDeg); G.SedOmega = (float)(2.0 * PI / Out.Tp); FParse::Value(Cmd, TEXT("nielsenh="), G.SedAccHMin); FParse::Value(Cmd, TEXT("nielsentau="), G.SedAccTauW); float Ta = 0.f; if (FParse::Value(Cmd, TEXT("nielsenta="), Ta) && Ta > 0.f) { G.SedAccTauW = 0.5f * Ta * G.SedOmega; } }   // -nielsenta= : 이동평균 T_a (s, van Rooijen 2012 0.5) ≈ 지수 τ = T_a/2 (같은 지연)
 	const FString NestInfo = Out.bNest ? FString::Printf(TEXT(" · nesting 바깥 %d×%d (칸 %.0fcm, %.0fm, 경계 수심 %.2fm, Hs %.2fm, 묶인 IG %s)"),
 		Out.GO.NX, Out.GO.NY, Out.GO.Dx * 100, Out.GO.NX * Out.GO.Dx, Out.GO.BoundaryDepth, DeepH0, Out.GO.bBoundIg ? TEXT("켬") : TEXT("끔")) : FString();
@@ -1142,6 +1143,20 @@ int32 RunWaveMeasure(const FString& Params)
 			Bf += FString::Printf(TEXT("%.3f,%.5f,%.5f,%.6f,%.6f,%.6f\n"), i * Sc.Dx, M0 / NY, M1 / NY, (M1 - M0) / NY, Mn, Mx);
 		}
 		FFileHelper::SaveStringToFile(Bf, *Path.Replace(TEXT(".csv"), TEXT("_bed.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		if (Sc.G.bSedDiag)
+		{
+			// 수송 분해 (m3-log #46): y 평균 시간 적분 — x+ = 바다쪽. 소류 · 부유 m² (= ∫q dt), k_b 시간 평균 (흐름 방향별), 젖은 시간 s
+			TArray<FVector4f> D0, D1; Grid.DownloadSedDiag(D0, D1);
+			FString Df = TEXT("x,b0,bed_off,bed_on,sus_off,sus_on,kb_on,kb_off,t_on,t_off\n");
+			for (int32 i = 0; i < NX; ++i)
+			{
+				double A[8] = { 0 };
+				for (int32 j = 0; j < NY; ++j) { const FVector4f& a = D0[j * NX + i]; const FVector4f& b = D1[j * NX + i]; A[0] += a.X; A[1] += a.Y; A[2] += a.Z; A[3] += a.W; A[4] += b.X; A[5] += b.Y; A[6] += b.Z; A[7] += b.W; }
+				for (double& v : A) { v /= NY; }
+				Df += FString::Printf(TEXT("%.3f,%.4f,%.6e,%.6e,%.6e,%.6e,%.6e,%.6e,%.2f,%.2f\n"), (i + 0.5) * Sc.Dx, Sc.BCellV[i], A[0], A[1], A[2], A[3], A[6] > 0 ? A[4] / A[6] : 0.0, A[7] > 0 ? A[5] / A[7] : 0.0, A[6], A[7]);
+			}
+			FFileHelper::SaveStringToFile(Df, *Path.Replace(TEXT(".csv"), TEXT("_flux.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		}
 		if (Sc.G.bSus) { TArray<float> Su; Grid.DownloadSus(Su); double Sm = 0, Mx = 0; for (float V : Su) { Sm += V; Mx = FMath::Max<double>(Mx, V); } UE_LOG(LogSandWaves, Display, TEXT("T4b 부유사: 물속 ΣhC %.3e m·칸 · 최대 hC %.3e m"), Sm, Mx); }
 		UE_LOG(LogSandWaves, Display, TEXT("T4 모래: Σb 변화 %.3e m·칸 (|Δb| 합 %.3e, 비 %.2e) · 평균 |Δb| %.2f mm"), S1 - S0, Abs, Abs > 0 ? (S1 - S0) / Abs : 0.0, 1000.0 * Abs / ((NX + 1) * NY));
 	}

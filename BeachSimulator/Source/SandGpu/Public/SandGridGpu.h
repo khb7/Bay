@@ -49,7 +49,8 @@ struct FSandGridGpuInit
 	float SedD90 = 3e-4f;           // m — XBeach 예제 값 (근거 약함)
 	float SusTsfac = 0.1f, SusTsmin = 0.5f, SusCmax = 0.1f;   // XBeach 기본
 	bool  bSedClosed = false;
-	bool  bSedKb = false;           // 쇄파 난류 k_b 를 모래 수송에 (papers D-M6-3)       // 바다 경계 모래 플럭스 0 (시험용)
+	bool  bSedKb = false;
+	bool  bSedDiag = false;         // 수송 분해 진단 누적 (-seddiag)           // 쇄파 난류 k_b 를 모래 수송에 (papers D-M6-3)       // 바다 경계 모래 플럭스 0 (시험용)
 	float SedPhaseDeg = 0.f;        // Nielsen 전단 위상 앞섬 φτ (도, 0 = 끔 · Nielsen 2006 은 51) — papers D-M6-1
 	float SedOmega = 0.f;
 	float SedAccTauW = 0.1f;        // 가속도 저역 통과 τ·ω_p (임의)
@@ -87,6 +88,7 @@ public:
 	bool PollW(TArray<float>& OutW);
 	float LastSimTime() const;
 	void DownloadSus(TArray<float>& OutS) const;   // 칸 S = hC (m), 동기
+	void DownloadSedDiag(TArray<FVector4f>& Out0, TArray<FVector4f>& Out1) const;   // 칸 시간 적분 (SandGrid.usf SedDiag 주석)
 	void DownloadBed(TArray<float>& OutBCorner, bool bStruct = false) const;   // 꼭짓점 바닥 (NX+1)·(NY+1), 동기. 물이 보는 유효 바닥 b + b_struct · bStruct 면 b_struct (M4 T2)
 	void DownloadBreakDiag(TArray<FVector2f>& Out) const;
 	void ResetBreakDiag();   // 칸별 (최대 |∇η|, 최대 η_t/√(gH)) — 시작부터 누적 (진단)   // 쇄파 와점성 ν (진단, D-M3-20)
