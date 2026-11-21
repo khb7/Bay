@@ -264,15 +264,31 @@ bool SandMaterial::BuildWater(const FString& PackagePath, FString& OutMessage)
 	CellCm->ParameterName = TEXT("CellCm"); CellCm->DefaultValue = 5.f;
 	UMaterialExpressionCustom* Nrm = AddGridCustom(M, GridTex, CMOT_Float3, TEXT(
 		"float Wd, Ht; Tex.GetDimensions(Wd, Ht);\n"
-		"const float2 d = 1.0 / float2(Wd, Ht);\n"
+		"const float K = max(25.0 / Cell, 1.0); const float2 d = K / float2(Wd, Ht);\n"
 		"const float zx = Tex.SampleLevel(TexSampler, Uv + float2(d.x, 0), 0).x - Tex.SampleLevel(TexSampler, Uv - float2(d.x, 0), 0).x;\n"
 		"const float zy = Tex.SampleLevel(TexSampler, Uv + float2(0, d.y), 0).x - Tex.SampleLevel(TexSampler, Uv - float2(0, d.y), 0).x;\n"
-		"return normalize(float3(-zx * 100.0, -zy * 100.0, 2.0 * Cell));"), 300);
+		"return normalize(float3(-zx * 100.0, -zy * 100.0, 2.0 * Cell * K));"), 300);
 	Nrm->Inputs.SetNum(3);
 	Nrm->Inputs[2].InputName = TEXT("Cell"); Nrm->Inputs[2].Input.Connect(0, CellCm);
 	Ed->Normal.Connect(0, Nrm);
 	M->bTangentSpaceNormal = false;
-	ConnectGridWpo(M, GridTex, TEXT("const float Z = t.y > 0.003 ? max(t.x, t.z + 0.002) : t.z - 0.03;"), Ed->WorldPositionOffset);
+	// 앞면 표현 (m3-log #65, 시각 처리 — 계산 결과는 그대로): 높이를 해안 쪽 0.25 m 간격 5 탭 (폭 ~1 m) 으로 편다 — 실측 roller 기울기 0.2–0.3 (Haller & Catalán 재분석, D-M7-5) 에서 bore 0.2–0.3 m 의 앞면 폭 ~1 m. NSWE 충격파의 1–2 칸 수직 단은 모델 특성 (Tissier 2012)
+	UMaterialExpressionCustom* Wpo = AddGridCustom(M, GridTex, CMOT_Float3, TEXT(
+		"const float4 t = Tex.SampleLevel(TexSampler, Uv, 0);\n"
+		"float Wd, Ht; Tex.GetDimensions(Wd, Ht);\n"
+		"const float s = max(25.0 / Cell, 1.0) / Wd;\n"
+		"float Z = t.z - 0.03;\n"
+		"if (t.y > 0.003) {\n"
+		"  float sw = 0, sz = 0;\n"
+		"  [unroll] for (int k = -2; k <= 2; ++k) { const float4 q = Tex.SampleLevel(TexSampler, Uv + float2(k * s, 0), 0); const float w = (3 - abs(k)) * (q.y > 0.003 ? 1.0 : 0.0); sw += w; sz += w * q.x; }\n"
+		"  Z = max(sz / max(sw, 1e-3), t.z + 0.002); }\n"
+		"return float3(0, 0, Z * 100.0 + Ap.z - Wp.z);\n"
+		), 1000);
+	Wpo->Inputs.SetNum(5);
+	Wpo->Inputs[2].InputName = TEXT("Wp"); Wpo->Inputs[2].Input.Connect(0, AddExpr<UMaterialExpressionWorldPosition>(M, -1300, 1100));
+	Wpo->Inputs[3].InputName = TEXT("Ap"); Wpo->Inputs[3].Input.Connect(0, AddExpr<UMaterialExpressionActorPositionWS>(M, -1300, 1200));
+	Wpo->Inputs[4].InputName = TEXT("Cell"); Wpo->Inputs[4].Input.Connect(0, CellCm);
+	Ed->WorldPositionOffset.Connect(0, Wpo);
 	UMaterialExpressionConstant3Vector* Shallow = AddExpr<UMaterialExpressionConstant3Vector>(M, -500, -200);
 	Shallow->Constant = FLinearColor(0.20f, 0.26f, 0.22f);
 	UMaterialExpressionConstant3Vector* Deep = AddExpr<UMaterialExpressionConstant3Vector>(M, -500, -100);
@@ -297,7 +313,7 @@ bool SandMaterial::BuildWater(const FString& PackagePath, FString& OutMessage)
 		"  float h11 = frac(sin(dot(i0 + float2(1, 1), float2(127.1, 311.7))) * 43758.5);\n"
 		"  n += a * lerp(lerp(h00, h10, u.x), lerp(h01, h11, u.x), u.y); a *= 0.5; f *= 2.1; }\n"
 		"n /= 0.9375;\n"
-		"const float2 d = 1.0 / float2(Wd, Ht);" "const float gx = (Tex.SampleLevel(TexSampler, Uv + float2(d.x, 0), 0).x - Tex.SampleLevel(TexSampler, Uv - float2(d.x, 0), 0).x) / (0.02 * Cell);" "const float gy = (Tex.SampleLevel(TexSampler, Uv + float2(0, d.y), 0).x - Tex.SampleLevel(TexSampler, Uv - float2(0, d.y), 0).x) / (0.02 * Cell);" "const float Face = smoothstep(0.25, 0.5, length(float2(gx, gy)));" "return max(F * smoothstep(0.75 - 0.6 * F, 0.95 - 0.5 * F, n), Face);"), -400);
+		"const float K = max(25.0 / Cell, 1.0); const float2 d = K / float2(Wd, Ht);" "const float gx = (Tex.SampleLevel(TexSampler, Uv + float2(d.x, 0), 0).x - Tex.SampleLevel(TexSampler, Uv - float2(d.x, 0), 0).x) / (0.02 * Cell * K);" "const float gy = (Tex.SampleLevel(TexSampler, Uv + float2(0, d.y), 0).x - Tex.SampleLevel(TexSampler, Uv - float2(0, d.y), 0).x) / (0.02 * Cell * K);" "const float Face = smoothstep(0.25, 0.5, length(float2(gx, gy)));" "return max(F * smoothstep(0.75 - 0.6 * F, 0.95 - 0.5 * F, n), Face);"), -400);
 	Fm->Inputs.SetNum(4);
 	Fm->Inputs[2].InputName = TEXT("Cell"); Fm->Inputs[2].Input.Connect(0, CellCm);
 	UMaterialExpressionTime* TmE = AddExpr<UMaterialExpressionTime>(M, -1300, -460);
