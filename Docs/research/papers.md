@@ -4376,3 +4376,11 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - **Elgar & Guza (1985)** JFM 158:47–70 △ 초록: 현장 h 4 → 1 m 비쇄파 천수, Freilich & Guza (1984) Boussinesq 가 스펙트럼 · skewness 추세를 선형보다 잘 맞춤. 쪼개짐 · 파 개수 언급 없음 (원문 미확인).
 - 평면 해변 천수에서 마루가 2–3 개로 쪼개진다는 근거는 못 찾음. 쪼개짐 (free harmonic release) 은 bar 뒤 다시 깊어지는 구간 현상으로 알려짐 (Beji & Battjes 1993) [미확인 — 일반 지식]. MS92 가짜 2 차 마루의 직접 근거도 못 찾음.
 - **판정**: 쪼개짐은 **쇄파 시작이 너무 늦은 결과** 일 가능성이 높다 (h 1.8 m 까지 Hs/h 0.6–0.8 비쇄파). 확인할 원문: Elgar & Guza 1985 그림 · Flick, Guza & Inman 1981 · Madsen, Bingham & Liu 2002.
+
+### D-M7-5. 쇄파대 거품 · 마루 길이 (2026-11-22, wave-shape-investigation 렌더)
+- **Nguyen (2024, UW MS, Chickadel 지도)** ✓ 원문 (실물 규모 수조, H 1 m 고립파): 거품 면적 A = A_max exp(−t/τ) (Callaghan 2013 식 3.1). **쇄파 시작 0.3–0.4 s 안에 피복률 최대 0.8**, 0.6 이상 ~2 s 유지 · 대표 τ_decay 4.0 s · τ_foam 4.4 s · 다 사라지기 ~15 s · 위치별 평균 τ_foam 4.3–8.3 s. τ 는 에너지 소산에 비례 (Callaghan 2013 · Masnadi 2021 인용).
+- **Callaghan et al. (2012)** JGR △ (검색 요약): 개별 거품 τ 0.2–10.4 s, 면적 가중 유효 τ **1.4–4.8 s** · Stage A (활성) ≈ Stage B (잔류) 의 ~10 %.
+- **Haller & Catalán (2009)** 재분석 (Zhang et al., ICCE) ✓: roller 기울기 β 0.2–0.8 (쇄파점 최대, 안쪽 ~0.2). roller 길이 ≈ ?·H 수치 [미확인].
+- **Podgórski & Rychlik (2016)** ✓ 식 (3): 마루 따라 평균 반파장 E[L_y] = π√(λ00/λ02), λ02 = ∫∫k² sin²α S. 좁은 스펙트럼 · 작은 σθ 근사 (유도, 미확인) E[L_y] ≈ L_p/(2σθ) → 너울 12 s · 15° 심해 ~430 m, h 2 m ~100 m (굴절로 더 김) · 풍파 5 s · 40° ~28 m. → **12.8 m 폭에서 너울 마루가 곧은 건 사실적** (m3-log #61 확인).
+- CG △: Tessendorf (2002) Jacobian ≤ 0 → 거품 · Tessendorf, Reinhardt & Gao (2023) whitecap 불투명 텍스처.
+- **설계 결정 (거품)**: 칸별 거품량 F, 흐름 따라 반-라그랑지 이류, dF/dt = −F/τ (**τ 4 s**, Nguyen 대표값 · Callaghan 범위 안). 생성 = 활성 bore: ∂η/∂t > 0.6√(gh) (쇄파 시작 판정 문헌값 — SWASH HFA · Kazolea 2014, D-M3-18) 에서 F = max(F, 0.8) (Nguyen 최대 피복률).
