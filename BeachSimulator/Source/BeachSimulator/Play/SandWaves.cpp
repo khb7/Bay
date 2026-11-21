@@ -951,8 +951,61 @@ bool USandWavesSubsystem::Tick(float DeltaTime)
 // ------------------------------------------------------------------------------------------------
 // T3b 측정 — `-run=SpikeSweep -gridwaves -AllowCommandletRendering [장면 옵션] [-wavesecs=1500] [-wavetag=]`
 // 화면 없이 GPU 격자를 돌려 0.1 s 마다 CSV: 시각 · 해안선 4 줄 처오름 높이 · 경계 근처 η · u · 포락선 A² (m3-plan T3b, USGS DS 602 방식으로 분석)
+// swash 유체 검증 (papers D-M6-7): Kikkert et al. (2012) dam-break — 저수조 0.983 m · h_d 0.6 m · 앞 h0 0.062 m · 게이트 → toe 4.2 m · 1:10 · 물가 4.82 m.
+// `-gridwaves -dambreak [-dbdx=0.01] [-ks=] [-wavesecs=12] [-wavetag=]` → _db.csv (t, 선단 x, 측정 5 곳 h · u). x 는 물가에서 육지쪽 + (수평 — 1:10 경사 길이와 0.5 % 차)
+static int32 RunDamBreak(const FString& Params)
+{
+	float Dx = 0.01f; FParse::Value(*Params, TEXT("dbdx="), Dx);
+	const double Res = 0.983, Toe = 4.2, Shore = 4.82, SMax = Shore + 5.5, L = SMax + Res;
+	const int32 NX = FMath::CeilToInt(L / Dx), NY = 4;
+	FSandGridGpuInit G;
+	G.NX = NX; G.NY = NY; G.Dx = Dx; G.Dy = Dx; G.bPeriodicY = true; G.bOpenEast = false;
+	G.Ks = 3.f * 1.5f * 1.32e-3f; FParse::Value(*Params, TEXT("ks="), G.Ks);   // 우리 규칙 k_s = 3·D90 (D90 ≈ 1.5·d50, D-M3-15) · Kikkert sand d50 1.32 mm
+	auto BedAt = [&](double x) { const double s = SMax - x; return s > Toe ? (s - Toe) / 10.0 : 0.0; };   // s = 게이트에서 육지쪽 거리
+	G.BCorner.SetNum((NX + 1) * (NY + 1));
+	for (int32 j = 0; j <= NY; ++j) for (int32 i = 0; i <= NX; ++i) { G.BCorner[j * (NX + 1) + i] = (float)BedAt(i * Dx); }
+	G.W.SetNum(NX * NY); G.HU.Init(0.f, NX * NY); G.HV.Init(0.f, NX * NY);
+	for (int32 j = 0; j < NY; ++j) for (int32 i = 0; i < NX; ++i)
+	{
+		const double Bc[4] = { BedAt(i * Dx), BedAt((i + 1) * Dx), BedAt(i * Dx), BedAt((i + 1) * Dx) };
+		const double s = SMax - (i + 0.5) * Dx, Lev = s < 0.0 ? 0.6 : 0.062;
+		G.W[j * NX + i] = (float)(0.25 * (Bc[0] + Bc[1] + Bc[2] + Bc[3]) + FSandGridCpu::CellVolume(Bc, Lev));
+	}
+	FSandGridGpu Grid; Grid.Init(G);
+	float Secs = 12.f; FParse::Value(*Params, TEXT("wavesecs="), Secs);
+	FString Tag = TEXT("db"); FParse::Value(*Params, TEXT("wavetag="), Tag);
+	const double Gx[5] = { 0.072, 0.772, 1.567, 2.377, 3.177 };   // Kikkert 측정 위치 (물가에서 경사 따라)
+	int32 Gi[5]; for (int32 k = 0; k < 5; ++k) { Gi[k] = FMath::Clamp(FMath::FloorToInt((SMax - (Shore + Gx[k])) / Dx), 0, NX - 1); }
+	FString Csv = FString::Printf(TEXT("# Kikkert 2012 dam-break · dx %.3f · ks %.4f\nt,front"), Dx, G.Ks);
+	for (int32 k = 0; k < 5; ++k) { Csv += FString::Printf(TEXT(",h%d,u%d"), k, k); }
+	Csv += TEXT("\n");
+	TArray<float> W, HU, HV; float T = 0.f, NextRec = 0.f, Rmax = -1e9f, TRmax = 0.f;
+	while (T < Secs)
+	{
+		Grid.Advance(1.f / 240.f, 64);
+		Grid.Download(W, HU, HV, &T);
+		if (T + 1e-4f < NextRec) { continue; }
+		NextRec += 0.02f;
+		float Front = -1e9f;   // 선단: 육지쪽에서 처음 젖은 칸 (h > 1 mm)
+		for (int32 i = 0; i < NX; ++i) { const double b = 0.5 * (BedAt(i * Dx) + BedAt((i + 1) * Dx)); if (W[i] - b > 1e-3) { Front = (float)(SMax - (i + 0.5) * Dx - Shore); break; } }
+		if (Front > Rmax) { Rmax = Front; TRmax = T; }
+		Csv += FString::Printf(TEXT("%.3f,%.4f"), T, Front);
+		for (int32 k = 0; k < 5; ++k)
+		{
+			const int32 i = Gi[k]; const double b = 0.5 * (BedAt(i * Dx) + BedAt((i + 1) * Dx)), h = FMath::Max(0.0, W[i] - b);
+			Csv += FString::Printf(TEXT(",%.4f,%.4f"), h, h > 1e-3 ? -HU[i] / h : 0.0);   // u 육지쪽 + (격자 x 는 바다쪽 +)
+		}
+		Csv += TEXT("\n");
+	}
+	const FString Path = FPaths::ProjectSavedDir() / TEXT("MeshRuns") / FString::Printf(TEXT("db_%s.csv"), *Tag);
+	FFileHelper::SaveStringToFile(Csv, *Path, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	UE_LOG(LogSandWaves, Display, TEXT("dam-break: 최대 처오름 %.2f m (t %.2f s) — Kikkert 2012 sand 4.52 m · 5.5 s → %s"), Rmax, TRmax, *Path);
+	return 0;
+}
+
 int32 RunWaveMeasure(const FString& Params)
 {
+	if (FParse::Param(*Params, TEXT("dambreak"))) { return RunDamBreak(Params); }
 	FWaveScene Sc;
 	BuildWaveScene(*Params, Sc);
 	UE_LOG(LogSandWaves, Display, TEXT("%s"), *Sc.Info);
@@ -1156,14 +1209,17 @@ int32 RunWaveMeasure(const FString& Params)
 		if (Sc.G.bSedDiag)
 		{
 			// 수송 분해 (m3-log #46): y 평균 시간 적분 — x+ = 바다쪽. 소류 · 부유 m² (= ∫q dt), k_b 시간 평균 (흐름 방향별), 젖은 시간 s
-			TArray<FVector4f> D0, D1; Grid.DownloadSedDiag(D0, D1);
-			FString Df = TEXT("x,b0,bed_off,bed_on,sus_off,sus_on,kb_on,kb_off,t_on,t_off\n");
+			TArray<FVector4f> D0, D1, D2; Grid.DownloadSedDiag(D0, D1, &D2);
+			FString Df = TEXT("x,b0,bed_off,bed_on,sus_off,sus_on,kb_on,kb_off,t_on,t_off,umax_on,umax_off,h_on,h_off\n");
 			for (int32 i = 0; i < NX; ++i)
 			{
 				double A[8] = { 0 };
 				for (int32 j = 0; j < NY; ++j) { const FVector4f& a = D0[j * NX + i]; const FVector4f& b = D1[j * NX + i]; A[0] += a.X; A[1] += a.Y; A[2] += a.Z; A[3] += a.W; A[4] += b.X; A[5] += b.Y; A[6] += b.Z; A[7] += b.W; }
+				double Un = 0, Uf = 0, Hn = 0, Hf = 0;   // 최대 오름 (−) · 내림 (+) 속도 y 평균 · 흐름 방향별 평균 수심
+				for (int32 j = 0; j < NY; ++j) { const FVector4f& c = D2[j * NX + i]; Un += c.X; Uf += c.Y; Hn += c.Z; Hf += c.W; }
 				for (double& v : A) { v /= NY; }
-				Df += FString::Printf(TEXT("%.3f,%.4f,%.6e,%.6e,%.6e,%.6e,%.6e,%.6e,%.2f,%.2f\n"), (i + 0.5) * Sc.Dx, Sc.BCellV[i], A[0], A[1], A[2], A[3], A[6] > 0 ? A[4] / A[6] : 0.0, A[7] > 0 ? A[5] / A[7] : 0.0, A[6], A[7]);
+				Df += FString::Printf(TEXT("%.3f,%.4f,%.6e,%.6e,%.6e,%.6e,%.6e,%.6e,%.2f,%.2f,%.3f,%.3f,%.4f,%.4f\n"), (i + 0.5) * Sc.Dx, Sc.BCellV[i], A[0], A[1], A[2], A[3], A[6] > 0 ? A[4] / A[6] : 0.0, A[7] > 0 ? A[5] / A[7] : 0.0, A[6], A[7],
+					Un / NY, Uf / NY, A[6] > 0 ? Hn / NY / A[6] : 0.0, A[7] > 0 ? Hf / NY / A[7] : 0.0);
 			}
 			FFileHelper::SaveStringToFile(Df, *Path.Replace(TEXT(".csv"), TEXT("_flux.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 		}

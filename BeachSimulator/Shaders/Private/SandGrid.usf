@@ -948,6 +948,7 @@ float SedKb(int i, int j, float h) { return SedKbOn > 0.f ? SedKbRaw(i, j, h) : 
 uint bSedDiag;
 RWStructuredBuffer<float4> SedDiag0RW;
 RWStructuredBuffer<float4> SedDiag1RW;
+RWStructuredBuffer<float4> SedDiag2RW;   // (최소 u_x = 가장 센 오름, 최대 u_x = 가장 센 내림, ∫h dt 오름, ∫h dt 내림)
 
 [numthreads(8, 8, 1)]
 void SedQCS(uint3 Tid : SV_DispatchThreadID)
@@ -998,6 +999,7 @@ void SedQCS(uint3 Tid : SV_DispatchThreadID)
 			D0.x += max(Q.x, 0.f) * Dt; D0.y += min(Q.x, 0.f) * Dt;
 			if (V.x < 0.f) { D1.x += Kr * Dt; D1.z += Dt; } else { D1.y += Kr * Dt; D1.w += Dt; }
 			SedDiag0RW[Idx(i, j)] = D0; SedDiag1RW[Idx(i, j)] = D1;
+			float4 D2 = SedDiag2RW[Idx(i, j)]; D2.x = min(D2.x, V.x); D2.y = max(D2.y, V.x); if (V.x < 0.f) { D2.z += h * Dt; } else { D2.w += h * Dt; } SedDiag2RW[Idx(i, j)] = D2;
 		}
 	}
 	else { SedVPrevRW[Idx(i, j)] = float4(3.4e38f, 0.f, 0.f, 0.f); }   // 마름 표시 — 다음에 젖으면 가속 항 건너뜀
