@@ -4319,3 +4319,9 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - **Kikkert et al. (2013)**, Coast. Eng. 79:42–56 ✓ 본문: 같은 장치, bore 높이 ~0.25 m · 속도 ~2.0 m/s. **투수 gravel**: 처오름 3.0 m (불투수 4.0) · x 2.377 내림 최대 0.8 m/s 작음 · 내림 지속 거의 0. 투수 sand 1.3 mm: 처오름 4.3 m. → **침투가 내림물을 짧고 약하게**.
 - O'Donoghue et al. (2010) 원문 미확보 (구판 장치). Masselink & Hughes (1998) 초록: Bagnold 수송 계수 오름 ≈ 내림 × 2. Puleo & Holland (2001) c_f 오름 0.005–0.01 · 내림 0.01–0.03 [2차]. Hughes & Baldock (2004): 모델이 오름/내림 지속 비를 과대 예측 [미확인].
 - **우리에게**: 같은 조건 (1:10, h_d 0.6, h0 0.062, c_f 0.01) 을 안쪽 격자 단독으로 재현 → 처오름 4.5 m · 5.5 s · 반전 시각 · 위치별 오름 / 내림 최대 속도 비교. 공개 데이터셋 없음.
+
+### D-M6-8. Kikkert 2013 투수 해변 물성 (2026-11-22)
+- **Kikkert et al. (2013)** ✓ 본문: 해변 전체가 퇴적물 · 끝 게이트에서 10.8 m (구멍판) · **초기 지하수면 = h0 (0.062 m), 그 위 불포화** · 둑 (weir) 이 해변 끝 0.5 m 뒤에서 수위 유지 · 반복 사이 배수 회복 sand 60 분 · gravel 6 분 · 물성 (Forchheimer 계수) 은 Steenhauer et al. (2011, JGR, DOI 10.1029/2010JC006789) 참조 — "gravel 이 sand 보다 한 자릿수 더 투수". **모래 해변에서 습윤 전선 아래 공기가 갇혀 압력 상승 → 침투 감소 · 물가 근처 역류** (우리 모델엔 공기 없음).
+- **Desombre et al. (ICCE 2012, THETIS)** ✓ 본문 (icce-ojs-tamu.tdl.org/icce/article/view/6686), Steenhauer 2011 물기둥 실험 적합: **gravel 8.5 mm** — i = a v + b v², a 4.1 s/m · b 383 s²/m² · 투수율 k 2.49e-8 m² (→ K ≈ kg/ν ≈ 0.24 m/s) · 공극률 0.3. 강한 비 Darcy (v 0.1 m/s 에서 bv² ≈ 9 av).
+- **sand 1.3 mm 계수 미확보** (Steenhauer 2011 원문 필요).
+- **우리에게**: 우리 침투는 Darcy + Green–Ampt (Forchheimer · 공기 없음). gravel 비교는 식 자체가 달라 부적합, sand 는 계수 미확보 + 공기 효과로 오염. 실제 해변 (0.3 mm, K ~1e-4–5e-4) 과도 다른 영역.
