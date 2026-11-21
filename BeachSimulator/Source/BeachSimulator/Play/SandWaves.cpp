@@ -345,6 +345,59 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 	};
 	Mid(SandMaterial::SandGridPath(), 0, TEXT("M_SandGrid"));
 	Mid(SandMaterial::WaterPath(), 1, TEXT("M_Water"));
+	// 먼 바다 (m3-log #64): 바깥 격자 (nesting) 를 안쪽 끝 너머로 그려 수직 벽 · 바둑판 바닥을 가린다. 같은 액터 기준, x 원점 같음, y 주기라 좌우 타일도 같은 수
+	if (GridOuter.IsValid() && Sc.bNest)
+	{
+		const FSandGridGpuInit& O = Sc.GO;
+		const int32 I0 = FMath::Clamp(FMath::FloorToInt(NX * Dx / O.Dx) - 1, 0, O.NX - 1);   // 안쪽 끝 한 칸 앞부터 (겹쳐 틈 없게)
+		const int32 OVX = O.NX - I0 + 1, OVY = O.NY + 1;
+		AActor* OA = World.SpawnActor<AActor>();
+		OuterMesh = NewObject<UProceduralMeshComponent>(OA);
+		OA->SetRootComponent(OuterMesh);
+		OuterMesh->RegisterComponent();
+		OA->SetActorLocation(GridBase);
+		TArray<FVector> OV, ON; TArray<FVector2D> OU; TArray<int32> OT; TArray<FProcMeshTangent> OTan; TArray<FColor> OC;
+		int32 Tiles = 10; FParse::Value(Cmd, TEXT("outertiles="), Tiles); Tiles = FMath::Clamp(Tiles, 0, 20);   // 먼 바다는 시야가 넓어 더 많이 (칸 25 cm 라 가벼움)
+		for (int32 t = -Tiles; t <= Tiles; ++t)
+		{
+			const int32 Off = OV.Num();
+			for (int32 vj = 0; vj < OVY; ++vj)
+			for (int32 vi = 0; vi < OVX; ++vi)
+			{
+				const int32 i = I0 + vi;
+				OV.Add(FVector(i * O.Dx * 100.0, vj * O.Dy * 100.0 + t * NY * Dx * 100.0, O.BCorner[vj * (O.NX + 1) + i] * 100.0));
+				ON.Add(FVector::UpVector);
+				OU.Add(FVector2D((double)i / O.NX, (double)vj / O.NY));
+			}
+			for (int32 vj = 0; vj + 1 < OVY; ++vj)
+			for (int32 vi = 0; vi + 1 < OVX; ++vi)
+			{
+				const int32 a = Off + vj * OVX + vi, b = a + 1, c = a + OVX, d = c + 1;
+				OT.Append({ a, c, b, b, c, d });
+			}
+		}
+		OuterMesh->CreateMeshSection(0, OV, OT, ON, OU, OC, OTan, false);
+		OuterMesh->CreateMeshSection(1, OV, OT, ON, OU, OC, OTan, false);
+		OuterMesh->SetBoundsScale(4.f);
+		OuterRt = NewObject<UTextureRenderTarget2D>(this);
+		OuterRt->bCanCreateUAV = true;
+		OuterRt->AddressX = OuterRt->AddressY = TA_Clamp;
+		OuterRt->ClearColor = FLinearColor::Black;
+		OuterRt->InitCustomFormat(O.NX, O.NY, PF_A32B32G32R32F, false);
+		OuterRt->UpdateResourceImmediate(true);
+		GridOuter->SetExportTarget(OuterRt->GameThread_GetRenderTargetResource(), 1.f / 60.f / 1800.f);
+		auto OMid = [&](const FString& Path, int32 Section, const TCHAR* Name)
+		{
+			UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr, *(Path + TEXT(".") + Name));
+			if (!Base) { return; }
+			UMaterialInstanceDynamic* D = UMaterialInstanceDynamic::Create(Base, this);
+			D->SetTextureParameterValue(TEXT("GridTex"), OuterRt);
+			D->SetScalarParameterValue(TEXT("CellCm"), O.Dx * 100.f);
+			OuterMesh->SetMaterial(Section, D);
+		};
+		OMid(SandMaterial::SandGridPath(), 0, TEXT("M_SandGrid"));
+		OMid(SandMaterial::WaterPath(), 1, TEXT("M_Water"));
+	}
 
 	for (TActorIterator<ADirectionalLight> It(&World); It; ++It)
 	{

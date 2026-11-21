@@ -75,6 +75,10 @@ private:
 	float NextWReq = 0.f;
 	UPROPERTY()
 	TObjectPtr<class UTextureRenderTarget2D> GridRt = nullptr;   // T5: (w, h, b, 젖음)
+	UPROPERTY()
+	TObjectPtr<class UTextureRenderTarget2D> OuterRt = nullptr;   // 바깥 격자 렌더 (m3-log #64)
+	UPROPERTY()
+	TObjectPtr<class UProceduralMeshComponent> OuterMesh = nullptr;
 	float SimTime = 0.f, Hs = 0.f, H0 = 0.f;
 	// T6 도구 (m3-plan): 좌 파기 · 우 쌓기 · F 물붓기. 손 재고 = 벌크 부피 m³
 	FVector GridBase = FVector::ZeroVector;
