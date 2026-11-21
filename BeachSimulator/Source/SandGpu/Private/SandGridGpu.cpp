@@ -92,6 +92,10 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float4>, ExportRW)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, WetRW)
 	SHADER_PARAMETER(float, ExportDryRate)
+	SHADER_PARAMETER(float, ExportDt)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, FoamRO)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, FoamRW)
+	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, WPrevRW)
 	SHADER_PARAMETER(uint32, bSus)
 	SHADER_PARAMETER(float, SusAss)
 	SHADER_PARAMETER(float, SusWs)
@@ -233,7 +237,7 @@ struct FSandGridGpu::FState
 	FCriticalSection WLock; TArray<float> WReady; bool bWReady = false;
 	TRefCountPtr<FRDGPooledBuffer> BCorner, BSort, SedQ, SedVPrev, SedDiag0, SedDiag1, SedDiag2, SedDiag3, SedDiag4, SedDiag5, SedDiag6, SedDiag7, SedDB, SedB0, SedDel, U0, U1, Level, FX, FY, Drain, AMax, Time, Waves;
 	TRefCountPtr<FRDGPooledBuffer> Dst, UV0, UV1, FsPrev, FsT, Disp;   // T3c 분산
-	TRefCountPtr<FRDGPooledBuffer> Nu, BrkDiag, Tke, Tke2;                                // Kennedy 와점성 (D-M3-19)
+	TRefCountPtr<FRDGPooledBuffer> Nu, BrkDiag, Tke, Tke2, Foam, Foam2, WPrev;                                // Kennedy 와점성 (D-M3-19)
 	TRefCountPtr<FRDGPooledBuffer> Brk, BrkB;                         // 쇄파 상태 (지속, D-M3-17/18) — 핑퐁
 	TRefCountPtr<FRDGPooledBuffer> NestA, NestB, Inc;   // Inc: 바다 쪽 입사파 캐시 (줄마다, m3-plan p2)                      // T3c c4 nesting 스냅샷 (앞 · 뒤)
 	TRefCountPtr<FRDGPooledBuffer> Gw, GwQ;                           // T3c c6 지하수 (η_gw, δ) · Darcy 순유입
@@ -393,7 +397,7 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 		{ TArray<FVector2f> Z; Z.SetNum(N); for (int32 k = 0; k < N; ++k) { Z[k] = FVector2f(0.f, U[k].X); } S->Brk = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.Brk"), Z.GetData()); S->BrkB = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.BrkB"), Z.GetData()); }
 		{ TArray<FVector2f> Zd; Zd.Init(FVector2f::ZeroVector, N); S->BrkDiag = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.BrkDiag"), Zd.GetData()); }
 		S->Nu = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.Nu"));
-		{ TArray<float> Z0; Z0.Init(0.f, N); S->Tke = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.Tke"), Z0.GetData()); S->Tke2 = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.Tke2"), Z0.GetData()); }
+		{ TArray<float> Z0; Z0.Init(0.f, N); S->Tke = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.Tke"), Z0.GetData()); S->Tke2 = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.Tke2"), Z0.GetData()); S->Foam = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.Foam"), Z0.GetData()); S->Foam2 = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.Foam2"), Z0.GetData()); TArray<float> Wn; Wn.Init(-1e9f, N); S->WPrev = MakeBuffer(GraphBuilder, sizeof(float), N, TEXT("SandGrid.WPrev"), Wn.GetData()); }
 		S->UV0 = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.UV0"));
 		S->UV1 = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.UV1"));
 		S->FsPrev = MakeBuffer(GraphBuilder, sizeof(FVector2f), N, TEXT("SandGrid.FsPrev"));
@@ -850,7 +854,9 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 				// T5 — 렌더 텍스처로 내보내기 (m3-plan T5)
 				FRDGTextureRef Tx = GraphBuilder.RegisterExternalTexture(CreateRenderTarget(S->ExportRt->GetRenderTargetTexture(), TEXT("SandGrid.Export")));
 				FSandGridParams X = B; X.URO = GraphBuilder.CreateSRV(U0); X.ExportRW = GraphBuilder.CreateUAV(Tx); X.WetRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->Wet)); X.ExportDryRate = S->ExportDry; X.GwRO = GraphBuilder.CreateSRV(GwB);
+				X.ExportDt = 1.f / 60.f; X.FoamRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Foam)); X.FoamRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->Foam2)); X.WPrevRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->WPrev));   // 거품 (papers D-M7-5) — 내보내기는 프레임마다 (1/60 s)
 				AddGridPass<FSandGridExportCS>(GraphBuilder, RDG_EVENT_NAME("SandGridExport"), ShaderMap, X, GC);
+				Swap(S->Foam, S->Foam2);
 				GraphBuilder.SetTextureAccessFinal(Tx, ERHIAccess::SRVMask);
 			}
 			if (!S->bRbWBusy && S->bWantW.exchange(false, std::memory_order_relaxed))

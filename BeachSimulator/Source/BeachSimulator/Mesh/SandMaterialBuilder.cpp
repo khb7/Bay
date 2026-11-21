@@ -122,7 +122,7 @@ bool SandMaterial::Build(const FString& PackagePath, FString& OutMessage, bool b
 	UMaterialExpressionAdd* WetSum = AddExpr<UMaterialExpressionAdd>(M, -1000, 450);
 	WetSum->A.Connect(0, WetParam); WetSum->B.Connect(1, VCol);   // 출력 1 = R
 	UMaterialExpressionTextureObjectParameter* GridTex = bGrid ? AddGridTex(M) : nullptr;
-	if (bGrid) { WetSum->B.Connect(0, AddGridCustom(M, GridTex, CMOT_Float1, TEXT("return Tex.SampleLevel(TexSampler, Uv, 0).a;"), 500)); }   // T5: 젖음은 격자 텍스처 A
+	if (bGrid) { WetSum->B.Connect(0, AddGridCustom(M, GridTex, CMOT_Float1, TEXT("return saturate(Tex.SampleLevel(TexSampler, Uv, 0).a);"), 500)); }   // T5: 젖음은 격자 텍스처 A (물 칸은 1 + 거품 → saturate)
 	UMaterialExpressionSaturate* Wet = AddExpr<UMaterialExpressionSaturate>(M, -900, 400);
 	Wet->Input.Connect(0, WetSum);
 	// 젖음 곡선 Wc — 색 (#33). WetModel 0 이면 예전처럼 선형 W
@@ -278,14 +278,26 @@ bool SandMaterial::BuildWater(const FString& PackagePath, FString& OutMessage)
 	Deep->Constant = FLinearColor(0.01f, 0.06f, 0.07f);
 	UMaterialExpressionLinearInterpolate* Col = AddExpr<UMaterialExpressionLinearInterpolate>(M, -300, -150);
 	Col->A.Connect(0, Shallow); Col->B.Connect(0, Deep); Col->Alpha.Connect(0, VC);
-	Ed->BaseColor.Connect(0, Col);
+	// 거품 (papers D-M7-5): A = 1 + F (물 칸) → F 만큼 흰색 · 불투명 · 거칠게
+	UMaterialExpressionCustom* Fm = AddGridCustom(M, GridTex, CMOT_Float1, TEXT("const float4 t = Tex.SampleLevel(TexSampler, Uv, 0); return t.y > 0.003 ? saturate(t.w - 1.0) : 0.0;"), -400);
+	UMaterialExpressionConstant3Vector* FoamC = AddExpr<UMaterialExpressionConstant3Vector>(M, -300, -260);
+	FoamC->Constant = FLinearColor(0.80f, 0.82f, 0.82f);
+	UMaterialExpressionLinearInterpolate* ColF = AddExpr<UMaterialExpressionLinearInterpolate>(M, -150, -200);
+	ColF->A.Connect(0, Col); ColF->B.Connect(0, FoamC); ColF->Alpha.Connect(0, Fm);
+	Ed->BaseColor.Connect(0, ColF);
 	UMaterialExpressionConstant* OpLo = AddExpr<UMaterialExpressionConstant>(M, -500, 100); OpLo->R = 0.25f;
 	UMaterialExpressionConstant* OpHi = AddExpr<UMaterialExpressionConstant>(M, -500, 160); OpHi->R = 0.85f;
 	UMaterialExpressionLinearInterpolate* Op = AddExpr<UMaterialExpressionLinearInterpolate>(M, -300, 120);
 	Op->A.Connect(0, OpLo); Op->B.Connect(0, OpHi); Op->Alpha.Connect(0, VC);
-	Ed->Opacity.Connect(0, Op);
+	UMaterialExpressionConstant* OpF = AddExpr<UMaterialExpressionConstant>(M, -300, 200); OpF->R = 0.95f;
+	UMaterialExpressionLinearInterpolate* OpM = AddExpr<UMaterialExpressionLinearInterpolate>(M, -150, 150);
+	OpM->A.Connect(0, Op); OpM->B.Connect(0, OpF); OpM->Alpha.Connect(0, Fm);
+	Ed->Opacity.Connect(0, OpM);
 	UMaterialExpressionConstant* Rough = AddExpr<UMaterialExpressionConstant>(M, -300, 250); Rough->R = 0.06f;
-	Ed->Roughness.Connect(0, Rough);
+	UMaterialExpressionConstant* RoughF = AddExpr<UMaterialExpressionConstant>(M, -300, 280); RoughF->R = 0.7f;
+	UMaterialExpressionLinearInterpolate* RoughM = AddExpr<UMaterialExpressionLinearInterpolate>(M, -150, 260);
+	RoughM->A.Connect(0, Rough); RoughM->B.Connect(0, RoughF); RoughM->Alpha.Connect(0, Fm);
+	Ed->Roughness.Connect(0, RoughM);
 	UMaterialExpressionConstant* Spec = AddExpr<UMaterialExpressionConstant>(M, -300, 320); Spec->R = 0.6f;
 	Ed->Specular.Connect(0, Spec);
 	M->PreEditChange(nullptr);

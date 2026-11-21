@@ -1158,6 +1158,21 @@ float SusEAt(int i, int j)
 RWTexture2D<float4>       ExportRW;
 RWStructuredBuffer<float> WetRW;    // 칸 젖음 (1 = 물 닿음, 서서히 마름)
 float ExportDryRate;                // 마름 이완 Δt/τ (이번 프레임)
+// 거품 (papers D-M7-5): 칸별 F, 반-라그랑지 이류 · exp(−Δt/τ) 감쇠 (τ 4 s, Nguyen 2024) · 활성 bore (∂η/∂t > 0.6√(gh), SWASH · Kazolea 판정) 에서 F = max(F, 0.8) (최대 피복률)
+StructuredBuffer<float>   FoamRO;
+RWStructuredBuffer<float> FoamRW;
+RWStructuredBuffer<float> WPrevRW;
+float ExportDt;
+float FoamAt(float x, float y)
+{
+	x = clamp(x, 0.f, (float)NX - 1.001f);
+	const int i0 = (int)floor(x); const float fx = x - i0;
+	const int j0 = (int)floor(y); const float fy = y - j0;
+	int ja = j0, jb = j0 + 1;
+	if (bPeriodicY != 0u) { ja = WJ(ja); jb = WJ(jb); } else { ja = clamp(ja, 0, (int)NY - 1); jb = clamp(jb, 0, (int)NY - 1); }
+	const int ib = min(i0 + 1, (int)NX - 1);
+	return lerp(lerp(FoamRO[Idx((uint)i0, (uint)ja)], FoamRO[Idx((uint)ib, (uint)ja)], fx), lerp(FoamRO[Idx((uint)i0, (uint)jb)], FoamRO[Idx((uint)ib, (uint)jb)], fx), fy);
+}
 [numthreads(8, 8, 1)]
 void ExportCS(uint3 Tid : SV_DispatchThreadID)
 {
@@ -1180,7 +1195,17 @@ void ExportCS(uint3 Tid : SV_DispatchThreadID)
 	WetRW[k] = Wt;
 	const uint c = j * (NX + 1) + i;
 	const float Sm = 0.25f * (SCorner[c] + SCorner[c + 1] + SCorner[c + NX + 1] + SCorner[c + NX + 2]);
-	ExportRW[uint2(i, j)] = float4(W, h, B - Sm, Wt);   // 렌더 지형 = 모래 b (성은 입자 메시가 그린다)
+	float F = 0.f;
+	const float Wpv = WPrevRW[k];
+	WPrevRW[k] = W;
+	if (h > 0.003f && ExportDt > 0.f)
+	{
+		const float2 V = URO[k].yz / h;
+		F = FoamAt((float)i - V.x * ExportDt / Dx, (float)j - V.y * ExportDt / Dy) * exp(-ExportDt / 4.f);
+		if (Wpv > -1e8f && (W - Wpv) / ExportDt > 0.6f * sqrt(Gravity * h)) { F = max(F, 0.8f); }
+	}
+	FoamRW[k] = F;
+	ExportRW[uint2(i, j)] = float4(W, h, B - Sm, h > 0.003f ? 1.f + F : Wt);   // 물 칸은 젖음 = 1 이라 A 에 1 + 거품을 실음 (모래 재질은 saturate)   // 렌더 지형 = 모래 b (성은 입자 메시가 그린다)
 }
 
 // M4 T4 ① 벽 하중 (m4-plan T4, papers D-M4-1): SWE 가 b_struct 경사로 물에 거는 원천 −g·h·∇b_struct 의 반작용.
