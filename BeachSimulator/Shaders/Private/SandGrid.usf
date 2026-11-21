@@ -732,7 +732,8 @@ RWStructuredBuffer<float4> SedDiag2RW;
 RWStructuredBuffer<float4> SedDiag3RW;
 RWStructuredBuffer<float4> SedDiag4RW;
 RWStructuredBuffer<float4> SedDiag5RW;   // 바다쪽 소류 ∫max(q_x,0)dt 를 수심 구간별: h < 1 mm · 1 mm–1 cm · 1–2 cm · > 2 cm
-RWStructuredBuffer<float4> SedDiag6RW;   // 같은 구간 육지쪽 ∫min(q_x,0)dt   // 현장 비교 젖은 시간 (Hughes & Baldock 2004 센서 높이): h > 1 cm 오름 · 내림 · h > 2 cm 오름 · 내림   // 물 수지 (GwApplyCS): ∫침투 m · ∫침출 m (지표로 나옴) · ∫(지표 − 지하수면) dt · ∫dt   // (최소 u_x = 가장 센 오름, 최대 u_x = 가장 센 내림, ∫h dt 오름, ∫h dt 내림)
+RWStructuredBuffer<float4> SedDiag6RW;
+RWStructuredBuffer<float4> SedDiag7RW;   // h > 2 cm: ∫c_f dt 오름 · 내림, ∫|u|³ dt 오름 · 내림 — 소류 ∝ c_f^1.5 |u|³ 의 두 몫   // 같은 구간 육지쪽 ∫min(q_x,0)dt   // 현장 비교 젖은 시간 (Hughes & Baldock 2004 센서 높이): h > 1 cm 오름 · 내림 · h > 2 cm 오름 · 내림   // 물 수지 (GwApplyCS): ∫침투 m · ∫침출 m (지표로 나옴) · ∫(지표 − 지하수면) dt · ∫dt   // (최소 u_x = 가장 센 오름, 최대 u_x = 가장 센 내림, ∫h dt 오름, ∫h dt 내림)
 static const float GW_EPS = 1e-4f;
 
 void GwHead(uint i, uint j, out float H, out float Hg)
@@ -1013,6 +1014,7 @@ void SedQCS(uint3 Tid : SV_DispatchThreadID)
 			if (V.x < 0.f) { D1.x += Kr * Dt; D1.z += Dt; } else { D1.y += Kr * Dt; D1.w += Dt; }
 			SedDiag0RW[Idx(i, j)] = D0; SedDiag1RW[Idx(i, j)] = D1;
 			{ const uint Bn = h < 0.001f ? 0u : (h < 0.01f ? 1u : (h < 0.02f ? 2u : 3u)); float4 D5 = SedDiag5RW[Idx(i, j)], D6 = SedDiag6RW[Idx(i, j)]; float4 Ad = 0.f; Ad[Bn] = Dt; D5 += Ad * max(Q.x, 0.f); D6 += Ad * min(Q.x, 0.f); SedDiag5RW[Idx(i, j)] = D5; SedDiag6RW[Idx(i, j)] = D6; }
+			if (h > 0.02f) { const float Cf = CfAt(i, h), U3 = pow(length(V), 3.f); float4 D7 = SedDiag7RW[Idx(i, j)]; if (V.x < 0.f) { D7.x += Cf * Dt; D7.z += U3 * Dt; } else { D7.y += Cf * Dt; D7.w += U3 * Dt; } SedDiag7RW[Idx(i, j)] = D7; }
 			float4 D4 = SedDiag4RW[Idx(i, j)]; if (h > 0.01f) { if (V.x < 0.f) { D4.x += Dt; } else { D4.y += Dt; } } if (h > 0.02f) { if (V.x < 0.f) { D4.z += Dt; } else { D4.w += Dt; } } SedDiag4RW[Idx(i, j)] = D4;
 			float4 D2 = SedDiag2RW[Idx(i, j)]; D2.x = min(D2.x, V.x); D2.y = max(D2.y, V.x); if (V.x < 0.f) { D2.z += h * Dt; } else { D2.w += h * Dt; } SedDiag2RW[Idx(i, j)] = D2;
 		}
