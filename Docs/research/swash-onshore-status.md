@@ -1,4 +1,5 @@
 # 스워시 육지쪽 수송 — 현재 상태 · 질문 · 할 일 (2026-11-20)
+n> **대체됨 (2026-11-22)**: 최신 정리는 [swash-investigation.md](swash-investigation.md). 아래 "부유사가 주범" · "k_b 가 침식을 키움" 판단은 정정됨.
 
 관련: m3-log #41–44 · papers D-M6-1~3 · realism-gaps A
 
