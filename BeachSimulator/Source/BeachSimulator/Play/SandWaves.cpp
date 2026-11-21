@@ -1209,7 +1209,7 @@ int32 RunWaveMeasure(const FString& Params)
 		if (Sc.G.bSedDiag)
 		{
 			// 수송 분해 (m3-log #46): y 평균 시간 적분 — x+ = 바다쪽. 소류 · 부유 m² (= ∫q dt), k_b 시간 평균 (흐름 방향별), 젖은 시간 s
-			TArray<FVector4f> D0, D1, D2, D3, D4; Grid.DownloadSedDiag(D0, D1, &D2, &D3, &D4);
+			TArray<FVector4f> D0, D1, D2, D3, D4, D5, D6; Grid.DownloadSedDiag(D0, D1, &D2, &D3, &D4, &D5, &D6);
 			FString Df = TEXT("x,b0,bed_off,bed_on,sus_off,sus_on,kb_on,kb_off,t_on,t_off,umax_on,umax_off,h_on,h_off,inf_m,exf_m,gw_depth,t_on1,t_off1,t_on2,t_off2\n");
 			for (int32 i = 0; i < NX; ++i)
 			{
@@ -1226,6 +1226,15 @@ int32 RunWaveMeasure(const FString& Params)
 					Un / NY, Uf / NY, A[6] > 0 ? Hn / NY / A[6] : 0.0, A[7] > 0 ? Hf / NY / A[7] : 0.0, Inf / NY, Exf / NY, Gt > 0 ? Gd / Gt : 0.0, W1n / NY, W1f / NY, W2n / NY, W2f / NY);
 			}
 			FFileHelper::SaveStringToFile(Df, *Path.Replace(TEXT(".csv"), TEXT("_flux.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+			// 수심 구간별 소류 (m3-log #51): 바다쪽 · 육지쪽 ∫q dt, h < 1 mm (≈ 3 D50) · 1 mm–1 cm · 1–2 cm · > 2 cm (Hughes & Baldock 2004 센서 높이)
+			FString Hf = TEXT("x,b0,off_a,off_b,off_c,off_d,on_a,on_b,on_c,on_d") LINE_TERMINATOR_ANSI;
+			for (int32 i = 0; i < NX; ++i)
+			{
+				double O[4] = { 0 }, N4[4] = { 0 };
+				for (int32 j = 0; j < NY; ++j) { const FVector4f& o = D5[j * NX + i]; const FVector4f& n = D6[j * NX + i]; O[0] += o.X; O[1] += o.Y; O[2] += o.Z; O[3] += o.W; N4[0] += n.X; N4[1] += n.Y; N4[2] += n.Z; N4[3] += n.W; }
+				Hf += FString::Printf(TEXT("%.3f,%.4f,%.6e,%.6e,%.6e,%.6e,%.6e,%.6e,%.6e,%.6e"), (i + 0.5) * Sc.Dx, Sc.BCellV[i], O[0] / NY, O[1] / NY, O[2] / NY, O[3] / NY, N4[0] / NY, N4[1] / NY, N4[2] / NY, N4[3] / NY) + LINE_TERMINATOR_ANSI;
+			}
+			FFileHelper::SaveStringToFile(Hf, *Path.Replace(TEXT(".csv"), TEXT("_hbin.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 		}
 		if (Sc.G.bSus) { TArray<float> Su; Grid.DownloadSus(Su); double Sm = 0, Mx = 0; for (float V : Su) { Sm += V; Mx = FMath::Max<double>(Mx, V); } UE_LOG(LogSandWaves, Display, TEXT("T4b 부유사: 물속 ΣhC %.3e m·칸 · 최대 hC %.3e m"), Sm, Mx); }
 		UE_LOG(LogSandWaves, Display, TEXT("T4 모래: Σb 변화 %.3e m·칸 (|Δb| 합 %.3e, 비 %.2e) · 평균 |Δb| %.2f mm"), S1 - S0, Abs, Abs > 0 ? (S1 - S0) / Abs : 0.0, 1000.0 * Abs / ((NX + 1) * NY));
