@@ -311,6 +311,19 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 	// T5: 정점은 처음 바닥 (경계 상자용), 실제 높이 · 색은 재질이 GridRt 에서 읽는다 (WPO)
 	for (int32 v = 0; v < TV.Num(); ++v) { UV[v] = FVector2D((double)(v % VX) * Step / NX, (double)(v / VX) * Step / NY); }
 	TArray<FColor> NoCol;
+	// 파도 모양 (m3-log #61): y 는 주기 경계라 같은 UV 의 판을 옆으로 이어 붙이면 이음매가 없다 — 영역 옆면 (수직 벽) 이 안 보이게. -tiles= (한쪽 장 수, 기본 2)
+	{
+		int32 Tiles = 2; FParse::Value(Cmd, TEXT("tiles="), Tiles); Tiles = FMath::Clamp(Tiles, 0, 8);
+		const TArray<FVector> TV0 = TV, N0 = Nrm; const TArray<FVector2D> UV0 = UV; const TArray<int32> Tri0 = Tri;   // 자기 배열 원소를 Add 하면 재할당으로 깨진다
+		TV.Reserve(TV0.Num() * (2 * Tiles + 1)); Nrm.Reserve(TV.Max()); UV.Reserve(TV.Max()); Tri.Reserve(Tri0.Num() * (2 * Tiles + 1));
+		for (int32 t = -Tiles; t <= Tiles; ++t)
+		{
+			if (t == 0) { continue; }
+			const int32 Off = TV.Num();
+			for (int32 v = 0; v < TV0.Num(); ++v) { TV.Add(TV0[v] + FVector(0.0, t * NY * Dx * 100.0, 0.0)); Nrm.Add(N0[v]); UV.Add(UV0[v]); }
+			for (int32 q = 0; q < Tri0.Num(); ++q) { Tri.Add(Tri0[q] + Off); }
+		}
+	}
 	Mesh->CreateMeshSection(0, TV, Tri, Nrm, UV, NoCol, Tan, false);
 	Mesh->CreateMeshSection(1, TV, Tri, Nrm, UV, NoCol, Tan, false);
 	Mesh->SetBoundsScale(2.f);
