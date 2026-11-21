@@ -4307,3 +4307,9 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - **Tissier, Bonneton, Marche, Chazel, Lannes (2012)**, "A new approach to handle wave breaking in fully non-linear Boussinesq models", Coast. Eng. ✓ 본문 (…/papiercoastal.pdf): 쇄파 앞면에서 분산 항을 끄고 NSWE 로 → **에너지 소산은 충격파 이론이 암묵적으로 계산**; "NSW models, with shock-capturing schemes, can accurately reproduce broken wave dissipation and swash oscillations **without any ad hoc parametrization**" (Bonneton 2007 · Brocchini & Dodd 2008 · Kobayashi 1989 · Marche 2007).
 - **Bonneton (2007)** Ocean Eng. 34(10) 1459–1471, DOI 10.1016/j.oceaneng.2006.09.002 — 초록 (2차) 만, 원문 미확보. 해석적 bore 소산 식 (D = ρg(Δh)³/(4h₁h₂)·… 꼴) 은 [미확인 — 검증용으로만].
 - **우리에게**: 안쪽 격자 (KP07 충격파 포착) 의 수치 에너지 손실 = 물리적 bore 소산 (문헌이 이 동일시를 지지). → 칸별 에너지 수지 잔차 D = −(∂E/∂t + ∇·F_E), E = ½ρ(gη² + h|u|²) 꼴, F_E = ρ hu(½|u|² + gη) 를 측정해 k_s = (D/ρ)^{2/3} (XBeach 식 33) → 바닥 k_b (식 30/31). 새 계수 없음 (L_mix 근사는 가정 표시). 검증: 단일 bore 에서 D 를 해석 식과 비교 (원문 확보 시).
+
+### D-M6-6. 식 12 확인 · L_mix · bore 난류 효과에 대한 반증 (2026-11-21)
+- **van Rooijen 2012 식 12 ✓ (PDF 이미지로 확인)**: c_eq = ε_s/(g w_s h Δ n_p) · (β_d k_b^{3/2} + c_f|u|³), ε_s 0.01 · **β_d 0.01 ("calibration factor")**. → (… )^{3/2} 꼴 아님 (D-M6-2 정정). Bagnold 계열이라 우리 부유사 (XBeach 식 105 계열) 와 다름 — 우리엔 같은 계열인 XBeach 식 92 (u² + 1.45 k_b) 가 일관. 식 8 은 상자 평균 ∫_{t−Ta}^{t}, 식 9 경사 보정 cos β (1 − sign(u) tan β/tan φ).
+- **L_mix**: swash bore 용 값 · 식은 못 찾음. XBeach 식 34 는 roller 에너지 기반 (우리 안쪽 격자엔 roller 없음). Reniers 난류 균형도 "지수 감쇠" 서술만 (Twente MSc 2020 요약 △). → L_mix = h 는 **가정** 으로 유지, 민감도 확인 대상.
+- **반증 후보 △ (검색 요약만, 본문 미열람 — TU Delft · Twente MSc 논문)**: nonh XBeach 에 bore 난류를 넣어도 swash 부유 농도 예측이 **개선되지 않았고**, XBeach 가 **평균 해면 위 침식을 과대 예측** — 우리 증상과 같다. Mancini (2021, Nottingham PhD) 도 쇄파 난류를 넣었으나 사주 발달 재현 실패. 원문 접근 막힘 (403/HTML).
+- **우리에게**: k_b (방법 ②) 는 문헌상 효과가 불확실 — 넣기 전에 기대치를 낮춘다. swash 침식 과대는 XBeach 계열의 알려진 한계일 수 있다.
