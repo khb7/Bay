@@ -46,7 +46,7 @@ namespace
 	// 이봉 스펙트럼 (G-6c): 풍파 γ 3.3 + 너울 γ 20, 에너지 비율 SwellFrac. 32 성분 — 주파수를 칸 안에서 무작위로 (공약수가 없어 반복 주기가 사라진다)
 	// 방향 분산 (G-6c): 너울 10~20° · 풍파 30~60° — 성분마다 그 주파수에서 너울/풍파 몫으로 섞은 폭 σ 의 정규분포에서 θ.
 	// 해안선 방향 파수 k_y = k·sinθ (경계 수심 얕은 물 k = ω/√(gh₀)) 를 주기 경계에 맞게 2π m / L_y 로 반올림
-	TArray<FVector4f> MakeWaves(double Hs, double SwellFrac, double SwellTp, double WindTp, int32 Seed, double H0, double Ly, double MeanDeg, double SwellSpreadDeg, double WindSpreadDeg, bool bDisp = false)
+	TArray<FVector4f> MakeWaves(double Hs, double SwellFrac, double SwellTp, double WindTp, int32 Seed, double H0, double Ly, double MeanDeg, double SwellSpreadDeg, double WindSpreadDeg, bool bDisp = false, bool bEqEnergy = false)
 	{
 		const int32 N = 32;
 		const double F0 = 0.04, F1 = 0.40, Df = (F1 - F0) / N;
@@ -54,13 +54,25 @@ namespace
 		TArray<double> F, S;
 		double Mw = 0, Ms = 0;
 		for (int32 n = 0; n < N; ++n) { const double f = F0 + (n + Rng.FRand()) * Df; F.Add(f); Mw += Jonswap(f, WindTp, 3.3) * Df; Ms += Jonswap(f, SwellTp, 20.0) * Df; }
+		// 등에너지 칸 (papers D-M7-6, -eqenergy): 고른 간격이면 좁은 너울 봉우리에 성분 2–3 개만 걸려 규칙적 맥놀이 → 에너지가 같은 N 칸, 칸 안 무작위 주파수
+		TArray<double> DfN; DfN.Init(Df, N);
+		if (bEqEnergy)
+		{
+			const int32 M = 4000; const double dF = (F1 - F0) / M;
+			double Mw2 = 0, Ms2 = 0; for (int32 m = 0; m < M; ++m) { const double f = F0 + (m + 0.5) * dF; Mw2 += Jonswap(f, WindTp, 3.3) * dF; Ms2 += Jonswap(f, SwellTp, 20.0) * dF; }
+			TArray<double> C; C.Init(0.0, M + 1);
+			for (int32 m = 0; m < M; ++m) { const double f = F0 + (m + 0.5) * dF; C[m + 1] = C[m] + ((1.0 - SwellFrac) * Jonswap(f, WindTp, 3.3) / Mw2 + SwellFrac * Jonswap(f, SwellTp, 20.0) / Ms2) * dF; }
+			auto Inv = [&](double q) { q *= C[M]; int32 m = 0; while (m < M - 1 && C[m + 1] < q) { ++m; } const double t = (q - C[m]) / FMath::Max(C[m + 1] - C[m], 1e-15); return F0 + (m + t) * dF; };
+			for (int32 n = 0; n < N; ++n) { const double fa = Inv((double)n / N), fb = Inv((double)(n + 1) / N); F[n] = Inv((n + Rng.FRand()) / N); DfN[n] = FMath::Max(fb - fa, 1e-6); }
+			Mw = Mw2; Ms = Ms2;
+		}
 		const double M0 = FMath::Square(Hs / 4.0);   // Hs = 4√m0
 		TArray<FVector4f> W;
 		for (int32 n = 0; n < N; ++n)
 		{
 			const double Sw = (1.0 - SwellFrac) * Jonswap(F[n], WindTp, 3.3) / Mw, Ss = SwellFrac * Jonswap(F[n], SwellTp, 20.0) / Ms;
 			const double Sf = M0 * (Sw + Ss);
-			const double A = FMath::Sqrt(2.0 * Sf * Df);
+			const double A = bEqEnergy ? FMath::Sqrt(2.0 * M0 / N) : FMath::Sqrt(2.0 * Sf * Df);   // 등에너지: 성분마다 m0/N
 			const double Om = UE_TWO_PI * F[n];
 			const double Sig = FMath::Lerp(WindSpreadDeg, SwellSpreadDeg, Ss / FMath::Max(1e-12, Sw + Ss));
 			const double G1 = FMath::Sqrt(-2.0 * FMath::Loge(FMath::Max(1e-9, (double)Rng.FRand()))) * FMath::Cos(UE_TWO_PI * Rng.FRand());   // Box–Muller
@@ -163,7 +175,8 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	FParse::Value(Cmd, TEXT("windspread="), WindSpread);
 	G.bPeriodicY = true;
 	int32 Seed = 1234; FParse::Value(Cmd, TEXT("waveseed="), Seed);
-	G.Waves = MakeWaves(Hs, SwellFrac, SwellTp, WindTp, Seed, H0, NY * Dx, MeanDeg, SwellSpread, WindSpread);
+	const bool bEq = FParse::Param(Cmd, TEXT("eqenergy"));   // papers D-M7-6
+	G.Waves = MakeWaves(Hs, SwellFrac, SwellTp, WindTp, Seed, H0, NY * Dx, MeanDeg, SwellSpread, WindSpread, false, bEq);
 	// T3b 장주기파 (B 안, m3-plan): 경계 IG 유의파고 = IgCoef · H₀(먼바다). 이론 식(LH&S 1962)은 쇄파 수심에선 발산 · 깊은 곳 + Green 법칙은
 	// 관측의 수십 분의 1 이라 (m3-log #7) 관측(Stockdon IG swash)에 맞춰 계수 하나를 정한다. 부호 = 파군 밑 수위 하강이 풀려 들어온다
 	double DeepH0 = 1.0, IgCoef = 0.25;
@@ -206,7 +219,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 			O.BCorner[j * (NXo + 1) + i] = (float)B;
 		}
 		O.BoundaryDepth = -O.BCorner[NXo];
-		O.Waves = MakeWaves(DeepH0, SwellFrac, SwellTp, WindTp, Seed, O.BoundaryDepth, Ly, MeanDeg, SwellSpread, WindSpread, true);
+		O.Waves = MakeWaves(DeepH0, SwellFrac, SwellTp, WindTp, Seed, O.BoundaryDepth, Ly, MeanDeg, SwellSpread, WindSpread, true, bEq);
 		O.W.SetNum(NXo * NYo); O.HU.Init(0.f, NXo * NYo); O.HV.Init(0.f, NXo * NYo);
 		for (int32 j = 0; j < NYo; ++j)
 		for (int32 i = 0; i < NXo; ++i)
