@@ -314,14 +314,25 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 	// 파도 모양 (m3-log #61): y 는 주기 경계라 같은 UV 의 판을 옆으로 이어 붙이면 이음매가 없다 — 영역 옆면 (수직 벽) 이 안 보이게. -tiles= (한쪽 장 수, 기본 2)
 	{
 		int32 Tiles = 2; FParse::Value(Cmd, TEXT("tiles="), Tiles); Tiles = FMath::Clamp(Tiles, 0, 8);
-		const TArray<FVector> TV0 = TV, N0 = Nrm; const TArray<FVector2D> UV0 = UV; const TArray<int32> Tri0 = Tri;   // 자기 배열 원소를 Add 하면 재할당으로 깨진다
-		TV.Reserve(TV0.Num() * (2 * Tiles + 1)); Nrm.Reserve(TV.Max()); UV.Reserve(TV.Max()); Tri.Reserve(Tri0.Num() * (2 * Tiles + 1));
+		// 옆 장은 정점 4 칸 (20 cm) 간격 — 가운데 장만 촘촘히 (렌더 스레드 +3.6 ms → 줄임, m3-log #66)
+		const int32 Sd = 4, SX = NX / Sd + 1, SY = NY / Sd + 1;
+		TArray<FVector> SV, SN; TArray<FVector2D> SU; TArray<int32> ST;
+		for (int32 sj = 0; sj < SY; ++sj)
+		for (int32 si = 0; si < SX; ++si)
+		{
+			const int32 ci = FMath::Min(si * Sd, NX), cj = FMath::Min(sj * Sd, NY);
+			SV.Add(FVector(ci * Dx * 100.0, cj * Dx * 100.0, BCorner[cj * (NX + 1) + ci] * 100.0));
+			SN.Add(FVector::UpVector);
+			SU.Add(FVector2D((double)ci / NX, (double)cj / NY));
+		}
+		for (int32 sj = 0; sj + 1 < SY; ++sj)
+		for (int32 si = 0; si + 1 < SX; ++si) { const int32 q = sj * SX + si; ST.Append({ q, q + SX, q + 1, q + 1, q + SX, q + SX + 1 }); }
 		for (int32 t = -Tiles; t <= Tiles; ++t)
 		{
 			if (t == 0) { continue; }
 			const int32 Off = TV.Num();
-			for (int32 v = 0; v < TV0.Num(); ++v) { TV.Add(TV0[v] + FVector(0.0, t * NY * Dx * 100.0, 0.0)); Nrm.Add(N0[v]); UV.Add(UV0[v]); }
-			for (int32 q = 0; q < Tri0.Num(); ++q) { Tri.Add(Tri0[q] + Off); }
+			for (int32 v = 0; v < SV.Num(); ++v) { TV.Add(SV[v] + FVector(0.0, t * NY * Dx * 100.0, 0.0)); Nrm.Add(SN[v]); UV.Add(SU[v]); }
+			for (int32 q = 0; q < ST.Num(); ++q) { Tri.Add(ST[q] + Off); }
 		}
 	}
 	Mesh->CreateMeshSection(0, TV, Tri, Nrm, UV, NoCol, Tan, false);
@@ -350,7 +361,8 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 	{
 		const FSandGridGpuInit& O = Sc.GO;
 		const int32 I0 = FMath::Clamp(FMath::FloorToInt(NX * Dx / O.Dx) - 1, 0, O.NX - 1);   // 안쪽 끝 한 칸 앞부터 (겹쳐 틈 없게)
-		const int32 OVX = O.NX - I0 + 1, OVY = O.NY + 1;
+		const int32 Os = 2;   // 먼 바다 정점 간격 (칸) — 렌더 비용 (m3-log #66)
+		const int32 OVX = (O.NX - I0) / Os + 1, OVY = O.NY + 1;
 		AActor* OA = World.SpawnActor<AActor>();
 		OuterMesh = NewObject<UProceduralMeshComponent>(OA);
 		OA->SetRootComponent(OuterMesh);
@@ -364,7 +376,7 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 			for (int32 vj = 0; vj < OVY; ++vj)
 			for (int32 vi = 0; vi < OVX; ++vi)
 			{
-				const int32 i = I0 + vi;
+				const int32 i = FMath::Min(I0 + vi * Os, O.NX);
 				OV.Add(FVector(i * O.Dx * 100.0, vj * O.Dy * 100.0 + t * NY * Dx * 100.0, O.BCorner[vj * (O.NX + 1) + i] * 100.0));
 				ON.Add(FVector::UpVector);
 				OU.Add(FVector2D((double)i / O.NX, (double)vj / O.NY));
