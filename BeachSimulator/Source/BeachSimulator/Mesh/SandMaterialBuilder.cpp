@@ -13,6 +13,7 @@
 #include "Materials/MaterialExpressionConstant.h"
 #include "Materials/MaterialExpressionConstant3Vector.h"
 #include "Materials/MaterialExpressionCustom.h"
+#include "Materials/MaterialExpressionTime.h"
 #include "Materials/MaterialExpressionLinearInterpolate.h"
 #include "Materials/MaterialExpressionMaterialFunctionCall.h"
 #include "Materials/MaterialExpressionMultiply.h"
@@ -279,7 +280,28 @@ bool SandMaterial::BuildWater(const FString& PackagePath, FString& OutMessage)
 	UMaterialExpressionLinearInterpolate* Col = AddExpr<UMaterialExpressionLinearInterpolate>(M, -300, -150);
 	Col->A.Connect(0, Shallow); Col->B.Connect(0, Deep); Col->Alpha.Connect(0, VC);
 	// 거품 (papers D-M7-5): A = 1 + F (물 칸) → F 만큼 흰색 · 불투명 · 거칠게
-	UMaterialExpressionCustom* Fm = AddGridCustom(M, GridTex, CMOT_Float1, TEXT("const float4 t = Tex.SampleLevel(TexSampler, Uv, 0); return t.y > 0.003 ? saturate(t.w - 1.0) : 0.0;"), -400);
+	// 격자 아래 규모 패치 (시각 처리 — 물리 아님, m3-log #63): 0.3–1 m 다층 값 잡음을 천천히 흘려 F 를 문턱으로 깎는다 (Tessendorf 2023 whitecap 불투명 텍스처 방식 △). 수면 기울기 > 0.25 (roller 기울기 실측 0.2–0.8, Haller & Catalán 2009 재분석) 인 앞면은 활성 거품 (Stage A)
+	UMaterialExpressionCustom* Fm = AddGridCustom(M, GridTex, CMOT_Float1, TEXT(
+		"const float4 t = Tex.SampleLevel(TexSampler, Uv, 0);\n"
+		"if (t.y <= 0.003) return 0.0;\n"
+		"const float F = saturate(t.w - 1.0);\n"
+		"float Wd, Ht; Tex.GetDimensions(Wd, Ht);\n"
+		"const float2 P = Uv * float2(Wd, Ht) * Cell * 0.01;\n"   // m
+		"float n = 0, a = 0.5, f = 1.6;\n"
+		"[unroll] for (int o = 0; o < 4; ++o) {\n"
+		"  const float2 q = P * f + float2(0.13, 0.07) * Tm * f;\n"
+		"  const float2 i0 = floor(q), fr = frac(q), u = fr * fr * (3 - 2 * fr);\n"
+		"  float h00 = frac(sin(dot(i0, float2(127.1, 311.7))) * 43758.5);\n"
+		"  float h10 = frac(sin(dot(i0 + float2(1, 0), float2(127.1, 311.7))) * 43758.5);\n"
+		"  float h01 = frac(sin(dot(i0 + float2(0, 1), float2(127.1, 311.7))) * 43758.5);\n"
+		"  float h11 = frac(sin(dot(i0 + float2(1, 1), float2(127.1, 311.7))) * 43758.5);\n"
+		"  n += a * lerp(lerp(h00, h10, u.x), lerp(h01, h11, u.x), u.y); a *= 0.5; f *= 2.1; }\n"
+		"n /= 0.9375;\n"
+		"const float2 d = 1.0 / float2(Wd, Ht);" "const float gx = (Tex.SampleLevel(TexSampler, Uv + float2(d.x, 0), 0).x - Tex.SampleLevel(TexSampler, Uv - float2(d.x, 0), 0).x) / (0.02 * Cell);" "const float gy = (Tex.SampleLevel(TexSampler, Uv + float2(0, d.y), 0).x - Tex.SampleLevel(TexSampler, Uv - float2(0, d.y), 0).x) / (0.02 * Cell);" "const float Face = smoothstep(0.25, 0.5, length(float2(gx, gy)));" "return max(F * smoothstep(0.75 - 0.6 * F, 0.95 - 0.5 * F, n), Face);"), -400);
+	Fm->Inputs.SetNum(4);
+	Fm->Inputs[2].InputName = TEXT("Cell"); Fm->Inputs[2].Input.Connect(0, CellCm);
+	UMaterialExpressionTime* TmE = AddExpr<UMaterialExpressionTime>(M, -1300, -460);
+	Fm->Inputs[3].InputName = TEXT("Tm"); Fm->Inputs[3].Input.Connect(0, TmE);
 	UMaterialExpressionConstant3Vector* FoamC = AddExpr<UMaterialExpressionConstant3Vector>(M, -300, -260);
 	FoamC->Constant = FLinearColor(0.80f, 0.82f, 0.82f);
 	UMaterialExpressionLinearInterpolate* ColF = AddExpr<UMaterialExpressionLinearInterpolate>(M, -150, -200);
