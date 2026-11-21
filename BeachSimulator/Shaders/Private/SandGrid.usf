@@ -724,6 +724,12 @@ void NestCS(uint3 Tid : SV_DispatchThreadID)
 
 // ---------------------------------------------------------------------------------------------
 // T3c c6 지하수 (m3-plan c6). 연결 = 젖은 칸 + 지하수면이 바닥에 닿음 → 수두 = 지표 수위, 포화 두께는 바닥까지
+// 진단 (-seddiag) 버퍼 — 아래 SedQCS · SusCS · GwApplyCS 가 씀
+uint bSedDiag;
+RWStructuredBuffer<float4> SedDiag0RW;
+RWStructuredBuffer<float4> SedDiag1RW;
+RWStructuredBuffer<float4> SedDiag2RW;
+RWStructuredBuffer<float4> SedDiag3RW;   // 물 수지 (GwApplyCS): ∫침투 m · ∫침출 m (지표로 나옴) · ∫(지표 − 지하수면) dt · ∫dt   // (최소 u_x = 가장 센 오름, 최대 u_x = 가장 센 내림, ∫h dt 오름, ∫h dt 내림)
 static const float GW_EPS = 1e-4f;
 
 void GwHead(uint i, uint j, out float H, out float Hg)
@@ -790,6 +796,14 @@ void GwApplyCS(uint3 Tid : SV_DispatchThreadID)
 	}
 	const float hn = U.x - B;
 	if (h > HDry && hn < h) { U.yz *= max(hn, 0.f) / h; }
+	if (bSedDiag != 0u)
+	{
+		float4 D3 = SedDiag3RW[k];
+		const float dS = U.x - UOutRW[k].x;   // 지표 수위 변화 (− 침투 · + 침출)
+		D3.x += max(-dS, 0.f); D3.y += max(dS, 0.f);
+		if (h > HDry) { D3.z += max(B - G.x, 0.f) * Dt; D3.w += Dt; }
+		SedDiag3RW[k] = D3;
+	}
 	UOutRW[k] = U;
 	GwRW[k] = G;
 }
@@ -945,10 +959,6 @@ float SedKbRaw(int i, int j, float h)
 }
 float SedKb(int i, int j, float h) { return SedKbOn > 0.f ? SedKbRaw(i, j, h) : 0.f; }
 // 진단 (-seddiag): 칸마다 시간 적분 — D0 = (소류 q_x+ , q_x− , 부유 면 F_x+ , F_x−) · D1 = (k_b·dt 흐름 육지쪽 u<0, k_b·dt 바다쪽 u>0, 젖은 시간 u<0, u>0). x+ = 바다쪽
-uint bSedDiag;
-RWStructuredBuffer<float4> SedDiag0RW;
-RWStructuredBuffer<float4> SedDiag1RW;
-RWStructuredBuffer<float4> SedDiag2RW;   // (최소 u_x = 가장 센 오름, 최대 u_x = 가장 센 내림, ∫h dt 오름, ∫h dt 내림)
 
 [numthreads(8, 8, 1)]
 void SedQCS(uint3 Tid : SV_DispatchThreadID)

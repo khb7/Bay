@@ -1209,17 +1209,19 @@ int32 RunWaveMeasure(const FString& Params)
 		if (Sc.G.bSedDiag)
 		{
 			// 수송 분해 (m3-log #46): y 평균 시간 적분 — x+ = 바다쪽. 소류 · 부유 m² (= ∫q dt), k_b 시간 평균 (흐름 방향별), 젖은 시간 s
-			TArray<FVector4f> D0, D1, D2; Grid.DownloadSedDiag(D0, D1, &D2);
-			FString Df = TEXT("x,b0,bed_off,bed_on,sus_off,sus_on,kb_on,kb_off,t_on,t_off,umax_on,umax_off,h_on,h_off\n");
+			TArray<FVector4f> D0, D1, D2, D3; Grid.DownloadSedDiag(D0, D1, &D2, &D3);
+			FString Df = TEXT("x,b0,bed_off,bed_on,sus_off,sus_on,kb_on,kb_off,t_on,t_off,umax_on,umax_off,h_on,h_off,inf_m,exf_m,gw_depth\n");
 			for (int32 i = 0; i < NX; ++i)
 			{
 				double A[8] = { 0 };
 				for (int32 j = 0; j < NY; ++j) { const FVector4f& a = D0[j * NX + i]; const FVector4f& b = D1[j * NX + i]; A[0] += a.X; A[1] += a.Y; A[2] += a.Z; A[3] += a.W; A[4] += b.X; A[5] += b.Y; A[6] += b.Z; A[7] += b.W; }
 				double Un = 0, Uf = 0, Hn = 0, Hf = 0;   // 최대 오름 (−) · 내림 (+) 속도 y 평균 · 흐름 방향별 평균 수심
 				for (int32 j = 0; j < NY; ++j) { const FVector4f& c = D2[j * NX + i]; Un += c.X; Uf += c.Y; Hn += c.Z; Hf += c.W; }
+				double Inf = 0, Exf = 0, Gd = 0, Gt = 0;   // 물 수지: ∫침투 · ∫침출 (m 수위) · 젖은 동안 평균 지하수면 깊이
+				for (int32 j = 0; j < NY; ++j) { const FVector4f& c = D3[j * NX + i]; Inf += c.X; Exf += c.Y; Gd += c.Z; Gt += c.W; }
 				for (double& v : A) { v /= NY; }
-				Df += FString::Printf(TEXT("%.3f,%.4f,%.6e,%.6e,%.6e,%.6e,%.6e,%.6e,%.2f,%.2f,%.3f,%.3f,%.4f,%.4f\n"), (i + 0.5) * Sc.Dx, Sc.BCellV[i], A[0], A[1], A[2], A[3], A[6] > 0 ? A[4] / A[6] : 0.0, A[7] > 0 ? A[5] / A[7] : 0.0, A[6], A[7],
-					Un / NY, Uf / NY, A[6] > 0 ? Hn / NY / A[6] : 0.0, A[7] > 0 ? Hf / NY / A[7] : 0.0);
+				Df += FString::Printf(TEXT("%.3f,%.4f,%.6e,%.6e,%.6e,%.6e,%.6e,%.6e,%.2f,%.2f,%.3f,%.3f,%.4f,%.4f,%.4f,%.4f,%.4f\n"), (i + 0.5) * Sc.Dx, Sc.BCellV[i], A[0], A[1], A[2], A[3], A[6] > 0 ? A[4] / A[6] : 0.0, A[7] > 0 ? A[5] / A[7] : 0.0, A[6], A[7],
+					Un / NY, Uf / NY, A[6] > 0 ? Hn / NY / A[6] : 0.0, A[7] > 0 ? Hf / NY / A[7] : 0.0, Inf / NY, Exf / NY, Gt > 0 ? Gd / Gt : 0.0);
 			}
 			FFileHelper::SaveStringToFile(Df, *Path.Replace(TEXT(".csv"), TEXT("_flux.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 		}
