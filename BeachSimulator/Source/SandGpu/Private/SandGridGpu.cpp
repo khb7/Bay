@@ -345,6 +345,7 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 				const double Kx = P1.Kx - P2.Kx, Ky = P1.Ky - P2.Ky, K2 = Kx * Kx + Ky * Ky, Om = P1.Om - P2.Om;
 				const double Den = G * H0 * K2 - Om * Om;
 				if (K2 <= 0.0 || Den < 0.05 * G * H0 * K2) { continue; }   // 공명 (Ω/K → √(gh)) 근처는 뺀다
+				if (Om < 2.0 * PI * 0.004) { continue; }   // IG 대역 하한 0.004 Hz (Bertin et al. 2018 ✓) — 더 느린 쌍은 기록 안에서 평균 수위 이동처럼 보인다 (m3-log #68, 등에너지에서 가까운 성분 쌍)
 				const double Nm = 0.5 * (P1.N + P2.N);
 				const double D = -G * (Nm * (Kx * P1.Kx + Ky * P1.Ky) / P1.K * (Kx * P2.Kx + Ky * P2.Ky) / P2.K + (Nm - 0.5) * K2) / Den;
 				Wv.Add(FVector4f((float)(D * P1.A * P2.A), (float)Om, (float)FMath::Fmod(P1.Ph - P2.Ph + 4.0 * UE_PI, 2.0 * UE_PI), (float)Ky));
