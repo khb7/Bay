@@ -922,7 +922,9 @@ RWStructuredBuffer<float>  SusCRW;
 StructuredBuffer<float>    SusERO;   // 이번 서브스텝 순 침식 (m)
 RWStructuredBuffer<float>  SusERW;
 
-float SedKbOn;           // 1: 쇄파 난류 k_b 를 모래에 (papers D-M6-3, -kb)
+float SedKbOn;
+uint  bVrBed;           // van Rooijen 2012 소류사 (식 4–9): q = 12 max(θ'−θcr,0) u* D50 · u* = √(½f_2.5)·u_eff · 경사 보정 식 9 (papers D-M6-2/6)
+float VrF25;            // f_2.5 Swart (식 7), CPU 계산           // 1: 쇄파 난류 k_b 를 모래에 (papers D-M6-3, -kb)
 // 바닥 난류 k_b (m²/s²): 와점성 소산 ε = ν|∇u|² → D/ρ = hε → k_s = (D/ρ)^⅔ (XBeach 식 33, Battjes 1975) → 바닥 k_s/(e^{h/L}−1), L = h 가정 → ×1/(e−1)
 float2 SedVel(int i, int j)
 {
@@ -974,8 +976,20 @@ void SedQCS(uint3 Tid : SV_DispatchThreadID)
 		const float2 Ve = SedPhiCos * V + SedPhiSinW * Acc;
 		const float Se = length(Ve);
 		const float Kb = SedKb(i, j, h);
+		if (bVrBed != 0u)
+		{
+			// 식 6 u* = √(½ f_2.5)·u_eff · 식 5 θ' = (u*² + k_b)/(ΔgD) · 식 9 θ_β = θ cos β (1 − s/tan φ), s = 흐름 방향 바닥 오름 기울기, tan φ 0.3 · 식 4 q = 12 max(θ'−0.05, 0) u* D50
+			const float Us = sqrt(0.5f * VrF25) * Se;
+			const float2 Gb = float2(BCell((uint)min((int)i + 1, (int)NX - 1), j) - BCell((uint)max((int)i - 1, 0), j), BCell(i, (uint)WJ((int)j + 1)) - BCell(i, (uint)WJ((int)j - 1))) / float2(2.f * Dx, 2.f * Dy);
+			const float Sl = Se > 0.f ? dot(Gb, Ve / Se) : 0.f;
+			const float Th = (Us * Us + Kb) / Rg * rsqrt(1.f + dot(Gb, Gb)) * (1.f - Sl / 0.3f);
+			if (Th > 0.05f && Se > 0.f) { Q = 12.f * (Th - 0.05f) * Us * SedD * Ve / Se; }
+		}
+		else
+		{
 		const float Th = (CfAt(i, h) * Se * Se + Kb) / Rg;   // van Rooijen 2012 식 5 θ' = (u*² + k_b)/(ΔgD)
 		if (Th > SedThc && (Se > 0.f || Kb > 0.f)) { Q = Se > 0.f ? 8.f * pow(Th - SedThc, 1.5f) * sqrt(Rg * SedD * SedD) * Ve / Se : 0.f; }
+		}
 		SedVPrevRW[Idx(i, j)] = float4(V, Acc);
 		if (bSedDiag != 0u)
 		{

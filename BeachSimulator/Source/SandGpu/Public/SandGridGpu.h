@@ -50,7 +50,8 @@ struct FSandGridGpuInit
 	float SusTsfac = 0.1f, SusTsmin = 0.5f, SusCmax = 0.1f;   // XBeach 기본
 	bool  bSedClosed = false;
 	bool  bSedKb = false;
-	bool  bSedDiag = false;         // 수송 분해 진단 누적 (-seddiag)           // 쇄파 난류 k_b 를 모래 수송에 (papers D-M6-3)       // 바다 경계 모래 플럭스 0 (시험용)
+	bool  bSedDiag = false;
+	float VrF25 = 0.f;              // > 0: van Rooijen 2012 소류사 (식 4–9), f_2.5 Swart         // 수송 분해 진단 누적 (-seddiag)           // 쇄파 난류 k_b 를 모래 수송에 (papers D-M6-3)       // 바다 경계 모래 플럭스 0 (시험용)
 	float SedPhaseDeg = 0.f;        // Nielsen 전단 위상 앞섬 φτ (도, 0 = 끔 · Nielsen 2006 은 51) — papers D-M6-1
 	float SedOmega = 0.f;
 	float SedAccTauW = 0.1f;        // 가속도 저역 통과 τ·ω_p (임의)

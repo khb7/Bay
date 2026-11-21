@@ -231,6 +231,16 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	G.bSedClosed = FParse::Param(Cmd, TEXT("sedclosed"));
 	G.bSedKb = FParse::Param(Cmd, TEXT("kb"));
 	G.bSedDiag = FParse::Param(Cmd, TEXT("seddiag"));
+	// -vrbed: van Rooijen et al. (2012) 소류사 통째 (papers D-M6-2/6) — φ 28° · T_a 0.5 s 도 함께 (-nielsenphi= 로 바꿈). f_2.5 = exp(5.5 (2.5 D50/S)^0.2 − 6.3) (Swart 1974, 식 7),
+	// S = swash 수평 이동 거리 = Stockdon (2006) 수직 swash 높이 / 경사 [Stockdon 식 기억 — 미확인]: S_inc = 0.75 β √(H0 L0) · S_ig = 0.06 √(H0 L0)
+	if (FParse::Param(Cmd, TEXT("vrbed")))
+	{
+		const double L0 = 9.81 * Out.Tp * Out.Tp / (2.0 * PI), HL = FMath::Sqrt(FMath::Max(DeepH0, 0.01) * L0);
+		const double Sv = FMath::Sqrt(FMath::Square(0.75 * Slope * HL) + FMath::Square(0.06 * HL)), Sx = Sv / Slope;
+		G.VrF25 = (float)FMath::Exp(5.5 * FMath::Pow(2.5 * G.SedD50 / Sx, 0.2) - 6.3);
+		G.SedPhaseDeg = 28.f; FParse::Value(Cmd, TEXT("nielsenphi="), G.SedPhaseDeg); G.SedOmega = (float)(2.0 * PI / Out.Tp); G.SedAccTauW = 0.25f * G.SedOmega; G.SedAccHMin = 0.005f; FParse::Value(Cmd, TEXT("nielsenh="), G.SedAccHMin);   // 문턱 = XBeach eps 0.005 m (papers D-M6-4)
+		UE_LOG(LogTemp, Display, TEXT("vrbed: swash 수직 %.2f m · 수평 S %.1f m · f_2.5 %.4f · φ %.0f°"), Sv, Sx, G.VrF25, G.SedPhaseDeg);
+	}
 	if (FParse::Param(Cmd, TEXT("nielsen"))) { G.SedPhaseDeg = 51.f; FParse::Value(Cmd, TEXT("nielsenphi="), G.SedPhaseDeg); G.SedOmega = (float)(2.0 * PI / Out.Tp); FParse::Value(Cmd, TEXT("nielsenh="), G.SedAccHMin); FParse::Value(Cmd, TEXT("nielsentau="), G.SedAccTauW); float Ta = 0.f; if (FParse::Value(Cmd, TEXT("nielsenta="), Ta) && Ta > 0.f) { G.SedAccTauW = 0.5f * Ta * G.SedOmega; } }   // -nielsenta= : 이동평균 T_a (s, van Rooijen 2012 0.5) ≈ 지수 τ = T_a/2 (같은 지연)
 	const FString NestInfo = Out.bNest ? FString::Printf(TEXT(" · nesting 바깥 %d×%d (칸 %.0fcm, %.0fm, 경계 수심 %.2fm, Hs %.2fm, 묶인 IG %s)"),
 		Out.GO.NX, Out.GO.NY, Out.GO.Dx * 100, Out.GO.NX * Out.GO.Dx, Out.GO.BoundaryDepth, DeepH0, Out.GO.bBoundIg ? TEXT("켬") : TEXT("끔")) : FString();
