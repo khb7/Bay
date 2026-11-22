@@ -4476,3 +4476,9 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - **Ruggiero et al. (2004)** JGR 109 C06025 ✓ 초록: 고에너지 소산 해변에서 처오름이 국지 foreshore 경사 (5 배 변화) 를 따름 — Stockdon 과 엇갈림.
 - **Senechal et al. (2011)** JGR 116 C07032 doi 10.1029/2010JC006819 ✓ 초록: Hs₀ 6.4 m 폭풍에서 0.035 Hz 까지 IG swash 포화, tanh 맞춤. H₀ ~1.5 m 중간 해변 포화 증거 없음 (?).
 - Guza & Thornton 1982 △: IG swash 는 Hs 에 선형 (Stockdon 은 √H₀) — H₀ 지수 0.5 vs 1, 1.5 m 에서 차 ~1.2 배. Ruessink 1998 △: 낮은 ξ₀ 에서 R_ig–H₀ 비례상수 큼.
+
+### D-M7-18. 젖은 모래 강도 · 안정각 vs 수분 (trend-check C9 · C17, 2026-11-22)
+- **Nowak, Samadani & Kudrolli (2005)** Nat. Phys. 1:50 doi 10.1038/nphys106 ✓ (arXiv cond-mat/0508352): 최대 안정각 θ_m 이 액체량에 따라 증가 후 포화, (θ_m − θ_d)² ∝ Γ/(ρ g r L) (식 7) — 큰 알갱이 · 큰 사면일수록 증가 작음. 0.5 mm bead Vf 0.008 에서 건조 +6–7°.
+- **Pakpour et al. (2012)** Sci. Rep. 2:549 ✓: 결합 시작 ~0.2 % vol, 최적 ~1 %, 과하면 불안정, H_max ∝ R^(2/3) (실측 0.7 ± 0.05).
+- **Scheel et al. (2008)** Nat. Mater. 7:189 △: 강도가 W 2–15 % 에서 거의 일정 (모세관 다리 → 열린 cluster), 공극 절반 넘게 차면 약화. **Hornbaker et al. (1997)** Nature 387:765 △: 임계각이 액막 두께에 선형 증가. **Tegzes et al. (2002, 2003)** △: granular · correlated · viscoplastic 세 regime. **Halsey & Levine (1998)** ✓ 초록: 무한계에선 adhesion 이 임계각을 안 바꿈 (크기 효과). **Mitarai & Nori (2006)** Adv. Phys. 55:1 ✓: 건조 모래 34–35°.
+- 침출 무한사면: tanβ ≈ (γ'/γ_sat) tanφ ≈ 0.5 tanφ (φ 33° → ~18°) — 교과서 표준식 (원문 미확인 ?).
