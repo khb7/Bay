@@ -4499,3 +4499,8 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - Inch et al. 2015 CSR 101:98 △: Perranporth 소산 해빈 Hs > 1.5 m 에서 유속 > 2 m/s, 오름 · 내림 비슷; Masselink & Hughes 1998 인용 — 완만 ~2 m/s, 가파른 3 m/s. Hughes & Baldock 2004 JGR doi 10.1029/2003JC002213 △: 1:23 에서 최대 내림 < 최대 오름, 고정점 최대 ≈ 지나가는 물가 속도. Puleo et al. 2000 △: 유속계 바닥 위 4 · 8 cm — 더 얇은 흐름은 측정 안 됨. Raubenheimer 2002 JGR △: 완만 해빈에서 NSWE 가 swash 속도 잘 재현. Kranenborg 2021 · Zhu 2022 △: 모델이 끝 근처 수심 · 속도 과대.
 - Shen & Meyer 1963 (?): 끝 속도 U₀ = 2√(g h_b) → h_b 0.3–0.5 m 에서 3.4–4.4 m/s.
 - 기대 (H₀ ~1 m, T 8–12 s, 1:10–1:20): 최대 오름 1.5–2.5 m/s · 내림 1.0–2.0 · 비 1.0–1.5.
+
+### D-M7-22. IG 반사 · 경계 묶인 IG 조건 (trend-check C18 · B2, 2026-11-22)
+- **Deltares (2021) "Boundary condition guidelines for XBeach"** (Rijkswaterstaat 공개 PDF) ✓ 원문: Hasselmann 묶인 IG 는 얕은 경계에서 IG 과대 — 경계를 **n = Cg/C < 0.9 · Hm0/d < 0.3** 에 두면 98 % 경우 IG 파고 오차 < 10 % (대략 d ≥ 3 Hm0). 개별 오차 최대 240 %. 대안: 가파른 인공 사면 연장 (너무 길면 IG 과소) · 경계 IG 감소계수 (4.1.1).
+- **de Bakker et al. (2016)** JGR doi 10.1002/2015JC011268 ✓: 반사 판정 β_H = (h_x/ω)√(g/H_IG⁺), SWASH 수치 전이 ~4 (R < 0.75). **Bertin et al. (2018)** Earth-Sci. Rev. 177 △ 리뷰: β_b = (h_x/ω)√(g/h_b) ≲ 0.3 묶인 파 천수 우세 · ≳ 1 쇄파점 강제 우세; R = 0.2π β_H² (van Dongeren 2007 △), 현장 전이 β_H ≈ 3 (de Bakker 2014 · Inch 2017 △); 단파는 포화되나 IG 는 아님 → inner surf · swash 를 IG 가 지배, IG swash 포화는 Ruessink 1998b · Ruggiero 2004 · Sénéchal 2011 · Fiedler 2015 관측 △.
+- **Inch et al. (2017)** CSR doi 10.1016/j.csr.2017.02.010 △ 초록: 쇄파대 IG 소산은 앞바다 에너지와 함께 커짐, 근해 IG 파고 최대 ~1 m (거대조차 소산 해변).
