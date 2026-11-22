@@ -4482,3 +4482,9 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - **Pakpour et al. (2012)** Sci. Rep. 2:549 ✓: 결합 시작 ~0.2 % vol, 최적 ~1 %, 과하면 불안정, H_max ∝ R^(2/3) (실측 0.7 ± 0.05).
 - **Scheel et al. (2008)** Nat. Mater. 7:189 △: 강도가 W 2–15 % 에서 거의 일정 (모세관 다리 → 열린 cluster), 공극 절반 넘게 차면 약화. **Hornbaker et al. (1997)** Nature 387:765 △: 임계각이 액막 두께에 선형 증가. **Tegzes et al. (2002, 2003)** △: granular · correlated · viscoplastic 세 regime. **Halsey & Levine (1998)** ✓ 초록: 무한계에선 adhesion 이 임계각을 안 바꿈 (크기 효과). **Mitarai & Nori (2006)** Adv. Phys. 55:1 ✓: 건조 모래 34–35°.
 - 침출 무한사면: tanβ ≈ (γ'/γ_sat) tanφ ≈ 0.5 tanφ (φ 33° → ~18°) — 교과서 표준식 (원문 미확인 ?).
+
+### D-M7-19. 침식 · 퇴적 판정 · 평형 앞빈 경사 (trend-check C12 · B1, 2026-11-22)
+- **Larson & Kraus (1989)** CERC-89-9 (DTIC ADA222824) △: H₀/L₀ = M (H₀/(wT))³, M = 0.0007 — 위 (H₀/L₀ 큼) = 사주 · 침식. **Dalrymple (1992)** JWPCOE 118(2):193 △: P = gH₀²/(w³T), 경계 ~9,000 (= 2π/M 대수 변형, 원문 값 미확인). Dean Ω₀ 경계 ~2.3 (Kriebel 1986 ?) / ~3.2 (Kraus 1991 현장 ?).
+- 계산 (w 0.035 m/s, H₀ 1 m): 너울 T 12 → H₀/L₀ 0.0045 vs MΩ³ 0.0095, P 19,100 (약한 침식, 임계 H₀ 0.69 m); 풍파 T 5 → 0.026 vs 0.131, P 45,800 (뚜렷한 침식, 임계 0.44 m).
+- **Sunamura (1984)** GSA Bull. 95:242 (식 △): tanβ = 0.12·K^(−½), K = H_b/(g^½ D^½ T). D 0.275 mm → 너울 0.074 (1:13.6), 풍파 0.057 (1:17.7).
+- Baldock et al. (2011) CE 58:214 △: 자유 장주기파는 육향 수송 ↑, 파군은 ↓; 가파른 berm + 작은 사주 → 해안선 후퇴. Masselink et al. (2016) CE 113:3 (BARDEX II) △. 시간당 앞빈 경사 변화율: 원문 못 열어 미확인.
