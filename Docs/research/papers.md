@@ -4470,3 +4470,9 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - **Ruessink et al. (2012)** CE 65 (doi 10.1016/j.coastaleng.2012.03.006) △: B = p1 + (p2 − p1)/(1 + exp((p3 − log₁₀Ur)/p4)), ψ = −90 + 90 tanh(p5/Ur^p6), Sk = B cos ψ · As = B sin ψ, Ur = 3/8 · Hm0 k/(kh)³. p = 0, 0.857, −0.471, 0.297, 0.815, 0.672 (p5 · p6 XBeach 소스 주석 ✓, p2–p4 △).
 - Elgar et al. 2001 JGR doi 10.1029/2000JC000389 △ · Hoefel & Elgar 2003 Science doi 10.1126/science.1081448 △: 약한 평균류 때 가속도 skewness 로 육향 사주 이동, 폭풍 undertow 로 해향.
 - Shields 초과 시간 비율: 문헌 기준값 못 찾음.
+
+### D-M7-17. swash IG · 입사 성분의 주기 · 경사 의존 (trend-check C7 · B2, 2026-11-22)
+- **Stockdon et al. (2006)** CE doi 10.1016/j.coastaleng.2005.12.005 ✓ 초록: S_IG 는 foreshore · 쇄파대 경사에 통계적으로 유의한 선형 의존 없음. 식 S_inc = 0.75β√(H₀L₀), S_IG = 0.06√(H₀L₀) △ → S_IG/S_inc = 0.08/β (H₀ · T 무관). 같은 H₀ 에서 T 12 / 5 s → 둘 다 2.4 배. R2% bias −17 cm · RMS 38 cm ✓. ξ₀ < 0.3 소산 전용 식 S = 0.046√(H₀L₀) △. S_IG 단독 산포 미확인.
+- **Ruggiero et al. (2004)** JGR 109 C06025 ✓ 초록: 고에너지 소산 해변에서 처오름이 국지 foreshore 경사 (5 배 변화) 를 따름 — Stockdon 과 엇갈림.
+- **Senechal et al. (2011)** JGR 116 C07032 doi 10.1029/2010JC006819 ✓ 초록: Hs₀ 6.4 m 폭풍에서 0.035 Hz 까지 IG swash 포화, tanh 맞춤. H₀ ~1.5 m 중간 해변 포화 증거 없음 (?).
+- Guza & Thornton 1982 △: IG swash 는 Hs 에 선형 (Stockdon 은 √H₀) — H₀ 지수 0.5 vs 1, 1.5 m 에서 차 ~1.2 배. Ruessink 1998 △: 낮은 ξ₀ 에서 R_ig–H₀ 비례상수 큼.
