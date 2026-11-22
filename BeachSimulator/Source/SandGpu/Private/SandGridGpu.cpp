@@ -855,7 +855,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 				// T5 — 렌더 텍스처로 내보내기 (m3-plan T5)
 				FRDGTextureRef Tx = GraphBuilder.RegisterExternalTexture(CreateRenderTarget(S->ExportRt->GetRenderTargetTexture(), TEXT("SandGrid.Export")));
 				FSandGridParams X = B; X.URO = GraphBuilder.CreateSRV(U0); X.ExportRW = GraphBuilder.CreateUAV(Tx); X.WetRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->Wet)); X.ExportDryRate = S->ExportDry; X.GwRO = GraphBuilder.CreateSRV(GwB);
-				X.ExportDt = 1.f / 60.f; X.FoamRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Foam)); X.FoamRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->Foam2)); X.WPrevRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->WPrev));   // 거품 (papers D-M7-5) — 내보내기는 프레임마다 (1/60 s)
+				X.ExportDt = 1.f / 60.f; X.FoamRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Foam)); X.FoamRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->Foam2)); X.WPrevRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->WPrev)); X.BrkRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Brk));   // 거품 (papers D-M7-5) — 내보내기는 프레임마다 (1/60 s)
 				AddGridPass<FSandGridExportCS>(GraphBuilder, RDG_EVENT_NAME("SandGridExport"), ShaderMap, X, GC);
 				Swap(S->Foam, S->Foam2);
 				GraphBuilder.SetTextureAccessFinal(Tx, ERHIAccess::SRVMask);

@@ -1203,6 +1203,9 @@ void ExportCS(uint3 Tid : SV_DispatchThreadID)
 		const float2 V = URO[k].yz / h;
 		F = FoamAt((float)i - V.x * ExportDt / Dx, (float)j - V.y * ExportDt / Dy) * exp(-ExportDt / 4.f);
 		if (Wpv > -1e8f && (W - Wpv) / ExportDt > 0.6f * sqrt(Gravity * h)) { F = max(F, 0.8f); }
+		// 쇄파 상태 칸도 거품 (m3-log #72): 앞면 기울기 판정은 격자 해상도에 따라 갈려 (5 cm 안쪽 0.8 % · 25 cm 바깥 0.3 %, 같은 x) 안쪽 경계선에서 거품이 켜짐.
+		//   바깥 (분산) 격자는 쇄파 판정 (Kazolea · γ) 이 있으므로 그 상태를 쓴다 — 거품은 쇄파가 시작된 곳부터
+		if (BreakRatio > 0.f && BrkRO[k].x > 0.5f) { F = max(F, 0.8f); }
 	}
 	FoamRW[k] = F;
 	ExportRW[uint2(i, j)] = float4(W, h, B - Sm, h > 0.003f ? 1.f + F : Wt);   // 물 칸은 젖음 = 1 이라 A 에 1 + 거품을 실음 (모래 재질은 saturate)   // 렌더 지형 = 모래 b (성은 입자 메시가 그린다)
