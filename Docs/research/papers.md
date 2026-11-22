@@ -4457,3 +4457,9 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - 계산 (Rayleigh Hs = √2 Hrms, s₀ 0.0045 → γ 0.56): Hs/h 0.3 / 0.4 / 0.5 / 0.6 → BJ 0.1 / 2 / 11 / 29 %, Baldock 0.1 / 2 / 8 / 18 %, TG W2 5 / 14 / 29 / 51 %. TG 가 더 바깥에서 완만히 시작.
 - 쇄파 시작 (선형 천수 Ks · H₀ = r·h, Tp 12 s, Dean A 0.1): 첫 쇄파 (r ≈ 0.4) H₀ 0.5 / 1.0 / 1.5 m → h 1.9 / 3.3 / 4.6 m; Hs 쇄파점 (r 0.55–0.6) → h 1.35–1.5 / 2.4–2.6 / 3.3–3.5 m. h_b ∝ H₀^0.8, x_b ∝ H₀^1.2 (계산).
 - **Aarninkhof & Ruessink (2004)** IEEE TGRS 42(11) ✓: 쇄파 시작점은 띄엄띄엄 (burst), 포화 구간은 roller 뒤 persistent foam 이 쌓여 거의 일정 — 시간평균 거품 > Qb, 해안 쪽으로 넓게.
+
+### D-M7-15. 너울 고조파 전이 · 쇄파대 스펙트럼 (trend-check C14, 2026-11-22)
+- **Herbers, Orzech, Elgar & Guza (2003)** JGR 108(C1) 3013, doi 10.1029/2001JC001304 ✓ 원문: Duck 좁은 너울 (Hs 0.9, fp 0.09) 5.2 → 3.6 m 에서 2fp · 3fp 수준 두 배 넘게, 사주 뒤 골에서 역전. 폭풍 좁은 스펙트럼이 내측 쇄파대 h ≈ 1 m 에서 **거의 균일**. quasi-normal closure (R = 0) 는 고조파 과다 — 쇄파가 위상 결합을 풀어야 관측과 맞음.
+- **Elgar & Guza (1985)** JFM 161:425 ✓ 초록: 9 → 1 m sum 상호작용으로 고조파 · 앞으로 기욺. **Elgar et al. (1997)** JGR doi 10.1029/97JC01010 ✓ 초록: h ≈ 2 m 평탄부 80 m 에서 비쇄파 마루 수 ~2 배, Boussinesq 가 재현.
+- **Sénéchal et al. (2001)** Oceanol. Acta 24(6):545 ✓ 초록: 내측 쇄파대 bore 합쳐짐 → 0.05–0.09 Hz subharmonic · IG 성장.
+- Beji & Battjes 1993 △: 사주에서 bound 고조파 → free 로 풀림. 현장 soliton fission 증거 드묾 △. 원문 못 연 것: Norheim 1998 JPO, Herbers 2000, Freilich & Guza 1984.
