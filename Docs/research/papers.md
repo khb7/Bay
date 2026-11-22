@@ -4463,3 +4463,10 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - **Elgar & Guza (1985)** JFM 161:425 ✓ 초록: 9 → 1 m sum 상호작용으로 고조파 · 앞으로 기욺. **Elgar et al. (1997)** JGR doi 10.1029/97JC01010 ✓ 초록: h ≈ 2 m 평탄부 80 m 에서 비쇄파 마루 수 ~2 배, Boussinesq 가 재현.
 - **Sénéchal et al. (2001)** Oceanol. Acta 24(6):545 ✓ 초록: 내측 쇄파대 bore 합쳐짐 → 0.05–0.09 Hz subharmonic · IG 성장.
 - Beji & Battjes 1993 △: 사주에서 bound 고조파 → free 로 풀림. 현장 soliton fission 증거 드묾 △. 원문 못 연 것: Norheim 1998 JPO, Herbers 2000, Freilich & Guza 1984.
+
+### D-M7-16. 속도 비대칭 · swash 수송 방향 (trend-check C6 · C11 · B1, 2026-11-22)
+- **Pritchard & Hogg (2005)** Coast. Eng. 52:1–23 ✓ 원문 (people.maths.bris.ac.uk/~maajh/PDFPapers/CoastalSwash.pdf): Shen–Meyer NSW 처오름에 준정상 총수송 (|u|ⁿ 어떤 꼴이든) 을 쓰면 **처오름 구역은 반드시 침식** — "backwash lasts longer than the uprush, and the higher concentrations on the uprush fail to compensate". 육향 퇴적은 **비평형 부유사** (bore 붕괴로 이미 떠 있던 모래) 이송. bore 가 띄운 농도 ≳ 70 kg/m³ (0.7Ĉ) 면 육향 유입이 해향 유출을 넘음, settling lag 육향 ~10–50 g/m/사건. Conley & Griffin 2004 마찰 비대칭은 윗 swash 에만 약한 육향.
+- Butt & Russell 1999 Mar. Geol. 161 △: 고에너지 (Hs 2.2 m) 는 내림 부유 우세 해향, 저에너지 (0.8 m) 대조. Puleo et al. 2000 JGR doi 10.1029/2000JC900024 △: 오름 부유는 앞끝 · 내림 부유는 바닥 근처. Masselink et al. 2005 △: swash 농도 ~내측 쇄파대 10 배. Butt et al. 2001 CE 42 △: 0.24 mm 모래 침투로 순 해향, ~0.58 mm 이상에서만 육향. Blenkinsopp 2011 CE 58 △: 사건당 O(±1 kg/m), 방향 자주 바뀜.
+- **Ruessink et al. (2012)** CE 65 (doi 10.1016/j.coastaleng.2012.03.006) △: B = p1 + (p2 − p1)/(1 + exp((p3 − log₁₀Ur)/p4)), ψ = −90 + 90 tanh(p5/Ur^p6), Sk = B cos ψ · As = B sin ψ, Ur = 3/8 · Hm0 k/(kh)³. p = 0, 0.857, −0.471, 0.297, 0.815, 0.672 (p5 · p6 XBeach 소스 주석 ✓, p2–p4 △).
+- Elgar et al. 2001 JGR doi 10.1029/2000JC000389 △ · Hoefel & Elgar 2003 Science doi 10.1126/science.1081448 △: 약한 평균류 때 가속도 skewness 로 육향 사주 이동, 폭풍 undertow 로 해향.
+- Shields 초과 시간 비율: 문헌 기준값 못 찾음.
