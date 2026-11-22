@@ -4390,3 +4390,10 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - **우리 문제 (계산)**: 32 성분 균등 간격 (Δf 0.011 Hz) 에 너울 γ 20 (봉우리 폭 ~0.006 Hz) → **너울만 장면은 성분 2 개가 에너지 90 %** (0.0844 · 0.0885 Hz), 게임 기본 (너울 0.6) 도 2 개가 66 %. 바다가 사실상 2–3 성분의 규칙적 맥놀이 → 먼 바다 포락선 자기상관 ~61 s 봉우리 (r 0.36), "같은 묶음이 반복".
 - **결정**: 성분 수 (32) 는 그대로 (묶인 IG 쌍 496 → 성분 늘리면 비용 급증, m3-log #31), 주파수를 **등에너지 칸 + 칸 안 무작위** 로 — 성분마다 에너지 1/32.
 - **Bertin et al. (2018)** Earth-Sci. Rev. 177:774–799 ✓ 원문 (ipgp.fr/~stutz/2018_bertin_al_IG.pdf) §1: "Typical short-wave frequencies are between 0.04 and 1 Hz whereas **IG wave frequencies are generally defined as being between 0.004 and 0.04 Hz**." → 묶인 IG 쌍은 Ω ≥ 2π·0.004 만 (등에너지로 가까워진 성분 쌍이 수천 초 주기 → 평균 수위 이동처럼 보임, m3-log #68).
+
+### D-M7-7. 모래사장 단면 구성 (2026-11-22, "파도가 모래사장 끝까지" — m3-log #70)
+- 정의 △ (USGS "Dunes & Beach Metrics" · NFWF 모니터링 부록 B · 검색 요약): 해변 폭 = **사구 발치 (dune toe) ~ 해안선 (MHW)** 수평 거리. 후빈 (backshore) = 고조 swash 한계 (보통 작은 berm) ~ 사구 발치. 사구 발치 = 해변 최고점과 MHW 사이 **경사가 가장 크게 바뀌는 점**. 해변 경사 = MHW ~ 사구 발치.
+- 폭풍 영향 등급 △ (Sallenger 2000 · Stockdon 2007, USGS storm impact scale): R2% < 사구 발치 = swash 영역 (평상), 발치 < R2% < 사구 마루 = collision. → **평상 너울에서 처오름은 사구 발치 아래** 가 정상.
+- berm △: 고조 swash 한계에 생기는 평평한 단. 자갈 해변은 R2% ≈ berm 마루로 가정 (모래엔 직접 적용 아님). 남캘리포니아 berm 34 개 LiDAR (escholarship) — 삼각 단면, 지역값.
+- Takeda (1998) △ (J-STAGE 초록만): 후빈 상한 = 사구 앞끝 · 해식애 발치 · 식생 한계, 높이 BH 는 파 조건이 클수록 큼 — 식 미확인.
+- **미확인 · 원문 필요**: (1) USGS OFR 2015-1154 — 노스캐롤라이나~메인 사구 마루 · 발치 평균 높이 표 (403), (2) Takeda (1998) BH 식, (3) Takeda & Sunamura berm 높이 식 [기억: Z_b ∝ H_b^{5/8}(gT²)^{3/8}, 미확인], (4) 해변 폭 통계 (USGS lidar 데이터 DOI 10.5066/F7GF0S0Z — 원자료라 직접 계산 필요).
