@@ -4439,3 +4439,15 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 ### D-M7-11. 사주 치수 문헌 찾기 (F6, 2026-11-22) — 후보 · 원문 대기
 - 검색 요약 [미확인, 2차 인용]: **골 수심 / 사주 마루 수심 ≈ 1.7** (Keulegan 1948 실험, 경사 · 파 경사도와 거의 무관), Shepard 현장 ~1.16. Ruessink et al. 2003 JGR 이 "흔히 ~1.7" 로 인용. Davidson-Arnott: 바깥 사주 마루 수심 ∝ 최대 파고 (선형). Kraus: 실험 사주 형상 ~ 앞바다 H · T · w_s.
 - 받을 원문: Ruessink et al. 2003 JGR 108(C8) (사주 형상 매개 · 공개 PDF ifremer), Plant et al. 1999 JGR 104 doi 10.1029/1999JC900112, Keulegan 1948 (BEB Tech. Memo 4), Soulsby 1997 w_s 식 (책 — Spearman & Manning 재인용 CORE 82971253 로 대체 가능).
+
+### D-M7-12. 쇄파대 Hs/h 추세 (trend-check C1, 2026-11-22)
+- **Raubenheimer, Guza & Elgar (1996)** JGR 101(C11) 25589, doi 10.1029/96JC02433 ✓ 원문 (WHOI PDF 049): 실측 **γs = Hs/h̄ = 0.19 + 1.05 β/kh** (Fig. 9, r ≈ 0.87, 산포 ±0.09–0.15). 경사만: 0.20 + 5.98β (r 0.77). Hs = 0.05–0.18 Hz 대역 4σ, h̄ = setup 포함 평균 수심, k = 국지 centroid 주파수. 자료 h 0.3–2.1 m · β 0.01–0.09 · β/kh 0–~1 · 68 분 기록. 포화 (H₀ 무관) 지점만. → **얕을수록 · 가파를수록 커짐, 심해 파형경사 s₀ 와 무관** (같은 h 에서 주기 길면 kh 작아 커짐).
+- **Sallenger & Holman (1985)** JGR 90(C6) 11939 ✓ 초록: γrms 0.29–0.55, 경사 ↑ → ↑, s₀ 무관.
+- **Thornton & Guza (1982)** Hrms = 0.42h △ (D-M3-6 과 같음). **Power et al. (2010)** JGR △: 불포화 쇄파대는 H₀ 의존, 물가 쪽 급증.
+- **주의 — 모델 γ 는 반대 추세**: Battjes & Stive 1985 γ = 0.5 + 0.4 tanh(33 s₀) △ · Ruessink et al. 2003 γ = 0.29 + 0.76 kh △ 는 소산 맞춤용 역산값. Zhang et al. 2021 (arXiv 2104.00208 ✓) 가 실측 Hs/h–kh 와 반대임을 명시. **검증 기준은 실측 γs 식.**
+
+### D-M7-13. 처오름 정상성 · 내림 (trend-check C4 · C5, 2026-11-22)
+- **Stockdon et al. (2006)** (USGS DS 602 △): 17 분 구간으로 통계, R2% = 개별 최댓값의 2 % 초과, 기록 17–120 분. **O'Dea et al. (2025)** Coast. Eng. 202:104822 ✓: lidar 30–41 분 기록, rundown 정의가 uprush 보다 불명확.
+- **Ruggiero et al. (2004)** JGR 109 C06025 ✓: IG 가 분산 96 %, 5 분에 최댓값 몇 개뿐 — 짧은 창 큰 변동은 정상. García-Medina 2020 △: 큰 처오름은 swash 시작점 IG 파고를 따름.
+- 창 길이별 R2% 표본 변동 문헌값 없음 → 합성 가우스 계산 (자체, ?): 2–3 분 창 CV 입사 지배 ~0.2 · IG 지배 0.65–0.8, 20 분 0.08–0.18.
+- **rundown 직접 식 없음** — 추정 η − S/2 (S = √(S_inc² + S_IG²), Stockdon 식) (?).
