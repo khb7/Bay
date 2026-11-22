@@ -4451,3 +4451,9 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - **Ruggiero et al. (2004)** JGR 109 C06025 ✓: IG 가 분산 96 %, 5 분에 최댓값 몇 개뿐 — 짧은 창 큰 변동은 정상. García-Medina 2020 △: 큰 처오름은 swash 시작점 IG 파고를 따름.
 - 창 길이별 R2% 표본 변동 문헌값 없음 → 합성 가우스 계산 (자체, ?): 2–3 분 창 CV 입사 지배 ~0.2 · IG 지배 0.65–0.8, 20 분 0.08–0.18.
 - **rundown 직접 식 없음** — 추정 η − S/2 (S = √(S_inc² + S_IG²), Stockdon 식) (?).
+
+### D-M7-14. 쇄파 비율 Qb · 쇄파 시작 수심 · 쇄파대 거품 (trend-check C2 · C3, 2026-11-22)
+- **Battjes & Janssen (1978)** ICCE 16, doi 10.9753/icce.v16.32 △: (1 − Qb)/ln Qb = −(Hrms/Hm)², Hm = γh, γ = 0.5 + 0.4 tanh(33 s₀) (Battjes & Stive 1985 △). **Thornton & Guza (1983)** JGR 88(C10) 5925 △: Qb = r⁴ (W1) · r⁴/(1 + r²) (W2), r = Hrms/(γh), γ 0.42. **Baldock et al. (1998)** △: Qb = exp(−(γh/Hrms)²).
+- 계산 (Rayleigh Hs = √2 Hrms, s₀ 0.0045 → γ 0.56): Hs/h 0.3 / 0.4 / 0.5 / 0.6 → BJ 0.1 / 2 / 11 / 29 %, Baldock 0.1 / 2 / 8 / 18 %, TG W2 5 / 14 / 29 / 51 %. TG 가 더 바깥에서 완만히 시작.
+- 쇄파 시작 (선형 천수 Ks · H₀ = r·h, Tp 12 s, Dean A 0.1): 첫 쇄파 (r ≈ 0.4) H₀ 0.5 / 1.0 / 1.5 m → h 1.9 / 3.3 / 4.6 m; Hs 쇄파점 (r 0.55–0.6) → h 1.35–1.5 / 2.4–2.6 / 3.3–3.5 m. h_b ∝ H₀^0.8, x_b ∝ H₀^1.2 (계산).
+- **Aarninkhof & Ruessink (2004)** IEEE TGRS 42(11) ✓: 쇄파 시작점은 띄엄띄엄 (burst), 포화 구간은 roller 뒤 persistent foam 이 쌓여 거의 일정 — 시간평균 거품 > Qb, 해안 쪽으로 넓게.
