@@ -4494,3 +4494,8 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - **Hallin et al. (2023)** Coast. Eng. doi 10.1016/j.coastaleng.2023.104376 ✓ 원문: Noordwijk overheight ~0.2 m 보정. 2 mm 표층 · van Genuchten θr 0.01 · θs 0.35 · α 0.035 (건조) / 0.070 (젖음) /cm · n 4.5 / 2.3. 과잉수 배수 dθ/dt = −(θ − θfc) ln2 / T_dry, T_dry 1.5 h.
 - **Cartwright et al. (2006)** JGR doi 10.1029/2005JC003149 ✓: exit point = 반짝 (seepage face) / 무광 경계, swash · 저주파로 진동. exit point 낙하 v = (K/n) sin²β (Dracos 1963 · Turner 1993). 모세관 프린지 H_ψ ≈ 10σ/(ρ g d50) ≈ 0.25 m (0.3 mm, Turner & Nielsen 1997 식).
 - **Namikas et al. (2010)** Geomorphology doi 10.1016/j.geomorph.2009.07.011 ✓ 초록: 포화 > 25 % · 중간 5–25 % · 건조 < 5 %, 지하수 깊이가 주 결정. **Schmutz & Namikas (2013)** ESPL ✓ 초록: 표면 수분이 수위 변화에 30–100 분 (얕을 때) · ~4 h (60 cm) 지연, 이력. **Schmutz & Namikas (2018)** Aeolian Res. ✓ 초록: 증발은 수위 깊이 90–100 cm 이상에서 의미.
+
+### D-M7-21. swash 최대 유속 (trend-check C15, 2026-11-22)
+- Inch et al. 2015 CSR 101:98 △: Perranporth 소산 해빈 Hs > 1.5 m 에서 유속 > 2 m/s, 오름 · 내림 비슷; Masselink & Hughes 1998 인용 — 완만 ~2 m/s, 가파른 3 m/s. Hughes & Baldock 2004 JGR doi 10.1029/2003JC002213 △: 1:23 에서 최대 내림 < 최대 오름, 고정점 최대 ≈ 지나가는 물가 속도. Puleo et al. 2000 △: 유속계 바닥 위 4 · 8 cm — 더 얇은 흐름은 측정 안 됨. Raubenheimer 2002 JGR △: 완만 해빈에서 NSWE 가 swash 속도 잘 재현. Kranenborg 2021 · Zhu 2022 △: 모델이 끝 근처 수심 · 속도 과대.
+- Shen & Meyer 1963 (?): 끝 속도 U₀ = 2√(g h_b) → h_b 0.3–0.5 m 에서 3.4–4.4 m/s.
+- 기대 (H₀ ~1 m, T 8–12 s, 1:10–1:20): 최대 오름 1.5–2.5 m/s · 내림 1.0–2.0 · 비 1.0–1.5.
