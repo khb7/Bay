@@ -313,7 +313,7 @@ bool SandMaterial::BuildWater(const FString& PackagePath, FString& OutMessage)
 		"  float h11 = frac(sin(dot(i0 + float2(1, 1), float2(127.1, 311.7))) * 43758.5);\n"
 		"  n += a * lerp(lerp(h00, h10, u.x), lerp(h01, h11, u.x), u.y); a *= 0.5; f *= 2.1; }\n"
 		"n /= 0.9375;\n"
-		"const float K = max(25.0 / Cell, 1.0); const float2 d = K / float2(Wd, Ht);" "const float gx = (Tex.SampleLevel(TexSampler, Uv + float2(d.x, 0), 0).x - Tex.SampleLevel(TexSampler, Uv - float2(d.x, 0), 0).x) / (0.02 * Cell * K);" "const float gy = (Tex.SampleLevel(TexSampler, Uv + float2(0, d.y), 0).x - Tex.SampleLevel(TexSampler, Uv - float2(0, d.y), 0).x) / (0.02 * Cell * K);" "const float Face = smoothstep(0.25, 0.5, length(float2(gx, gy)));" "return max(F * smoothstep(0.75 - 0.6 * F, 0.95 - 0.5 * F, n), Face);"), -400);
+		"const float K = max(25.0 / Cell, 1.0); const float2 d = K / float2(Wd, Ht);" "const float gx = (Tex.SampleLevel(TexSampler, Uv + float2(d.x, 0), 0).x - Tex.SampleLevel(TexSampler, Uv - float2(d.x, 0), 0).x) / (0.02 * Cell * K);" "const float gy = (Tex.SampleLevel(TexSampler, Uv + float2(0, d.y), 0).x - Tex.SampleLevel(TexSampler, Uv - float2(0, d.y), 0).x) / (0.02 * Cell * K);" "const float Face = smoothstep(0.25, 0.5, length(float2(gx, gy)));" "const float Act = smoothstep(0.85, 0.95, F);" "const float Res = saturate(F / 0.8);" "return max(max(Act, Res * smoothstep(0.75 - 0.6 * Res, 0.95 - 0.5 * Res, n)), Face);"), -400);
 	Fm->Inputs.SetNum(4);
 	Fm->Inputs[2].InputName = TEXT("Cell"); Fm->Inputs[2].Input.Connect(0, CellCm);
 	UMaterialExpressionTime* TmE = AddExpr<UMaterialExpressionTime>(M, -1300, -460);

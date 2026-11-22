@@ -1202,10 +1202,17 @@ void ExportCS(uint3 Tid : SV_DispatchThreadID)
 	{
 		const float2 V = URO[k].yz / h;
 		F = FoamAt((float)i - V.x * ExportDt / Dx, (float)j - V.y * ExportDt / Dy) * exp(-ExportDt / 4.f);
-		if (Wpv > -1e8f && (W - Wpv) / ExportDt > 0.6f * sqrt(Gravity * h)) { F = max(F, 0.8f); }
-		// 쇄파 상태 칸도 거품 (m3-log #72): 앞면 기울기 판정은 격자 해상도에 따라 갈려 (5 cm 안쪽 0.8 % · 25 cm 바깥 0.3 %, 같은 x) 안쪽 경계선에서 거품이 켜짐.
-		//   바깥 (분산) 격자는 쇄파 판정 (Kazolea · γ) 이 있으므로 그 상태를 쓴다 — 거품은 쇄파가 시작된 곳부터
-		if (BreakRatio > 0.f && BrkRO[k].x > 0.5f) { F = max(F, 0.8f); }
+		// 활성 거품 (roller, m3-log #73 · papers D-M7-8): F = 1. roller = 앞면 (발치 = 영교차 ~ 마루), 밝기 최대는 마루 (Haller & Catalán 2009 ✓).
+		//   안쪽: 앞면 상승 ∂η/∂t > 0.6√(gh). 바깥 (분산): 쇄파 상태 칸 중 수면이 오르는 칸 (= 앞면) 만 — 쇄파 구역 전체를 칠하면 띠가 됨 (#72 → #73).
+		//   뒤로 남는 F < 1 은 잔류 거품: 거의 안 움직이고 한 주기 안에 사라짐 (같은 문헌) — 이류 · exp(−Δt/4 s) 그대로. 재질은 F > 0.9 를 꽉 찬 흰색, 그 아래를 패치로.
+		const bool bRise = Wpv > -1e8f && W > Wpv;
+		if (bRise && (W - Wpv) / ExportDt > 0.6f * sqrt(Gravity * h)) { F = 1.f; }
+		//   바깥은 25 cm 라 오르는 앞면이 반 파장까지 퍼짐 → 쇄파 칸의 **마루** (x 이웃 ±2 칸보다 높음) 에서만. 남긴 거품이 F > 0.9 인 ~0.4 s × c ≈ 1 m 가 roller 로 보임 (Carini 2014 현장 L_r 0.5–2 m)
+		if (BreakRatio > 0.f && BrkRO[k].x > 0.5f && i >= 2u && i + 2u < NX)
+		{
+			const float Wm1 = URO[Idx(i - 1u, j)].x, Wm2 = URO[Idx(i - 2u, j)].x, Wp1 = URO[Idx(i + 1u, j)].x, Wp2 = URO[Idx(i + 2u, j)].x;
+			if (W >= max(max(Wm1, Wm2), max(Wp1, Wp2))) { F = 1.f; }
+		}
 	}
 	FoamRW[k] = F;
 	ExportRW[uint2(i, j)] = float4(W, h, B - Sm, h > 0.003f ? 1.f + F : Wt);   // 물 칸은 젖음 = 1 이라 A 에 1 + 거품을 실음 (모래 재질은 saturate)   // 렌더 지형 = 모래 b (성은 입자 메시가 그린다)
