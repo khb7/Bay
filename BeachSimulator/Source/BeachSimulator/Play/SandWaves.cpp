@@ -303,7 +303,7 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 	Mesh = NewObject<UProceduralMeshComponent>(Actor);
 	Actor->SetRootComponent(Mesh);
 	Mesh->RegisterComponent();
-	Actor->SetActorLocation(FVector(300.0, -NY * Dx * 50.0, H0 * 100.0 + 2.0));   // 가장 깊은 곳이 바닥판(z = 0) 위로
+	Actor->SetActorLocation(FVector(300.0, -NY * Dx * 50.0, (Sc.bNest ? FMath::Max(H0, Sc.GO.BoundaryDepth) : H0) * 100.0 + 2.0));   // nesting 이면 바깥 격자 최대 수심 기준 — 안 그러면 바깥 바닥 (최대 3.3 m) 이 맵 바닥판 아래에 묻혀 체크무늬가 보임 (m3-log #76)   // 가장 깊은 곳이 바닥판(z = 0) 위로
 	GridBase = Actor->GetActorLocation();
 	TArray<FVector> TV; TArray<int32> Tri; TArray<FVector> Nrm; TArray<FVector2D> UV; TArray<FProcMeshTangent> Tan;
 	auto Corner = [&](int32 vi, int32 vj) { return BCorner[FMath::Min(vj * Step, NY) * (NX + 1) + FMath::Min(vi * Step, NX)]; };
@@ -463,8 +463,9 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 	// 카메라: 땅 쪽 위에서 바다를 비스듬히
 	const FVector Base = Actor->GetActorLocation();
 	const bool bLand = FParse::Param(Cmd, TEXT("camland"));   // 확인용: 바다에서 땅 (후빈) 쪽을 봄
-	const FVector Eye = Base + (bLand ? FVector(Xs * 100.0 + 600.0, NY * Dx * 50.0, 250.0) : FVector(Xs * 100.0 - 700.0, NY * Dx * 50.0, 300.0));
-	const FVector Look = Base + (bLand ? FVector(-1500.0, NY * Dx * 50.0, 100.0) : FVector(Xs * 100.0 + 500.0, NY * Dx * 50.0, 0.0));
+	const bool bTop = FParse::Param(Cmd, TEXT("camtop"));   // 확인용: 바깥 격자 위에서 비스듬히 내려다봄 (m3-log #76)
+	const FVector Eye = bTop ? Base + FVector(3000.0, NY * Dx * 50.0 - 6000.0, 3500.0) : Base + (bLand ? FVector(Xs * 100.0 + 600.0, NY * Dx * 50.0, 250.0) : FVector(Xs * 100.0 - 700.0, NY * Dx * 50.0, 300.0));
+	const FVector Look = bTop ? Base + FVector(10000.0, NY * Dx * 50.0, -200.0) : Base + (bLand ? FVector(-1500.0, NY * Dx * 50.0, 100.0) : FVector(Xs * 100.0 + 500.0, NY * Dx * 50.0, 0.0));
 	const FRotator Rot = (Look - Eye).Rotation();
 	Yaw = (float)Rot.Yaw; Pitch = (float)Rot.Pitch;
 	Cam = World.SpawnActor<ACameraActor>(Eye, Rot);
