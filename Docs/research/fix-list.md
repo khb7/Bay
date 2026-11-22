@@ -49,7 +49,7 @@
 
 | # | 뿌리 | 근거 항목 | 고칠 방향 (결정 대기) |
 |---|---|---|---|
-| T1 | swash 부유사가 준정상 (T_s = max(0.1h/w_s, 0.5 s)) · bore pickup 없음 → 윗 swash 필연 침식, 앞빈 늘 완만 | C16 · C12 · C6 · B1 (= S1) | swash T_s 를 침강 시간 h/w_s 규모로 · 안쪽 격자 bore 앞면 pickup 원천 — Pritchard & Hogg 2005 (papers D-M7-16) |
+| T1 | swash 부유사가 준정상 (T_s = max(0.1h/w_s, 0.5 s)) · bore pickup 없음 → 윗 swash 필연 침식, 앞빈 늘 완만 | C16 · C12 · C6 · B1 (= S1) | swash T_s 를 침강 시간 h/w_s 규모로 · 안쪽 격자 bore 앞면 pickup 원천 — Pritchard & Hogg 2005 (papers D-M7-16). **2026-11-22 시험**: `-tsfac=1` + `-borekb` 로 너울 윗 swash 침식 72 % ↓ · 풍파/너울 대비 3.4 → 9 배, 그러나 너울 여전히 순 침식 · 앞빈 1:19 (trend-check "T1 시험"). 남은 것: swash 맨 위 침식 (b0 +0.77) 원인 |
 | T2 | 경계 (3.3 m) 묶인 IG 가 XBeach 지침 밖 (n 0.97) → IG ∝ H₀², H₀ 1.5 처오름 1.8 배 | B2 · C18 · C20 (`-igoff` 로 확인) | 경계 IG 감소계수 (Deltares 2021 4.1.1) 또는 끔 · 깊은 경계는 T3 먼저 |
 | T3 | 깊은 경계 (6 m) 실행에서 쇄파 없이 에너지 ~70 % 손실 | C25 | 바깥 분산 격자 소산 원인 조사 (수치 소산 · 필터 · ν 진단 버그) |
 | T4 | 너울 큰 파가 쇄파대에서 덜 부서짐 · 고조파 과다 | C1 · C14 · C21 · C24 · B3 · C7 (입사 swash) | 너울 쇄파 판정 · 천수 구간 고조파 — 문헌 조사부터 |

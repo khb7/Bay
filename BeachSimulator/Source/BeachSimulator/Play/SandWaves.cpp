@@ -169,6 +169,10 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	G.bSus = G.bMorph && FParse::Param(Cmd, TEXT("sus"));   // T4b 부유사
 	FParse::Value(Cmd, TEXT("morfac="), G.Morfac);
 	FParse::Value(Cmd, TEXT("sedd="), G.SedD50);
+	// T1 (fix-list, papers D-M7-26): 부유사 적응 시간 T_s = max(tsfac·h/w_s, tsmin) — 기본 XBeach 0.1 · 0.5 s. P&H 2005 침강 지연 시험용
+	FParse::Value(Cmd, TEXT("tsfac="), G.SusTsfac);
+	FParse::Value(Cmd, TEXT("tsmin="), G.SusTsmin);
+	G.bBoreKb = FParse::Param(Cmd, TEXT("borekb"));   // T1 안쪽 격자 bore 난류 k → 부유사 (Zhu & Dodd 2020)
 	double MeanDeg = 10.0, SwellSpread = 15.0, WindSpread = 40.0;
 	FParse::Value(Cmd, TEXT("wavedir="), MeanDeg);
 	FParse::Value(Cmd, TEXT("swellspread="), SwellSpread);

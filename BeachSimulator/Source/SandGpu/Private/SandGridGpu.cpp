@@ -65,6 +65,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER(float, AvalWet)
 	SHADER_PARAMETER(uint32, bSedClosed)
 	SHADER_PARAMETER(float, SedKbOn)
+	SHADER_PARAMETER(uint32, bBoreKb)
 	SHADER_PARAMETER(uint32, bTke)
 	SHADER_PARAMETER(float, TkeKappa)
 	SHADER_PARAMETER(float, TkeSigma)
@@ -205,6 +206,7 @@ GRID_SHADER(FSandGridBreakCS,  "BreakCS")
 GRID_SHADER(FSandGridEddyCS,   "EddyCS")
 GRID_SHADER(FSandGridRollerCS, "RollerCS")
 GRID_SHADER(FSandGridTkeCS,    "TkeCS")
+GRID_SHADER(FSandGridBoreTkeCS, "BoreTkeCS")
 GRID_SHADER(FSandGridToUCS,    "ToUCS")
 GRID_SHADER(FSandGridDispCS,   "DispCS")
 GRID_SHADER(FSandGridSolveCS,  "SolveCS")
@@ -629,7 +631,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 				B.SusWs = 1e-6f / P.SedD50 * (FMath::Sqrt(10.36f * 10.36f + 1.049f * Ds * Ds * Ds) - 10.36f);
 			}
 			B.bMorph = P.bMorph ? 1u : 0u; B.SedS = P.SedS; B.SedD = P.SedD50; B.SedPor = P.SedPor; B.Morfac = P.Morfac; B.AvalDry = P.AvalDry; B.AvalWet = P.AvalWet;
-			B.bSedClosed = P.bSedClosed ? 1u : 0u; B.SedKbOn = P.bSedKb ? 1.f : 0.f; B.bTke = P.bTke ? 1u : 0u; B.TkeKappa = P.TkeKappa; B.TkeSigma = P.TkeSigma; B.bSedDiag = P.bSedDiag ? 1u : 0u; B.bVrBed = P.VrF25 > 0.f ? 1u : 0u; B.SedCfUp = P.SedCfUp; B.SedCfBack = P.SedCfBack; B.VrF25 = P.VrF25;
+			B.bSedClosed = P.bSedClosed ? 1u : 0u; B.SedKbOn = P.bSedKb ? 1.f : 0.f; B.bBoreKb = (P.bBoreKb && P.bSus && !P.bDispersive) ? 1u : 0u; B.bTke = P.bTke ? 1u : 0u; B.TkeKappa = P.TkeKappa; B.TkeSigma = P.TkeSigma; B.bSedDiag = P.bSedDiag ? 1u : 0u; B.bVrBed = P.VrF25 > 0.f ? 1u : 0u; B.SedCfUp = P.SedCfUp; B.SedCfBack = P.SedCfBack; B.VrF25 = P.VrF25;
 			{ const float Ph = FMath::DegreesToRadians(P.SedPhaseDeg); B.SedPhiCos = FMath::Cos(Ph); B.SedPhiSinW = P.SedOmega > 0.f ? FMath::Sin(Ph) / P.SedOmega : 0.f; B.SedAccTau = P.SedOmega > 0.f ? P.SedAccTauW / P.SedOmega : 0.f; B.SedAccHMin = P.SedAccHMin; }
 			{
 				// θc — Soulsby & Whitehouse (1997): 0.30/(1 + 1.2D*) + 0.055[1 − exp(−0.020D*)], D* = (g(s−1)/ν²)^⅓·D (ν = 1e-6)
@@ -820,11 +822,21 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 					FRDGBufferRef Sq = GraphBuilder.RegisterExternalBuffer(S->SedQ), Db = GraphBuilder.RegisterExternalBuffer(S->SedDB), Bs = GraphBuilder.RegisterExternalBuffer(S->BSort);
 					const FIntVector GK(FMath::DivideAndRoundUp(P.NX + 1, 8), FMath::DivideAndRoundUp(P.NY + 1, 8), 1);
 					FSandGridParams X = B; X.URO = GraphBuilder.CreateSRV(U0); X.SedQRW = GraphBuilder.CreateUAV(Sq); X.TimeRO = GraphBuilder.CreateSRV(Tm); X.SedVPrevRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SedVPrev)); X.NuRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Nu)); X.SedDiag0RW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SedDiag0)); X.SedDiag1RW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SedDiag1)); X.SedDiag2RW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SedDiag2)); X.SedDiag4RW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SedDiag4)); X.SedDiag5RW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SedDiag5)); X.SedDiag6RW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SedDiag6)); X.SedDiag7RW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SedDiag7));
+					if (B.bBoreKb)
+					{
+						// T1 bore 난류 k (안쪽 NSWE 격자 · 모래 전용, papers D-M7-26) — Tke 버퍼는 분산 격자에서만 쓰므로 여기선 빈 버퍼
+						FSandGridParams Bk = B; Bk.URO = GraphBuilder.CreateSRV(U0); Bk.TimeRO = GraphBuilder.CreateSRV(Tm);
+						Bk.TkeRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Tke)); Bk.TkeRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->Tke2));
+						AddGridPass<FSandGridBoreTkeCS>(GraphBuilder, RDG_EVENT_NAME("SandGridBoreTke"), ShaderMap, Bk, GC);
+						Swap(S->Tke, S->Tke2);
+						X.TkeRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Tke));
+					}
 					AddGridPass<FSandGridSedQCS>(GraphBuilder, RDG_EVENT_NAME("SandGridSedQ"), ShaderMap, X, GC);
 					FRDGBufferRef Se = GraphBuilder.RegisterExternalBuffer(S->SusE);
 					if (P.bSus)
 					{
 						FSandGridParams Su = B; Su.URO = GraphBuilder.CreateSRV(U0); Su.TimeRO = GraphBuilder.CreateSRV(Tm); Su.SusCRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->SusC)); Su.SusCRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SusC2)); Su.SusERW = GraphBuilder.CreateUAV(Se); Su.NuRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Nu)); Su.SedDiag0RW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SedDiag0));
+							if (B.bBoreKb) { Su.TkeRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Tke)); }
 						AddGridPass<FSandGridSusCS>(GraphBuilder, RDG_EVENT_NAME("SandGridSus"), ShaderMap, Su, GC);
 						Swap(S->SusC, S->SusC2);
 					}

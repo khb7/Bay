@@ -52,6 +52,7 @@ struct FSandGridGpuInit
 	float SusTsfac = 0.1f, SusTsmin = 0.5f, SusCmax = 0.1f;   // XBeach 기본
 	bool  bSedClosed = false;
 	bool  bSedKb = false;
+	bool  bBoreKb = false;          // T1: 안쪽 NSWE 격자 bore 난류 k → 부유사 C_eq (papers D-M7-26)
 	bool  bSedDiag = false;
 	float SedCfUp = 0.f, SedCfBack = 0.f;   // > 0: 소류 c_f 오름 / 내림 상수 (τ = ρ c_f u²)
 	float VrF25 = 0.f;              // > 0: van Rooijen 2012 소류사 (식 4–9), f_2.5 Swart         // 수송 분해 진단 누적 (-seddiag)           // 쇄파 난류 k_b 를 모래 수송에 (papers D-M6-3)       // 바다 경계 모래 플럭스 0 (시험용)

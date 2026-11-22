@@ -993,6 +993,7 @@ StructuredBuffer<float>    SusERO;   // 이번 서브스텝 순 침식 (m)
 RWStructuredBuffer<float>  SusERW;
 
 float SedKbOn;
+uint  bBoreKb;           // T1 (fix-list, papers D-M7-26): 안쪽 NSWE 격자 bore 난류 k → 부유사 C_eq (Zhu & Dodd 2020: 연행 ∝ bore 에너지 감쇠율), -borekb
 float SedCfUp;          // > 0: 소류 마찰 c_f (τ = ρ c_f u²) 를 오름 / 내림 상수로 — Conley & Griffin 2004 · Barnes 2009 (papers D-M6-11), -cfasym
 float SedCfBack;
 uint  bVrBed;           // van Rooijen 2012 소류사 (식 4–9): q = 12 max(θ'−θcr,0) u* D50 · u* = √(½f_2.5)·u_eff · 경사 보정 식 9 (papers D-M6-2/6)
@@ -1008,6 +1009,7 @@ float2 SedVel(int i, int j)
 }
 float SedKbRaw(int i, int j, float h)
 {
+	if (bBoreKb != 0u) { return 0.58198f * TkeRO[Idx((uint)i, (uint)j)]; }   // T1: 안쪽 격자 bore k (BoreTkeCS) — 같은 1/(e−1) 바닥 계수
 	const float Nu = NuRO[Idx((uint)i, (uint)j)];
 	if (Nu <= 0.f) { return 0.f; }
 	const float2 Ux = (SedVel(i + 1, j) - SedVel(i - 1, j)) / (2.f * Dx), Uy = (SedVel(i, j + 1) - SedVel(i, j - 1)) / (2.f * Dy);
@@ -1016,6 +1018,38 @@ float SedKbRaw(int i, int j, float h)
 	return min(Ks * 0.58198f, 1.f);   // 1/(e−1) · 상한 1 m²/s² (안전)
 }
 float SedKb(int i, int j, float h) { return SedKbOn > 0.f ? SedKbRaw(i, j, h) : 0.f; }
+
+// T1 bore 난류 k (안쪽 NSWE 격자, 모래 전용 — 수력학 안 바꿈). x 방향 4 칸 (i−2 ~ i+2) 에 걸친 수심 도약 + 수렴 (∂u/∂x < 0) 이면
+// 도약 소산 (단위 폭) D/ρ = g c Δh³/(4 h₂), c = √(g h₂ (h₁+h₂)/(2h₁)) (교과서 hydraulic jump · bore, 에너지 손실 Δh³/(4h₁h₂) × 유량 h₁c) 를
+// 4Δx 에 나눠 생성 P = D/(ρ h 4Δx). k_t + u·∇k = P − C_D k^{3/2}/ℓ, ℓ = κh, C_D = 0.55³, κ = TkeKappa (TkeCS 와 같은 상수 · Hansen & Svendsen).
+float BoreH(int i, int j) { i = clamp(i, 0, (int)NX - 1); j = bPeriodicY != 0u ? WJ(j) : clamp(j, 0, (int)NY - 1); return max(URO[Idx((uint)i, (uint)j)].x - BCell((uint)i, (uint)j), 0.f); }
+[numthreads(8, 8, 1)]
+void BoreTkeCS(uint3 Tid : SV_DispatchThreadID)
+{
+	const int i = (int)Tid.x, j = (int)Tid.y;
+	if (i >= (int)NX || j >= (int)NY) { return; }
+	const uint k = Idx((uint)i, (uint)j);
+	const float h = BoreH(i, j);
+	if (h <= HDry) { TkeRW[k] = 0.f; return; }
+	const float Dt = TimeRO[0], Cd = 0.55f * 0.55f * 0.55f, L = TkeKappa * h;
+	float dm, dp;
+	const float2 u0 = TkeVel(i, j, dm), um = TkeVel(i - 2, j, dm), up = TkeVel(i + 2, j, dp);
+	const float ha = BoreH(i - 2, j), hb = BoreH(i + 2, j);
+	float P = 0.f;
+	if (up.x - um.x < 0.f && ha > HDry && hb > HDry)
+	{
+		const float h1 = min(ha, hb), h2 = max(ha, hb), Dh = h2 - h1;
+		const float C = sqrt(Gravity * h2 * (h1 + h2) / (2.f * h1));
+		P = Gravity * C * Dh * Dh * Dh / (4.f * h2) / (4.f * Dx * h);
+	}
+	const float k0 = TkeRO[k];
+	const float kxp = TkeK(i + 1, j), kxm = TkeK(i - 1, j), kyp = TkeK(i, j + 1), kym = TkeK(i, j - 1);
+	const float Adv = (u0.x > 0.f ? (k0 - kxm) / Dx : (kxp - k0) / Dx) * u0.x + (u0.y > 0.f ? (k0 - kym) / Dy : (kyp - k0) / Dy) * u0.y;   // 풍상
+	float kn = max(k0 + Dt * (P - Adv), 0.f);
+	kn = kn / (1.f + Dt * Cd * sqrt(kn) / max(L, 1e-4f));   // 소멸 반암시적
+	if (!isfinite(kn)) { kn = 0.f; }
+	TkeRW[k] = min(kn, Gravity * h);   // 상한 √k ≤ √(gh)
+}
 // 진단 (-seddiag): 칸마다 시간 적분 — D0 = (소류 q_x+ , q_x− , 부유 면 F_x+ , F_x−) · D1 = (k_b·dt 흐름 육지쪽 u<0, k_b·dt 바다쪽 u>0, 젖은 시간 u<0, u>0). x+ = 바다쪽
 
 [numthreads(8, 8, 1)]
@@ -1137,7 +1171,7 @@ void SusCS(uint3 Tid : SV_DispatchThreadID)
 	float Sn = 0.f;   // 마른 칸: 뜬 모래 전부 내려앉음
 	if (h > HDry)
 	{
-		const float Kb = SedKb(i, j, h);
+		const float Kb = bBoreKb != 0u ? SedKbRaw(i, j, h) : SedKb(i, j, h);   // T1: bore k 는 부유사에만
 		const float Ex = max(sqrt(dot(U.yz / h, U.yz / h) + 1.45f * Kb) - 0.19f * pow(SedD, 0.1f) * log10(max(4.f * h / SusD90, 1.f)), 0.f);
 		const float Ceq = min(SusAss / h * pow(Ex, 2.4f), 0.5f * SusCmax);
 		const float A = Dt / max(SusTsfac * h / SusWs, SusTsmin);

@@ -4517,3 +4517,15 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 ### D-M7-25. swash 빈도 · 쇄파대 파고 분포 (trend-check C22 · C24, 2026-11-22)
 - **Erikson et al. (2005)** CE 52:285 doi 10.1016/j.coastaleng.2004.12.001 ✓ 일부: 마찰 없는 swash 지속 T_s = 2u₀/(g sinβ), T_s > T 면 uprush–backwash 상호작용, 마찰은 T_s 감소; 완경사 사례 T_s ≈ 2T. **Mase (1995)** JHR 33:397 ✓ 초록: bore 에너지 크면 상호작용으로 swash 주파수 하향, 약하면 파군 묶인 정상파 지배. Mase & Iwagaki 1984 △: 완만할수록 처오름 수 / 입사파 수 감소, ξ 로 결정. Mase 1989 JWPCOE 115:649 α(ξ) 식 미확보 (?).
 - **Battjes & Groenendijk (2000)** CE 40:161 doi 10.1016/S0378-3839(00)00007-7 △ (원문 503, 2 차 출처 일치): 복합 Weibull — H < H_tr Rayleigh, 위는 k 3.6, H_tr = (0.35 + 5.8 tanα)h, H_tr/Hrms ≥ 2.75 면 Rayleigh. 수치 적분 (자체): H_tr/Hrms 0.8 / 1.0 / 1.2 / 1.6 → H1/3/Hrms 1.30 / 1.33 / 1.38 / 1.41, H1/10 1.49 / 1.52 / 1.58 / 1.73. Thornton & Guza 1983 △: 쇄파대에서도 대체로 Rayleigh. Wu et al. 2015 △: 강한 비선형파에선 BG 가 드문 큰 파를 과소.
+
+### D-M7-26. swash 부유사 적응 시간 · 윗 swash 퇴적 조건 (fix-list T1, 2026-11-22)
+- **Pritchard & Hogg (2005)** (D-M7-16 ✓): 침강 지연 (농도 이완 ~w_s/h) 은 윗 swash 에 약한 육향, bore 붕괴 pre-suspended 농도가 크면 (≳ 0.7Ĉ) 육향 유입이 해향을 넘음.
+- **Zhu & Dodd (2013)** Adv. Water Res. 53:12–22 ✓ 초록: 시험한 q = q(u) 수송식 전부 **swash 전체 순 침식**. 완전 결합이면 침식 감소 (최대 처오름 감소 탓). **소류식에 h 의존** (q = q(h,u)) 을 넣거나 **내림 마찰계수를 오름보다 작게** 하면 중 · 윗 swash 퇴적 가능, swash 바닥 순 플럭스는 여전히 해향.
+- **Zhu & Dodd (2015)** JFM 762:110–140 ✓ 초록: 부유사 이류식 완전 결합 — 부유 · 소류가 서로 다른 지형 신호, 평균 변화 ~2 mm/사건, bed-step ~10 cm 은 주로 소류 (내림 bore). 침강 · pre-suspended 결론은 초록에 없음 (원문 403).
+- **XBeach 매뉴얼** (xbeach.readthedocs.io, latest) ✓: 식 87–88 T_s = max(tsfac·h/w_s, Tsmin), tsfac 기본 0.1 (0.01–1), Tsmin 0.5 s (0.01–10) — 단 현재 판은 oldTsmin = 0 이면 최솟값이 dtlimts·dt (1·dt) → 더 순간 평형. nonh 모드는 비대칭 · skewness 를 해상하므로 facua (0.175) 경험항 안 씀 (명시 없음, 추론). bermslope (0–1, 기본 0) = swash 를 목표 경사로 미는 행동 보정 (Roelvink & Costas, 제출 · 슬라이드 DSD-INT 2018 ✓: H/h > 1 또는 h < bermslopedepth 에서만, 시험값 0.1 · 0.2, 실측 1:7 vs 모델 1:15). 식 자체 미확인 (?).
+- TU Delft 석사논문 "Improving XBeach NH predictions of the swash morphodynamics of intermediate-reflective beaches" △ (검색 요약만): bermslope 가 berm 성장 · 가파른 경사를 크게 개선하지만 폭풍에도 퇴적, 수직 berm 성장 과소. 원문 500.
+- Incelli et al. (2015) △ (검색 요약): 초기 속도 · pre-suspended 농도 분포가 바닥 변화를 크게 바꿈. 연행 효율 ↑ → 육향.
+- Mancini et al. (2021) △ 제목만: 비정수압 파 해상 모델에 파 내부 부유사 식 — 원문 403.
+- 정리: 문헌상 NSW + 준정상 수송은 윗 swash 침식이 기본 (P&H · Zhu & Dodd 공통). 윗 swash 퇴적을 만드는 문헌 기작 = (a) 침강 지연 (T_s ~ h/w_s), (b) bore pre-suspended 고농도, (c) 소류 h 의존 · 내림 마찰 감소 (우리 -cfasym 이 (c) 의 마찰 쪽), (d) 행동 보정 bermslope. 시험 순서: (a) 는 옵션 하나라 먼저 (`-tsfac=`), (b) 다음.
+- **Zhu & Dodd (2020)** Adv. Water Res. 146:103756 doi 10.1016/j.advwatres.2020.103756 ✓ 초록 (원문 403): 연행 ∝ 이동상 bore 에너지 감쇠율 (해석식 · 새 shock 조건), bore 연행이 전단 연행보다 우세, bed-step 은 소류 특징이고 부유 연행이 그 성장을 막음. Jongedijk (2017, TU Delft MSc) △ 검색 요약: XBeach NH 는 오름 농도를 크게 과소 · swash 는 늘 침식 예측, TKE 보정으로 개선. Bakhtyar et al. (2009) △: 오름 순간 수송 > 내림.
+- 우리 구현 (T1, trend-check "T1 시험"): 도약 소산은 교과서 hydraulic jump 식 (Δh³/(4h₁h₂) × 유량) — Zhu & Dodd 2020 의 이동상 보정 · 연행 효율은 원문 미확인이라 k → k_b → Soulsby–van Rijn 경로 (XBeach 식 33 과 같은 꼴) 로 대신.
