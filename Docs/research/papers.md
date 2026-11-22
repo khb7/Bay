@@ -4504,3 +4504,8 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - **Deltares (2021) "Boundary condition guidelines for XBeach"** (Rijkswaterstaat 공개 PDF) ✓ 원문: Hasselmann 묶인 IG 는 얕은 경계에서 IG 과대 — 경계를 **n = Cg/C < 0.9 · Hm0/d < 0.3** 에 두면 98 % 경우 IG 파고 오차 < 10 % (대략 d ≥ 3 Hm0). 개별 오차 최대 240 %. 대안: 가파른 인공 사면 연장 (너무 길면 IG 과소) · 경계 IG 감소계수 (4.1.1).
 - **de Bakker et al. (2016)** JGR doi 10.1002/2015JC011268 ✓: 반사 판정 β_H = (h_x/ω)√(g/H_IG⁺), SWASH 수치 전이 ~4 (R < 0.75). **Bertin et al. (2018)** Earth-Sci. Rev. 177 △ 리뷰: β_b = (h_x/ω)√(g/h_b) ≲ 0.3 묶인 파 천수 우세 · ≳ 1 쇄파점 강제 우세; R = 0.2π β_H² (van Dongeren 2007 △), 현장 전이 β_H ≈ 3 (de Bakker 2014 · Inch 2017 △); 단파는 포화되나 IG 는 아님 → inner surf · swash 를 IG 가 지배, IG swash 포화는 Ruessink 1998b · Ruggiero 2004 · Sénéchal 2011 · Fiedler 2015 관측 △.
 - **Inch et al. (2017)** CSR doi 10.1016/j.csr.2017.02.010 △ 초록: 쇄파대 IG 소산은 앞바다 에너지와 함께 커짐, 근해 IG 파고 최대 ~1 m (거대조차 소산 해변).
+
+### D-M7-23. 젖은 해변 모래 반사율 (trend-check C19, 2026-11-22)
+- **Nolet et al. (2014)** PLoS ONE 9:e112151 ✓ 본문: Sand Motor 석영 모래 (ρd 1.655, θs ~0.32), 400–700 nm 초기 급감 후 vol 5–25 % 에서 기울기 ≈ 0, 가시광 대비 "limited", specular 는 최소라 생략.
+- **Lekner & Dorf (1988)** Appl. Opt. 27:1278 ✓: p = 1 − (1 − R̄)/n² = 0.475 (물), 완전 습윤 비 (1 − p)/(1 − pR_d) → R_d 0.2 / 0.35 / 0.5 에서 0.58 / 0.63 / 0.69. Ångström 1925 (경유 △): 모래 albedo 0.182 → 0.091 (비 0.50).
+- **Zhang & Voss (2006)** Appl. Opt. 45:8753 ✓: 석영 섞인 모래는 Lekner–Dorf · Twomey 예측과 맞음, 불투명 ooid 는 잠기면 16 % 밝아짐. Twomey 1986 ✓ 초록 (메커니즘). Lobell & Asner 2002 ✓ 초록 (지수 감소, S 로 쓰면 토양 간 차 감소; 계수 미확인).
