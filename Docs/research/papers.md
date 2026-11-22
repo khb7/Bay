@@ -4509,3 +4509,7 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - **Nolet et al. (2014)** PLoS ONE 9:e112151 ✓ 본문: Sand Motor 석영 모래 (ρd 1.655, θs ~0.32), 400–700 nm 초기 급감 후 vol 5–25 % 에서 기울기 ≈ 0, 가시광 대비 "limited", specular 는 최소라 생략.
 - **Lekner & Dorf (1988)** Appl. Opt. 27:1278 ✓: p = 1 − (1 − R̄)/n² = 0.475 (물), 완전 습윤 비 (1 − p)/(1 − pR_d) → R_d 0.2 / 0.35 / 0.5 에서 0.58 / 0.63 / 0.69. Ångström 1925 (경유 △): 모래 albedo 0.182 → 0.091 (비 0.50).
 - **Zhang & Voss (2006)** Appl. Opt. 45:8753 ✓: 석영 섞인 모래는 Lekner–Dorf · Twomey 예측과 맞음, 불투명 ooid 는 잠기면 16 % 밝아짐. Twomey 1986 ✓ 초록 (메커니즘). Lobell & Asner 2002 ✓ 초록 (지수 감소, S 로 쓰면 토양 간 차 감소; 계수 미확인).
+
+### D-M7-24. 쇄파대 setup · 파속 (trend-check C20 · C21, 2026-11-22)
+- **Raubenheimer, Guza & Elgar (2001)** JGR 106(C3) 4629 doi 10.1029/2000JC000572 ✓ 원문: setdown 은 국소 선형 Sxx 로 잘 예측. 수심 1 m 안쪽 setup 기울기가 바깥의 ~2 배, K 이론은 안쪽에서 관측의 ~1/2. 물가 setup η/Hs₀ = 0.24 (맞춤) · 평균 0.26 (RMS 0.10), 완만한 쇄파대일수록 큼. K = 3γ²/(3γ² + 8): γ 0.78 → 0.19, γ_rms 0.42 → 0.062 (계산).
+- **Catalán & Haller (2008)** Coast. Eng. 55:93 doi 10.1016/j.coastaleng.2007.09.010 ✓: 실험 내측 쇄파대 상대오차 — 선형 −7 %, solitary √(gh(1+H/h)) +18 %, 1.3√(gh) +24 %, shock +24 %, cnoidal +7 %, KD86 +3 %. 현장 관측은 대체로 solitary 식이 상한 (Inman 1971 · TG82 인용). Tissier et al. (2011) EJM-B 30:635 △: 쇄파대 평균 1.14 × 선형. Thornton & Guza 1982 △: 선형 대비 +20 / −10 % 안.
