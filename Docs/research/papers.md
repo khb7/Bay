@@ -4488,3 +4488,9 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - 계산 (w 0.035 m/s, H₀ 1 m): 너울 T 12 → H₀/L₀ 0.0045 vs MΩ³ 0.0095, P 19,100 (약한 침식, 임계 H₀ 0.69 m); 풍파 T 5 → 0.026 vs 0.131, P 45,800 (뚜렷한 침식, 임계 0.44 m).
 - **Sunamura (1984)** GSA Bull. 95:242 (식 △): tanβ = 0.12·K^(−½), K = H_b/(g^½ D^½ T). D 0.275 mm → 너울 0.074 (1:13.6), 풍파 0.057 (1:17.7).
 - Baldock et al. (2011) CE 58:214 △: 자유 장주기파는 육향 수송 ↑, 파군은 ↓; 가파른 berm + 작은 사주 → 해안선 후퇴. Masselink et al. (2016) CE 113:3 (BARDEX II) △. 시간당 앞빈 경사 변화율: 원문 못 열어 미확인.
+
+### D-M7-20. 해빈 지하수 overheight · exit point · 표면 수분 (trend-check C8 · C10, 2026-11-22)
+- **Kang et al. (1994)** △ (Hallin 2023 인용 · 검색 발췌): 파랑 해변 지하수위가 차폐 해변보다 최대 0.7 m 높음, 수조 내륙 점근 η∞ ≈ 0.62(Z_R − SWL). 침투 분포 xs–xR 선형, 최대 2/3(xR − xs).
+- **Hallin et al. (2023)** Coast. Eng. doi 10.1016/j.coastaleng.2023.104376 ✓ 원문: Noordwijk overheight ~0.2 m 보정. 2 mm 표층 · van Genuchten θr 0.01 · θs 0.35 · α 0.035 (건조) / 0.070 (젖음) /cm · n 4.5 / 2.3. 과잉수 배수 dθ/dt = −(θ − θfc) ln2 / T_dry, T_dry 1.5 h.
+- **Cartwright et al. (2006)** JGR doi 10.1029/2005JC003149 ✓: exit point = 반짝 (seepage face) / 무광 경계, swash · 저주파로 진동. exit point 낙하 v = (K/n) sin²β (Dracos 1963 · Turner 1993). 모세관 프린지 H_ψ ≈ 10σ/(ρ g d50) ≈ 0.25 m (0.3 mm, Turner & Nielsen 1997 식).
+- **Namikas et al. (2010)** Geomorphology doi 10.1016/j.geomorph.2009.07.011 ✓ 초록: 포화 > 25 % · 중간 5–25 % · 건조 < 5 %, 지하수 깊이가 주 결정. **Schmutz & Namikas (2013)** ESPL ✓ 초록: 표면 수분이 수위 변화에 30–100 분 (얕을 때) · ~4 h (60 cm) 지연, 이력. **Schmutz & Namikas (2018)** Aeolian Res. ✓ 초록: 증발은 수위 깊이 90–100 cm 이상에서 의미.
