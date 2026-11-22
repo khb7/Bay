@@ -424,6 +424,35 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 		OMid(SandMaterial::WaterPath(), 1, TEXT("M_Water"));
 	}
 
+	// 후빈 (m3-log #71 · papers D-M7-7): 계산 땅끝 (x 0, 1.30 m) 뒤로 고정 모래 — 사구 발치 z_t 2.53 m (USGS OFR 2015-1154 Table 2 평균) 까지
+	//   경사 0.059 (같은 표 MHW ~ 발치 평균) → 약 21 m. 그 뒤는 사구 문헌 전까지 발치 높이 평지 (임시). 물리 계산 밖 — 평상 처오름 최고 1.15 m 는 땅끝을 안 넘음 (#70). -nobackshore 로 끔
+	if (!FParse::Param(Cmd, TEXT("nobackshore")))
+	{
+		const float Z0 = BCorner[0], Zt = 2.53f, Mb = 0.059f, Flat = 30.f, Bs = 0.25f;
+		const float Lb = FMath::Max(0.f, (Zt - Z0) / Mb), L = Lb + Flat;
+		const int32 BX = FMath::CeilToInt(L / Bs) + 1;
+		int32 Tiles = 2; FParse::Value(Cmd, TEXT("tiles="), Tiles); Tiles = FMath::Clamp(Tiles, 0, 8);
+		const float Y0 = -Tiles * NY * Dx, Y1 = (Tiles + 1) * NY * Dx;
+		const int32 BY = FMath::CeilToInt((Y1 - Y0) / 0.5f) + 1;
+		AActor* BA = World.SpawnActor<AActor>();
+		UProceduralMeshComponent* BM = NewObject<UProceduralMeshComponent>(BA);
+		BA->SetRootComponent(BM); BM->RegisterComponent(); BA->SetActorLocation(GridBase);
+		TArray<FVector> BV, BN; TArray<FVector2D> BU; TArray<int32> BT; TArray<FColor> BC; TArray<FProcMeshTangent> BTan;
+		for (int32 vj = 0; vj < BY; ++vj)
+		for (int32 vi = 0; vi < BX; ++vi)
+		{
+			const float d = FMath::Min(vi * Bs, L);   // 땅끝에서 땅쪽 거리
+			const float z = Z0 + Mb * FMath::Min(d, Lb);
+			BV.Add(FVector(-d * 100.0, (Y0 + FMath::Min(vj * 0.5f, Y1 - Y0)) * 100.0, z * 100.0));
+			BN.Add(FVector(d < Lb ? Mb : 0.f, 0.f, 1.f).GetSafeNormal());
+			BU.Add(FVector2D::ZeroVector);   // M_Sand 는 UV 를 모션 벡터로 씀 — 0 = 정지
+		}
+		for (int32 vj = 0; vj + 1 < BY; ++vj)
+		for (int32 vi = 0; vi + 1 < BX; ++vi) { const int32 a = vj * BX + vi, b = a + 1, c = a + BX, e = c + 1; BT.Append({ a, b, c, b, e, c }); }
+		BM->CreateMeshSection(0, BV, BT, BN, BU, BC, BTan, false);
+		if (UMaterialInterface* Sm = LoadObject<UMaterialInterface>(nullptr, *(FString(SandMaterial::DefaultPath()) + TEXT(".M_Sand")))) { BM->SetMaterial(0, Sm); }
+	}
+
 	for (TActorIterator<ADirectionalLight> It(&World); It; ++It)
 	{
 		It->GetLightComponent()->SetMobility(EComponentMobility::Movable);
@@ -432,8 +461,9 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 	}
 	// 카메라: 땅 쪽 위에서 바다를 비스듬히
 	const FVector Base = Actor->GetActorLocation();
-	const FVector Eye = Base + FVector(Xs * 100.0 - 700.0, NY * Dx * 50.0, 300.0);
-	const FVector Look = Base + FVector(Xs * 100.0 + 500.0, NY * Dx * 50.0, 0.0);
+	const bool bLand = FParse::Param(Cmd, TEXT("camland"));   // 확인용: 바다에서 땅 (후빈) 쪽을 봄
+	const FVector Eye = Base + (bLand ? FVector(Xs * 100.0 + 600.0, NY * Dx * 50.0, 250.0) : FVector(Xs * 100.0 - 700.0, NY * Dx * 50.0, 300.0));
+	const FVector Look = Base + (bLand ? FVector(-1500.0, NY * Dx * 50.0, 100.0) : FVector(Xs * 100.0 + 500.0, NY * Dx * 50.0, 0.0));
 	const FRotator Rot = (Look - Eye).Rotation();
 	Yaw = (float)Rot.Yaw; Pitch = (float)Rot.Pitch;
 	Cam = World.SpawnActor<ACameraActor>(Eye, Rot);
