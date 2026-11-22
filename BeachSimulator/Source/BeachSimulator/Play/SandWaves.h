@@ -111,6 +111,8 @@ private:
 	double LastWall = 0.0, WallSum = 0.0, GpuSumMs = 0.0, GameSumMs = 0.0, RenderSumMs = 0.0;
 	int32 LastDiag = -1;
 	TArray<float> ShotTimes;
+	// 거품 진단 (-foamdiag, m3-log #74): x 별 (y 평균) 평균 F · F>0.9 · F>0.3 비율, 가운데 줄 시계열
+	TArray<double> FdIn[3], FdOut[3]; int32 FdN = 0; TArray<float> FdRowIn, FdRowOut; float OutDx = 0.f; int32 OutNX = 0, OutNY = 0; double NextFd = 60.0;
 	int32 NextShot = 0;
 	FTSTicker::FDelegateHandle TickHandle;
 };

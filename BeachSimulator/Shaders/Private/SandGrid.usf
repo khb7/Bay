@@ -1207,11 +1207,12 @@ void ExportCS(uint3 Tid : SV_DispatchThreadID)
 		//   뒤로 남는 F < 1 은 잔류 거품: 거의 안 움직이고 한 주기 안에 사라짐 (같은 문헌) — 이류 · exp(−Δt/4 s) 그대로. 재질은 F > 0.9 를 꽉 찬 흰색, 그 아래를 패치로.
 		const bool bRise = Wpv > -1e8f && W > Wpv;
 		if (bRise && (W - Wpv) / ExportDt > 0.6f * sqrt(Gravity * h)) { F = 1.f; }
-		//   바깥은 25 cm 라 오르는 앞면이 반 파장까지 퍼짐 → 쇄파 칸의 **마루** (x 이웃 ±2 칸보다 높음) 에서만. 남긴 거품이 F > 0.9 인 ~0.4 s × c ≈ 1 m 가 roller 로 보임 (Carini 2014 현장 L_r 0.5–2 m)
-		if (BreakRatio > 0.f && BrkRO[k].x > 0.5f && i >= 2u && i + 2u < NX)
+		//   바깥 (BreakMode 3, FUNWAVE): BrkRO.x 는 쇄파 "나이" (s, 한 번 켜지면 계속 증가) — #72–73 은 이를 상태로 잘못 읽어 한 번 부서진 칸이 계속 거품을 냄 (m3-log #74: 먼 바다 85 % 시간 거품).
+		//   지금 쇄파 중 = FUNWAVE bOn 과 같게: 0 < 나이 < T_brk 이고 앞면 상승 η_t > C2√(gh) (C2 = BreakStop)
+		if (BreakMode == 3u && BreakRatio > 0.f && bRise)
 		{
-			const float Wm1 = URO[Idx(i - 1u, j)].x, Wm2 = URO[Idx(i - 2u, j)].x, Wp1 = URO[Idx(i + 1u, j)].x, Wp2 = URO[Idx(i + 2u, j)].x;
-			if (W >= max(max(Wm1, Wm2), max(Wp1, Wp2))) { F = 1.f; }
+			const float Age = BrkRO[k].x;
+			if (Age > 0.f && Age < BreakTbrk && (W - Wpv) / ExportDt > BreakStop * sqrt(Gravity * h)) { F = 1.f; }
 		}
 	}
 	FoamRW[k] = F;

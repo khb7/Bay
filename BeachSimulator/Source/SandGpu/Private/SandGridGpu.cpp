@@ -946,6 +946,27 @@ void FSandGridGpu::DownloadSus(TArray<float>& OutS) const
 	FlushRenderingCommands();
 }
 
+void FSandGridGpu::DownloadFoam(TArray<float>& OutF) const
+{
+	const int32 N = Params.NX * Params.NY;
+	OutF.SetNum(N);
+	FState* S = State;
+	ENQUEUE_RENDER_COMMAND(SandGridDownloadFoam)([S, N, &OutF](FRHICommandListImmediate& RHICmdList)
+	{
+		if (!S->Foam.IsValid()) { return; }
+		FRHIGPUBufferReadback Rb(TEXT("SandGrid.DlFoam"));
+		{
+			FRDGBuilder GraphBuilder(RHICmdList, RDG_EVENT_NAME("SandGridDownloadFoam"));
+			AddEnqueueCopyPass(GraphBuilder, &Rb, GraphBuilder.RegisterExternalBuffer(S->Foam), N * sizeof(float));
+			GraphBuilder.Execute();
+		}
+		RHICmdList.SubmitAndBlockUntilGPUIdle();
+		if (const void* Src = Rb.Lock(N * sizeof(float))) { FMemory::Memcpy(OutF.GetData(), Src, N * sizeof(float)); }
+		Rb.Unlock();
+	});
+	FlushRenderingCommands();
+}
+
 void FSandGridGpu::DownloadSedDiag(TArray<FVector4f>& Out0, TArray<FVector4f>& Out1, TArray<FVector4f>* Out2, TArray<FVector4f>* Out3, TArray<FVector4f>* Out4, TArray<FVector4f>* Out5, TArray<FVector4f>* Out6, TArray<FVector4f>* Out7) const
 {
 	const int32 N = Params.NX * Params.NY;

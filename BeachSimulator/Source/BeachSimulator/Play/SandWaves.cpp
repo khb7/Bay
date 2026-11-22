@@ -292,6 +292,7 @@ void USandWavesSubsystem::OnWorldBeginPlay(UWorld& World)
 		if (It->GetClass()->GetName().Contains(TEXT("SpikeActor"))) { It->SetActorTickEnabled(false); It->SetActorHiddenInGame(true); }
 	}
 	if (Sc.bNest) { GridOuter = MakeUnique<FSandGridGpu>(); GridOuter->Init(Sc.GO); G.NestOuter = GridOuter.Get(); }
+	if (Sc.bNest) { OutDx = Sc.GO.Dx; OutNX = Sc.GO.NX; OutNY = Sc.GO.NY; }
 	Grid = MakeUnique<FSandGridGpu>();
 	Grid->Init(G);
 	UE_LOG(LogSandWaves, Display, TEXT("%s"), *Sc.Info);
@@ -1068,6 +1069,30 @@ bool USandWavesSubsystem::Tick(float DeltaTime)
 		FScreenshotRequest::RequestScreenshot(Path, false, false);
 		UE_LOG(LogSandWaves, Display, TEXT("T3 %.1fs: 스크린샷 %s · 격자 GPU %.2f ms · 서브스텝 %d"), SimTime, *Path, Grid->LastGpuMs(), Grid->GetLastSubsteps());
 		++NextShot;
+	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("foamdiag")) && SimTime >= NextFd)
+	{
+		NextFd += 0.1;
+		auto Acc = [](const TArray<float>& F, int32 Nx, int32 Ny, TArray<double>* A, TArray<float>& Row)
+		{
+			for (int32 q = 0; q < 3; ++q) { if (A[q].Num() != Nx) { A[q].Init(0.0, Nx); } }
+			for (int32 j = 0; j < Ny; ++j) for (int32 i = 0; i < Nx; ++i) { const float f = F[j * Nx + i]; A[0][i] += f; A[1][i] += f > 0.9f ? 1.0 : 0.0; A[2][i] += f > 0.3f ? 1.0 : 0.0; }
+			for (int32 i = 0; i < Nx; ++i) { Row.Add(F[(Ny / 2) * Nx + i]); }
+		};
+		TArray<float> F; Grid->DownloadFoam(F); Acc(F, NX, NY, FdIn, FdRowIn);
+		if (GridOuter.IsValid()) { GridOuter->DownloadFoam(F); Acc(F, OutNX, OutNY, FdOut, FdRowOut); }
+		++FdN;
+	}
+	if (bAuto && NextShot >= ShotTimes.Num() && SimTime > ShotTimes.Last() + 1.f && FdN > 0)
+	{
+		FString Csv = TEXT("grid,x,F_mean,frac_active,frac_vis\n");
+		auto Put = [&](const TCHAR* G, const TArray<double>* A, int32 Nx, int32 Ny, float D) { for (int32 i = 0; i < A[0].Num(); ++i) { const double n = (double)FdN * Ny; Csv += FString::Printf(TEXT("%s,%.3f,%.5f,%.5f,%.5f\n"), G, (i + 0.5) * D, A[0][i] / n, A[1][i] / n, A[2][i] / n); } };
+		Put(TEXT("in"), FdIn, NX, NY, Dx); if (FdOut[0].Num() > 0) { Put(TEXT("out"), FdOut, OutNX, OutNY, OutDx); }
+		const FString Base = ShotPath.LeftChop(4);
+		FFileHelper::SaveStringToFile(Csv, *(Base + TEXT("_foam.csv")));
+		FFileHelper::SaveArrayToFile(TArrayView<const uint8>((const uint8*)FdRowIn.GetData(), FdRowIn.Num() * sizeof(float)), *(Base + TEXT("_foamrow.bin")));
+		FFileHelper::SaveArrayToFile(TArrayView<const uint8>((const uint8*)FdRowOut.GetData(), FdRowOut.Num() * sizeof(float)), *(Base + TEXT("_foamrowo.bin")));
+		FdN = 0;
 	}
 	if (bAuto && NextShot >= ShotTimes.Num() && SimTime > ShotTimes.Last() + 1.f) { UE_LOG(LogSandWaves, Display, TEXT("T5 프레임: 평균 %.2f ms (%d 프레임, 10 s 뒤) · 격자 GPU %.2f ms · GPU 프레임 %.2f · 게임 스레드 %.2f · 렌더 스레드 %.2f ms"), 1000.0 * WallSum / FMath::Max(WallN, 1), WallN, Grid->LastGpuMs(), GpuSumMs / FMath::Max(WallN, 1), GameSumMs / FMath::Max(WallN, 1), RenderSumMs / FMath::Max(WallN, 1)); UE_LOG(LogSandWaves, Display, TEXT("T6 도구: 파냄 %.1f L · 쌓음 %.1f L · 손 %.1f L · 부은 물 %.1f L"), DugM3 * 1e3, PiledM3 * 1e3, HandM3 * 1e3f, ToolWaterM3 * 1e3f); FPlatformMisc::RequestExit(false); return false; }   // 마지막 스크린샷이 찍힐 프레임을 남긴다
 	return true;
