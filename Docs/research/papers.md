@@ -4573,3 +4573,11 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - 우리 대응 후보: 안쪽 격자 swash 에서 부유 C_eq (또는 연행) 에 오름/내림 비 ~2 — `-cfasym` (소류 마찰 오름 ×2, Conley & Barnes) 의 부유사 짝. 문헌 계수 하나로 정해지는 장점, 원인 (bore 난류 · 얇은 내림) 을 직접 해상하진 않는 경험 보정이라는 단점. T1d 까지 네 처방 실패 (trend-check) 뒤의 구조 선택지.
 - t1d 결과: 매끄러운 수심 제한 (D-M7-32) ✘ — 너울 윗 swash −0.201 → −0.387 (h_c 0.02) · −0.267 (0.05).
 - **T3 결과 (2026-11-23)**: 평탄 수로 대신 같은 단면에서 진폭 · θ 시험 — H₀ 0.3 무손실, θ 1.0 · 1.3 · 2.0 같음 → minmod 극값 깎임 가설 ✘. 손실은 Hs/h ≈ 0.26 포화 쇄파 (D-M7-12 Raubenheimer 산포 안). FUNWAVE-TVD 식 4 차 재구성 · van Leer 로 바꿀 이유 없음.
+
+### D-M7-34. 지침 경계에서 처오름 Stockdon ~0.5 — 문헌 대조 (T2 남은 것, 2026-11-23)
+- **Stockdon et al. (2006)** CE 53:573 ✓ 초록 (USGS): S_IG 는 H₀ · L₀ 로만 (앞빈 · 쇄파대 경사와 유의한 선형 관계 없음), 소산형은 setup · swash 모두 H₀L₀ 만. R2 오차 bias −17 cm · RMS 38 cm. 중간 · 반사형 해변은 앞빈 경사 평균화로 큰 상대 오차. Stockdon et al. (2014) △: 극한 조건 setup 은 수정 필요.
+- **de Bakker, Tissier & Ruessink (2014)** Cont. Shelf Res. 72:73–82 ✓ 초록: 1:80 · 1:30 해변 현장, ≳ 0.017–0.025 Hz IG 는 물가에서 강하게 소산 (진행파), 더 낮은 주파수는 정상파 · 소산 적음. 반사계수는 정규화 경사 β_H = (β/ω)√(g/h) 로 정해짐 (Ruessink 1998, Battjes et al. 2004 △): 완만 (mild-slope) 영역이면 IG 쇄파가 소산 지배. 2016 SWASH 연구 △: 저경사 해변에서 IG–IG 상호작용 → 고조파 · IG 쇄파.
+- 우리 단면: Dean A 0.1 쇄파대 경사 ~0.01 (x 300 m), IG 100 s · h 2 m 에서 β_H ≈ 0.35 — mild-slope 영역 경계 → IG 물가 소산이 물리적으로 큼. Stockdon S_IG 가 경사와 무관하다는 점과는 긴장 (자료 해변 다수가 이보다 가파른 쇄파대). 판단: 0.5 는 (a) 실현 산포, (b) 완만 단면의 IG 소산 (물리), (c) 모델 IG 생성 부족 중 어느 것인지 미정 — 시드 3 개 (t2s*) 로 (a) 먼저.
+- **시드 (T5)**: 지침 경계 시드 4 개 R2 / Stockdon 0.47–0.53 (±6 %), setup 0.44–0.48 → 실현 산포 아님.
+- **Martins et al. (2022)** Ocean Modelling △ (검색 요약, 원문 링크는 HTML 반환): 깊이 적분 모델은 물가 setup 을 **최대 2 배까지 과소** 예측할 수 있음 — 1:14 앞빈에서 최대 setup 을 vortex-force 식 10–15 %, radiation stress 식 30 % 과소. 물가의 가장 큰 차이는 **swash 과정** 기원 (위상 해상 시뮬). **Raubenheimer et al. 2001 · Apotsos et al. 2007** (Bertin 그룹 발표 자료 △): LHS64 기반 모델의 물가 setup 심한 과소. Apotsos (2007) △: roller 비선형 강제가 setup 에 중요. Guérin et al. (2018) OM 123:86 △: 쇄파대 순환이 setup 에 주는 영향 (3D).
+- 판단: 우리 setup 0.44–0.48 × Stockdon (η/Hs₀ 0.13–0.14) 은 깊이 적분 모델의 알려진 과소 범위 (최대 ×0.5) 끝. roller 운동량 (`-breakroller` 옵션 존재) 시험이 문헌상 첫 후보.

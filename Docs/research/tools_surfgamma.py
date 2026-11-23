@@ -63,7 +63,8 @@ def main():
     fhi = float(sys.argv[3]) if len(sys.argv) > 3 else 0.5
     t0 = float(sys.argv[4]) if len(sys.argv) > 4 else 120.0
     ri = np.fromfile(D + f'waves_{tag}_row.bin', dtype=np.float32).reshape(-1, 168)
-    ro = np.fromfile(D + f'waves_{tag}_rowo.bin', dtype=np.float32).reshape(-1, 837)
+    ro = np.fromfile(D + f'waves_{tag}_rowo.bin', dtype=np.float32)
+    ro = ro.reshape(ri.shape[0], ro.size // ri.shape[0])   # 바깥 칸 수는 경계 수심 따라 (3.3 m 837 · 11 m 2138)
     # 두 기록 모두 120 s 부터 (900 s 실행 → 7801 줄)
     ni = ri.shape[0]
     so = max(0, int(round((t0 - 120) / DT)))
@@ -75,7 +76,7 @@ def main():
         if r:
             r['grid'] = 'in'
             rows.append(r)
-    for i in range(130, 837, 20):
+    for i in range(130, min(ro.shape[1], 837), 20):   # x ≤ 209 m (Dean 구간)
         r = stats(ro[:, i], i * 0.25 + 0.125, flo, fhi)
         if r:
             r['grid'] = 'out'
