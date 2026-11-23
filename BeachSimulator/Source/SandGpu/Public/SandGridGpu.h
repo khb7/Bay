@@ -50,6 +50,7 @@ struct FSandGridGpuInit
 	bool  bSus = false;             // T4b 부유사 (papers D-M3-25)
 	float SedD90 = 3e-4f;           // m — XBeach 예제 값 (근거 약함)
 	float SusTsfac = 0.1f, SusTsmin = 0.5f, SusCmax = 0.1f;   // XBeach 기본
+	float SusHdep = 0.f;   // T1d: h < 값이면 hC_eq ∝ h (C_eq 분모 max(h, 값)) — Pritchard & Hogg 2005 q = A h u³ 꼴, Li 2017 (papers D-M7-32)
 	float SusHmin = 0.f;   // T1c: h < 값이면 부유 연행 없음 (C_eq = 0) — sheet-flow 층 (Lanckriet 2014) · Delft3D SedThr (papers D-M7-27)
 	bool  bSedClosed = false;
 	bool  bSedKb = false;

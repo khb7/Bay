@@ -986,7 +986,8 @@ float SusWs;             // 침강속도 w_s (Soulsby 1997)
 float SusD90;
 float SusTsfac;
 float SusTsmin;
-float SusHmin;     // T1c: h < 값이면 C_eq = 0 (papers D-M7-27)
+float SusHmin;
+float SusHdep;     // T1d: C_eq 분모 max(h, 값) — 얇은 물에서 hC_eq ∝ h (papers D-M7-32)     // T1c: h < 값이면 C_eq = 0 (papers D-M7-27)
 float SusCmax;
 StructuredBuffer<float>    SusCRO;   // S = hC (m)
 RWStructuredBuffer<float>  SusCRW;
@@ -1174,7 +1175,7 @@ void SusCS(uint3 Tid : SV_DispatchThreadID)
 	{
 		const float Kb = bBoreKb != 0u ? SedKbRaw(i, j, h) : SedKb(i, j, h);   // T1: bore k 는 부유사에만
 		const float Ex = max(sqrt(dot(U.yz / h, U.yz / h) + 1.45f * Kb) - 0.19f * pow(SedD, 0.1f) * log10(max(4.f * h / SusD90, 1.f)), 0.f);
-		const float Ceq = h < SusHmin ? 0.f : min(SusAss / h * pow(Ex, 2.4f), 0.5f * SusCmax);
+		const float Ceq = h < SusHmin ? 0.f : min(SusAss / max(h, SusHdep) * pow(Ex, 2.4f), 0.5f * SusCmax);
 		const float A = Dt / max(SusTsfac * h / SusWs, SusTsmin);
 		Sn = (Sa + A * h * Ceq) / (1.f + A);
 	}

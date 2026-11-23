@@ -173,6 +173,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	FParse::Value(Cmd, TEXT("tsfac="), G.SusTsfac);
 	FParse::Value(Cmd, TEXT("tsmin="), G.SusTsmin);
 	FParse::Value(Cmd, TEXT("sushmin="), G.SusHmin);
+	FParse::Value(Cmd, TEXT("susdepth="), G.SusHdep);
 	G.bBoreKb = FParse::Param(Cmd, TEXT("borekb"));   // T1 안쪽 격자 bore 난류 k → 부유사 (Zhu & Dodd 2020)
 	double MeanDeg = 10.0, SwellSpread = 15.0, WindSpread = 40.0;
 	FParse::Value(Cmd, TEXT("wavedir="), MeanDeg);
@@ -212,6 +213,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 		const double Dyo = Ly / NYo;
 		FSandGridGpuInit& O = Out.GO;
 		O.NX = NXo; O.NY = NYo; O.Dx = (float)NestDx; O.Dy = (float)Dyo; O.Manning = Manning; O.Ks = G.Ks; O.BreakStop = G.BreakStop; O.BreakMode = G.BreakMode; O.BreakRatio = G.BreakRatio; O.BreakSlope = G.BreakSlope; O.EddyDelta = G.EddyDelta; O.BreakTbrk = G.BreakTbrk; O.bBreakRoller = G.bBreakRoller; O.bTke = G.bTke; O.TkeKappa = G.TkeKappa; O.TkeSigma = G.TkeSigma;
+		FParse::Value(Cmd, TEXT("otheta="), O.Theta);   // T3: 바깥 격자 KP07 minmod θ (기본 1.3, 1–2 허용 — 클수록 덜 소산, papers D-M7-31)
 		O.bOpenEast = true; O.bPeriodicY = true; O.bDispersive = true; O.bBoundIg = !FParse::Param(Cmd, TEXT("igoff"));
 		O.BCorner.SetNum((NXo + 1) * (NYo + 1));
 		for (int32 j = 0; j <= NYo; ++j)

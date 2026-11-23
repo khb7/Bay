@@ -999,3 +999,8 @@ swash (b0 > 0) 전체 합 기준:
 - 새 도구: `tools_probe.py` (칸별 연행 · 침강을 오름/내림 · 수심 구간별), `tools_budget.py` (바닥 변화를 소류 · 부유 플럭스 발산으로 분해).
 - 결과 (trend-check "T1 맨 위 침식 진단"): 원인 = 내림 얇은 막 부유 연행. `-sushmin` 0.02 ✘ (침식 이동 · 증가), 0.05 ✘ (부유 꺼짐, 풍파도 퇴적). 기준값 정정: 너울 −0.196 · 풍파 −0.852 (이전 표의 cfa*S 는 d9ffb61 · c42a430 전 실행).
 - 실행 태그: t1probeTs · t1probeS · t1cCalmH2 · t1cCalmH5 · t1cStormS · t1cStormH5.
+
+## 실행 #79 — T1d `-susdepth=` 매끄러운 수심 제한 (2026-11-23, 4 건)
+- 새 옵션 `-susdepth=` (C_eq 분모 max(h, 값), 기본 0) · `-otheta=` (바깥 격자 minmod θ, T3 준비, 기본 1.3) · 도구 `tools_shoal.py` (바깥 격자 Hs vs 선형 천수).
+- 결과 ✘: 너울 윗 swash −0.201 → −0.387 (0.02) · −0.267 (0.05). 계수 처방 4 번 실패 → 구조 선택 대기 (trend-check "T1d", papers D-M7-33).
+- 실행 태그: t1dCalmD2 · t1dCalmD5 · t1dStormD2 · t1dStormD5.
