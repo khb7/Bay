@@ -216,7 +216,8 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 		const double Dyo = Ly / NYo;
 		FSandGridGpuInit& O = Out.GO;
 		O.NX = NXo; O.NY = NYo; O.Dx = (float)NestDx; O.Dy = (float)Dyo; O.Manning = Manning; O.Ks = G.Ks; O.BreakStop = G.BreakStop; O.BreakMode = G.BreakMode; O.BreakRatio = G.BreakRatio; O.BreakSlope = G.BreakSlope; O.EddyDelta = G.EddyDelta; O.BreakTbrk = G.BreakTbrk; O.bBreakRoller = G.bBreakRoller; O.bTke = G.bTke; O.TkeKappa = G.TkeKappa; O.TkeSigma = G.TkeSigma;
-		FParse::Value(Cmd, TEXT("otheta="), O.Theta);   // T3: 바깥 격자 KP07 minmod θ (기본 1.3, 1–2 허용 — 클수록 덜 소산, papers D-M7-31)
+		FParse::Value(Cmd, TEXT("otheta="), O.Theta);
+		O.bForceLongSolve = FParse::Param(Cmd, TEXT("forcelong"));   // 검증: 긴 줄 솔버를 짧은 줄에도   // T3: 바깥 격자 KP07 minmod θ (기본 1.3, 1–2 허용 — 클수록 덜 소산, papers D-M7-31)
 		O.bOpenEast = true; O.bPeriodicY = true; O.bDispersive = true; O.bBoundIg = !FParse::Param(Cmd, TEXT("igoff"));
 		O.BCorner.SetNum((NXo + 1) * (NYo + 1));
 		for (int32 j = 0; j <= NYo; ++j)

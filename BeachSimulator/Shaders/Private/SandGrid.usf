@@ -915,6 +915,65 @@ void RollerCS(uint3 Tid : SV_DispatchThreadID)
 	for (uint k = 0u; k < NX; ++k) { if (NuRW[Idx(k, j)] > 0.f) { BrkDiagRW[Idx(k, j)].x += Dt; } }   // 진단: ν > 0 누적 시간 (roller 포함)
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// 긴 x 줄 (LINE_MAX < N <= 2*LINE_MAX, 비주기) 삼중대각 — 순환 축소 (CR) 한 단계로 홀수 행을 소거해 짝수 행 <= LINE_MAX 개로 줄이고
+// 기존 PCR 로 푼 뒤 홀수 행을 역대입. groupshared 크기는 그대로. 스레드 t = 행 2t (짝) · 2t+1 (홀).
+// 이전엔 NX > 1024 면 분산을 통째로 껐다 (깊은 경계 바깥 격자가 NSWE 로 돌던 원인, m3-log #83).
+void SolveRowCoef(int i, int j, uint N, out float a, out float b, out float c, out float r)
+{
+	a = 0.f; b = 1.f; c = 0.f; r = 0.f;
+	if (i >= (int)N) { return; }
+	const float d = DstAt(i, j);
+	const float dd = (DepAt(i + 1, j) - DepAt(i - 1, j)) / (2 * Dx);
+	const float bb = (BMS + 1.f / 3.f) * d * d / (Dx * Dx), aa = d * dd / 3.f / (2 * Dx);
+	a = -bb + aa; b = 1 + 2 * bb; c = -bb - aa;
+	if (i == 0) { b -= a; a = 0.f; }
+	if (i == (int)N - 1) { b -= c; c = 0.f; }
+	r = UVRO[Idx((uint)i, (uint)j)].x;
+}
+[numthreads(LINE_MAX, 1, 1)]
+void SolveLongCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
+{
+	const uint j = Gid.x, t = Gtid.x, N = NX, M = (N + 1u) / 2u;   // M = 짝수 행 수 <= LINE_MAX
+	float ae, be, ce, re, ao, bo, co, ro;
+	SolveRowCoef((int)(2u * t), (int)j, N, ae, be, ce, re);
+	SolveRowCoef((int)(2u * t + 1u), (int)j, N, ao, bo, co, ro);
+	SA[t] = ao; SB[t] = bo; SC[t] = co; SD[t] = ro;
+	GroupMemoryBarrierWithGroupSync();
+	// 짝수 행 2t 에서 홀수 이웃 2t-1 (t-1) · 2t+1 (t) 소거
+	float a = 0.f, b = 1.f, c = 0.f, r = 0.f;
+	{
+		float am = 0.f, bm = 1.f, cm = 0.f, dm = 0.f;
+		if (t >= 1u) { am = SA[t - 1u]; bm = SB[t - 1u]; cm = SC[t - 1u]; dm = SD[t - 1u]; }
+		const float k1 = ae / bm, k2 = ce / bo;
+		a = -am * k1; c = -co * k2; b = be - cm * k1 - ao * k2; r = re - dm * k1 - ro * k2;
+	}
+	GroupMemoryBarrierWithGroupSync();
+	SA[t] = a; SB[t] = b; SC[t] = c; SD[t] = r;
+	GroupMemoryBarrierWithGroupSync();
+	for (uint s = 1; s < M; s <<= 1)
+	{
+		float am = 0.f, bm = 1.f, cm = 0.f, dm = 0.f, ap = 0.f, bp = 1.f, cp = 0.f, dp = 0.f;
+		if (t >= s) { am = SA[t - s]; bm = SB[t - s]; cm = SC[t - s]; dm = SD[t - s]; }
+		if (t + s < LINE_MAX) { ap = SA[t + s]; bp = SB[t + s]; cp = SC[t + s]; dp = SD[t + s]; }
+		const float k1 = a / bm, k2 = c / bp;
+		const float na = -am * k1, nc = -cp * k2, nb = b - cm * k1 - ap * k2, nd = r - dm * k1 - dp * k2;
+		a = na; b = nb; c = nc; r = nd;
+		GroupMemoryBarrierWithGroupSync();
+		SA[t] = a; SB[t] = b; SC[t] = c; SD[t] = r;
+		GroupMemoryBarrierWithGroupSync();
+	}
+	const float xe = r / b;
+	GroupMemoryBarrierWithGroupSync();
+	SD[t] = xe;
+	GroupMemoryBarrierWithGroupSync();
+	const float xn = t + 1u < M ? SD[t + 1u] : 0.f;
+	const float xo = (ro - ao * xe - co * xn) / bo;
+	if (2u * t < N)      { const uint k = Idx(2u * t, j);      float4 O = UOutRW[k]; O.y = xe; UOutRW[k] = O; }
+	if (2u * t + 1u < N) { const uint k = Idx(2u * t + 1u, j); float4 O = UOutRW[k]; O.y = xo; UOutRW[k] = O; }
+}
+
 uint EddyNext(uint L, uint s) { return LineAxis == 0u ? Idx(s, L) : Idx(L, s); }
 float EddyFace(float A, float B) { return 0.5f * (A + B); }   // FUNWAVE 와 같이 칸 ν 평균 — "양쪽 다 > 0" 이면 1~2 칸 폭 앞면 띠에서 확산이 0 이 됐다 (m3-log #23)
 // 줄 하나 = 그룹 하나, PCR (SolveCS 와 같은 방식, 우변 두 개 = hu, hv). 예전엔 스레드 하나가 줄 전체를 Thomas 로 (m3-plan p3)
@@ -952,6 +1011,60 @@ void EddyCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
 		const uint k = EddyNext(L, t);
 		float4 U = UOutRW[k]; U.yz = r / b; UOutRW[k] = U;
 	}
+}
+
+// 긴 x 줄 와점성 (EddyCS 의 CR 한 단계판, SolveLongCS 와 같은 방식, 우변 = (hu, hv))
+void EddyRowCoef(uint i, uint j, uint N, float rr, out float a, out float b, out float c, out float2 r)
+{
+	a = 0.f; b = 1.f; c = 0.f; r = 0.f;
+	if (i >= N) { return; }
+	const uint k = Idx(i, j);
+	const float Nc = NuRO[k];
+	const float Nl = i > 0u ? EddyFace(Nc, NuRO[Idx(i - 1u, j)]) : 0.f;
+	const float Nr = i + 1u < N ? EddyFace(Nc, NuRO[Idx(i + 1u, j)]) : 0.f;
+	a = -rr * Nl; c = -rr * Nr; b = 1.f + rr * (Nl + Nr);
+	r = UOutRW[k].yz;
+}
+[numthreads(LINE_MAX, 1, 1)]
+void EddyLongCS(uint3 Gid : SV_GroupID, uint3 Gtid : SV_GroupThreadID)
+{
+	const uint j = Gid.x, t = Gtid.x, N = NX, M = (N + 1u) / 2u;
+	const float rr = TimeRO[0] / (Dx * Dx);
+	float ae, be, ce, ao, bo, co; float2 re, ro;
+	EddyRowCoef(2u * t, j, N, rr, ae, be, ce, re);
+	EddyRowCoef(2u * t + 1u, j, N, rr, ao, bo, co, ro);
+	SA[t] = ao; SB[t] = bo; SC[t] = co; SD[t] = ro.x; SE[t] = ro.y;
+	GroupMemoryBarrierWithGroupSync();
+	float a, b, c; float2 r;
+	{
+		float am = 0.f, bm = 1.f, cm = 0.f; float2 dm = 0.f;
+		if (t >= 1u) { am = SA[t - 1u]; bm = SB[t - 1u]; cm = SC[t - 1u]; dm = float2(SD[t - 1u], SE[t - 1u]); }
+		const float k1 = ae / bm, k2 = ce / bo;
+		a = -am * k1; c = -co * k2; b = be - cm * k1 - ao * k2; r = re - dm * k1 - ro * k2;
+	}
+	GroupMemoryBarrierWithGroupSync();
+	SA[t] = a; SB[t] = b; SC[t] = c; SD[t] = r.x; SE[t] = r.y;
+	GroupMemoryBarrierWithGroupSync();
+	for (uint s = 1; s < M; s <<= 1)
+	{
+		float am = 0.f, bm = 1.f, cm = 0.f, ap = 0.f, bp = 1.f, cp = 0.f; float2 dm = 0.f, dp = 0.f;
+		if (t >= s) { am = SA[t - s]; bm = SB[t - s]; cm = SC[t - s]; dm = float2(SD[t - s], SE[t - s]); }
+		if (t + s < LINE_MAX) { ap = SA[t + s]; bp = SB[t + s]; cp = SC[t + s]; dp = float2(SD[t + s], SE[t + s]); }
+		const float k1 = a / bm, k2 = c / bp;
+		const float nb = b - cm * k1 - ap * k2;
+		r = r - dm * k1 - dp * k2; a = -am * k1; c = -cp * k2; b = nb;
+		GroupMemoryBarrierWithGroupSync();
+		SA[t] = a; SB[t] = b; SC[t] = c; SD[t] = r.x; SE[t] = r.y;
+		GroupMemoryBarrierWithGroupSync();
+	}
+	const float2 xe = r / b;
+	GroupMemoryBarrierWithGroupSync();
+	SD[t] = xe.x; SE[t] = xe.y;
+	GroupMemoryBarrierWithGroupSync();
+	const float2 xn = t + 1u < M ? float2(SD[t + 1u], SE[t + 1u]) : float2(0.f, 0.f);
+	const float2 xo = (ro - ao * xe - co * xn) / bo;
+	if (2u * t < N)      { const uint k = Idx(2u * t, j);      float4 U = UOutRW[k]; U.yz = xe; UOutRW[k] = U; }
+	if (2u * t + 1u < N) { const uint k = Idx(2u * t + 1u, j); float4 U = UOutRW[k]; U.yz = xo; UOutRW[k] = U; }
 }
 
 // ---------------------------------------------------------------------------------------------

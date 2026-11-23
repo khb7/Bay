@@ -214,6 +214,8 @@ GRID_SHADER(FSandGridDispCS,   "DispCS")
 GRID_SHADER(FSandGridSolveCS,  "SolveCS")
 GRID_SHADER64(FSandGridSolve64CS, "SolveCS")
 GRID_SHADER64(FSandGridEddy64CS, "EddyCS")
+GRID_SHADER(FSandGridSolveLongCS, "SolveLongCS")   // x 줄 1024 < NX <= 2048 (CR 한 단계 + PCR, m3-log #83)
+GRID_SHADER(FSandGridEddyLongCS, "EddyLongCS")
 GRID_SHADER(FSandGridFixCS,    "FixCS")
 GRID_SHADER(FSandGridNestCS,   "NestCS")
 GRID_SHADER(FSandGridGwFluxCS, "GwFluxCS")
@@ -294,7 +296,7 @@ void FSandGridGpu::Init(const FSandGridGpuInit& In)
 {
 	Params = In;
 	if (Params.EpsDesing <= 0.f) { Params.EpsDesing = FMath::Pow(FMath::Max(In.Dx, In.Dy), 4.f); }
-	if (Params.bDispersive && (In.NX > 1024 || In.NY > 1024)) { UE_LOG(LogTemp, Warning, TEXT("SandGrid: 분산은 줄 길이 1024 까지 (SolveCS 그룹 하나) — 끔")); Params.bDispersive = false; }
+	if (Params.bDispersive && (In.NX > 2048 || In.NY > 1024)) { UE_LOG(LogTemp, Error, TEXT("SandGrid: 분산은 x 줄 2048 · y 줄 1024 까지 (SolveCS · SolveLongCS) — 끔 (NX %d NY %d)"), In.NX, In.NY); Params.bDispersive = false; }
 	const int32 N = In.NX * In.NY;
 	TArray<FVector4f> U; U.SetNum(N);
 	for (int32 k = 0; k < N; ++k) { U[k] = FVector4f(In.W[k], In.HU[k], In.HV[k], 0.f); }
@@ -664,6 +666,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 					X.DstRO = GraphBuilder.CreateSRV(Ds); X.UVRO = GraphBuilder.CreateSRV(UV); X.UOutRW = GraphBuilder.CreateUAV(Target);
 					const FIntVector G(Ax == 0 ? P.NY : P.NX, 1, 1);
 					if ((Ax == 0 ? P.NX : P.NY) <= 64) { AddGridPass<FSandGridSolve64CS>(GraphBuilder, RDG_EVENT_NAME("SandGridSolve"), ShaderMap, X, G); }
+					else if (Ax == 0 && (P.NX > 1024 || P.bForceLongSolve)) { AddGridPass<FSandGridSolveLongCS>(GraphBuilder, RDG_EVENT_NAME("SandGridSolveLong"), ShaderMap, X, G); }
 					else { AddGridPass<FSandGridSolveCS>(GraphBuilder, RDG_EVENT_NAME("SandGridSolve"), ShaderMap, X, G); }
 				}
 			};
@@ -815,6 +818,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 						E.NuRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Nu));
 						const FIntVector G(Ax == 0 ? P.NY : P.NX, 1, 1);   // 줄 하나 = 그룹 하나 (PCR)
 						if ((Ax == 0 ? P.NX : P.NY) <= 64) { AddGridPass<FSandGridEddy64CS>(GraphBuilder, RDG_EVENT_NAME("SandGridEddy"), ShaderMap, E, G); }
+						else if (Ax == 0 && (P.NX > 1024 || P.bForceLongSolve)) { AddGridPass<FSandGridEddyLongCS>(GraphBuilder, RDG_EVENT_NAME("SandGridEddyLong"), ShaderMap, E, G); }
 						else { AddGridPass<FSandGridEddyCS>(GraphBuilder, RDG_EVENT_NAME("SandGridEddy"), ShaderMap, E, G); }
 					}
 				}
