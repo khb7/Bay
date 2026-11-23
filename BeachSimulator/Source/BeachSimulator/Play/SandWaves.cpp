@@ -110,7 +110,9 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	NX += LandCells;
 	// 해변 단면 (papers D-M3-6): 물가 x_s 에서 바다 쪽(+x) Dean h = A·(x − x_s)^(2/3), 땅 쪽 직선 (기본 1:15)
 	double Slope = 1.0 / 15.0; { double Inv = 0; if (FParse::Value(Cmd, TEXT("beachslope="), Inv) && Inv > 0) { Slope = 1.0 / Inv; } }   // -beachslope=10 → 1:10
-	const double A = 0.1, Xs = XsBase + LandCells * Dx;   // 땅 45% + 추가 폭 — 처오름이 뒷벽에 닿지 않게 (m3-log #5 · #16)
+	// 기준 해변 Narrabeen (papers D-M7-35): D50 0.3 mm → Dean (1987) A ≈ 0.13 (이전 0.1 = 0.2 mm). -deana= 로 바꿈
+	double A = 0.13; FParse::Value(Cmd, TEXT("deana="), A);
+	const double Xs = XsBase + LandCells * Dx;   // 땅 45% + 추가 폭 — 처오름이 뒷벽에 닿지 않게 (m3-log #5 · #16)
 	TArray<float>& BCorner = Out.BCorner;
 	BCorner.SetNum((NX + 1) * (NY + 1));
 	for (int32 j = 0; j <= NY; ++j)
@@ -125,7 +127,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	const float H0 = -BCorner[NX];   // 경계 정지 수심
 	float Hs = (float)(1.416 * 0.42 * H0);   // 쇄파대 포화 H_rms = 0.42·h (Thornton & Guza 1982)
 	FParse::Value(Cmd, TEXT("wavehs="), Hs);
-	double SwellFrac = 0.6, SwellTp = 12.0, WindTp = 5.0;
+	double SwellFrac = 0.6, SwellTp = 10.0, WindTp = 5.0;   // Narrabeen 심해 Tp ≅ 10 s (D-M7-35, 이전 12)
 	FParse::Value(Cmd, TEXT("swellfrac="), SwellFrac);
 	FParse::Value(Cmd, TEXT("swelltp="), SwellTp);
 	FParse::Value(Cmd, TEXT("windtp="), WindTp);
@@ -168,6 +170,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	G.bMorph = FParse::Param(Cmd, TEXT("morph"));
 	G.bSus = G.bMorph && FParse::Param(Cmd, TEXT("sus"));   // T4b 부유사
 	FParse::Value(Cmd, TEXT("morfac="), G.Morfac);
+	G.SedD50 = (float)D50;   // 모래 입경 = 마찰 입경 (-d50=, Narrabeen 0.3 mm). 이전 2.5e-4 고정
 	FParse::Value(Cmd, TEXT("sedd="), G.SedD50);
 	// T1 (fix-list, papers D-M7-26): 부유사 적응 시간 T_s = max(tsfac·h/w_s, tsmin) — 기본 XBeach 0.1 · 0.5 s. P&H 2005 침강 지연 시험용
 	FParse::Value(Cmd, TEXT("tsfac="), G.SusTsfac);
@@ -185,7 +188,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	G.Waves = MakeWaves(Hs, SwellFrac, SwellTp, WindTp, Seed, H0, NY * Dx, MeanDeg, SwellSpread, WindSpread, false, bEq);
 	// T3b 장주기파 (B 안, m3-plan): 경계 IG 유의파고 = IgCoef · H₀(먼바다). 이론 식(LH&S 1962)은 쇄파 수심에선 발산 · 깊은 곳 + Green 법칙은
 	// 관측의 수십 분의 1 이라 (m3-log #7) 관측(Stockdon IG swash)에 맞춰 계수 하나를 정한다. 부호 = 파군 밑 수위 하강이 풀려 들어온다
-	double DeepH0 = 1.0, IgCoef = 0.25;
+	double DeepH0 = 1.6, IgCoef = 0.25;   // Narrabeen 심해 평균 Hs ≅ 1.6 m (D-M7-35, 이전 1.0)
 	FParse::Value(Cmd, TEXT("waveh0="), DeepH0);
 	FParse::Value(Cmd, TEXT("igcoef="), IgCoef);
 	{
@@ -200,16 +203,16 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 		const double Sd = FMath::Sqrt(FMath::Max(1e-12, S2 / Nn - FMath::Square(Sum2 / Nn)));
 		G.IgGain = FParse::Param(Cmd, TEXT("igoff")) ? 0.f : (float)(-IgCoef * DeepH0 / (4.0 * Sd));
 	}
-	// T3c c4 한 방향 nesting (m3-plan c4, -nest): 바깥 격자 = 같은 단면을 수심 -nestdepth= (3.3 m, Hm0/d < 0.3) 까지, 칸 -nestdx= (25 cm), 분산 · 묶인 IG.
+	// T3c c4 한 방향 nesting (m3-plan c4, -nest): 바깥 격자 = 같은 단면을 수심 -nestdepth= (5.5 m) + 1:10 → -nestext= (10 m) 까지 (Narrabeen, D-M7-35), 칸 -nestdx= (25 cm), 분산 · 묶인 IG.
 	// 안쪽 동쪽 입사는 바깥 격자 x = NX·Dx 값으로 (B 안 IG 는 끔)
 	Out.bNest = FParse::Param(Cmd, TEXT("nest"));
 	if (Out.bNest)
 	{
-		double NestDepth = 3.3, NestDx = 0.25;
+		double NestDepth = 5.5, NestDx = 0.25;   // Narrabeen 기준 (D-M7-35): Dean 5.5 m + 1:10 → 10 m 고정 (폭풍 Hs 3 m 에서 Hm0/d 0.3 · 자료 연안 파랑 지점). 이전 3.3 m 단독
 		FParse::Value(Cmd, TEXT("nestdepth="), NestDepth);
 		FParse::Value(Cmd, TEXT("nestdx="), NestDx);
 		// T2 (papers D-M7-28, Deltares 2021 4.4): Dean 단면 끝 (NestDepth) 에서 인공 경사로 -nestext= 수심까지 — 경계 ≈ 3·Hs · n < 0.9. 경사 -nestextslope= (1:10, n > 0.9 · Hm0/d > 0.3 이면 1:50)
-		double ExtDepth = 0.0, ExtSlope = 0.1; FParse::Value(Cmd, TEXT("nestext="), ExtDepth); FParse::Value(Cmd, TEXT("nestextslope="), ExtSlope);
+		double ExtDepth = 10.0, ExtSlope = 0.1; FParse::Value(Cmd, TEXT("nestext="), ExtDepth); FParse::Value(Cmd, TEXT("nestextslope="), ExtSlope);
 		const double XDean = Xs + FMath::Pow(NestDepth / A, 1.5);
 		const double Ly = NY * Dx, XEnd = XDean + (ExtDepth > NestDepth ? (ExtDepth - NestDepth) / ExtSlope : 0.0);
 		const int32 NXo = FMath::CeilToInt(XEnd / NestDx), NYo = FMath::Max(8, FMath::RoundToInt(Ly / NestDx));

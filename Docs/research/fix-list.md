@@ -56,6 +56,7 @@
 | T5 | 고정 시드 1234 → 매 실행 같은 초반 큰 파군 | C13 (= P2 · P1 초반 거품) | `-seed=` 옵션 + 결론 실행은 시드 3–5 개 (Rutten 2021: 위상만으로 극한 처오름 ±31 %, papers D-M7-29) |
 | T6 | 표면 수분 띠 1/2 높이 (Carsel α) · 젖은 색 곡선 느림 · 내륙 지하수 overheight 없음 | C8 · C19 · C10 | 해빈 모래 vG (Hallin 2023) · 색 곡선 S0 ~0.05 · 지하수 초기 overheight |
 | T7 | 입자: cohesion 문턱이 젖은 쪽 · 침출력 없음 | C9 · C17 | 문턱을 Pakpour · Scheel 값으로 · 침출대 유효응력 |
+| T8 | setup 이 쇄파대를 가파르게 (Dean A 0.10 → 0.13) 하면 커짐 (+38 %) — Raubenheimer 2001 은 완만할수록 큼 | Narrabeen 기본값 (m3-log #85) | 반대 방향 → 모델 결함 후보. 안쪽 격자 경계 수심 (0.58 → 0.76 m) · roller 운동량 · Hanslow & Nielsen 1993 NSW 현장 setup 과 대조 |
 
 ## 끝난 것 (참고)
 - 처오름이 땅끝까지 → 후빈 고정 지형 (#70–71)
