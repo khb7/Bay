@@ -103,6 +103,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSandGridParams, )
 	SHADER_PARAMETER(float, SusD90)
 	SHADER_PARAMETER(float, SusTsfac)
 	SHADER_PARAMETER(float, SusTsmin)
+	SHADER_PARAMETER(float, SusHmin)
 	SHADER_PARAMETER(float, SusCmax)
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, SusCRO)
 	SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, SusCRW)
@@ -623,7 +624,7 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 			B.IncRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Inc)); B.bIncCached = 0u;   // 캐시는 FaceX 에서만 켬 (그 단계 시각으로 채운 직후)
 			B.bDispersive = P.bDispersive ? 1u : 0u; B.BreakRatio = P.BreakRatio; B.BreakStop = P.BreakStop; B.BreakMode = P.BreakMode; B.EddyDelta = P.EddyDelta; B.BreakSlope = P.BreakSlope; B.BreakTbrk = P.BreakTbrk; B.BreakRoller = P.bBreakRoller ? 1u : 0u; B.DispTaper = (uint32)FMath::Max(0, P.DispTaper);
 			B.NumIg = S->NumIg;
-			B.bSus = P.bSus ? 1u : 0u; B.SusD90 = P.SedD90; B.SusTsfac = P.SusTsfac; B.SusTsmin = P.SusTsmin; B.SusCmax = P.SusCmax;
+			B.bSus = P.bSus ? 1u : 0u; B.SusD90 = P.SedD90; B.SusTsfac = P.SusTsfac; B.SusTsmin = P.SusTsmin; B.SusCmax = P.SusCmax; B.SusHmin = P.SusHmin;
 			{
 				// A_ss (XBeach 식 101) · w_s (Soulsby 1997), ν = 1e-6
 				const float Dg = (P.SedS - 1.f) * P.Gravity * P.SedD50, Ds = FMath::Pow(P.Gravity * (P.SedS - 1.f) / 1e-12f, 1.f / 3.f) * P.SedD50;
@@ -829,14 +830,14 @@ void FSandGridGpu::Run(bool bFixed, float DtOrFrame, int32 NumSub)
 						Bk.TkeRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Tke)); Bk.TkeRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->Tke2));
 						AddGridPass<FSandGridBoreTkeCS>(GraphBuilder, RDG_EVENT_NAME("SandGridBoreTke"), ShaderMap, Bk, GC);
 						Swap(S->Tke, S->Tke2);
-						X.TkeRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Tke));
 					}
+					X.TkeRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Tke));   // SedKbRaw 가 bBoreKb 분기로 읽음 — 꺼져 있어도 바인딩 필요 (셰이더 검증)
 					AddGridPass<FSandGridSedQCS>(GraphBuilder, RDG_EVENT_NAME("SandGridSedQ"), ShaderMap, X, GC);
 					FRDGBufferRef Se = GraphBuilder.RegisterExternalBuffer(S->SusE);
 					if (P.bSus)
 					{
 						FSandGridParams Su = B; Su.URO = GraphBuilder.CreateSRV(U0); Su.TimeRO = GraphBuilder.CreateSRV(Tm); Su.SusCRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->SusC)); Su.SusCRW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SusC2)); Su.SusERW = GraphBuilder.CreateUAV(Se); Su.NuRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Nu)); Su.SedDiag0RW = GraphBuilder.CreateUAV(GraphBuilder.RegisterExternalBuffer(S->SedDiag0));
-							if (B.bBoreKb) { Su.TkeRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Tke)); }
+							Su.TkeRO = GraphBuilder.CreateSRV(GraphBuilder.RegisterExternalBuffer(S->Tke));
 						AddGridPass<FSandGridSusCS>(GraphBuilder, RDG_EVENT_NAME("SandGridSus"), ShaderMap, Su, GC);
 						Swap(S->SusC, S->SusC2);
 					}

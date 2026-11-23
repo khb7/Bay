@@ -172,6 +172,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	// T1 (fix-list, papers D-M7-26): 부유사 적응 시간 T_s = max(tsfac·h/w_s, tsmin) — 기본 XBeach 0.1 · 0.5 s. P&H 2005 침강 지연 시험용
 	FParse::Value(Cmd, TEXT("tsfac="), G.SusTsfac);
 	FParse::Value(Cmd, TEXT("tsmin="), G.SusTsmin);
+	FParse::Value(Cmd, TEXT("sushmin="), G.SusHmin);
 	G.bBoreKb = FParse::Param(Cmd, TEXT("borekb"));   // T1 안쪽 격자 bore 난류 k → 부유사 (Zhu & Dodd 2020)
 	double MeanDeg = 10.0, SwellSpread = 15.0, WindSpread = 40.0;
 	FParse::Value(Cmd, TEXT("wavedir="), MeanDeg);
@@ -1192,6 +1193,10 @@ int32 RunWaveMeasure(const FString& Params)
 	TArray<float> EnS;
 	TArray<float> RowTs, RowTsO, WoPrev, HUoPrev, HVoPrev; bool bNanSaved = false;   // _row.bin: 0.1 s 마다 [x = 4i·Dx (i 0..), 가운데 줄 j = NY/2] 수위
 	TArray<float> W, HU, HV, Wo, HUo, HVo;
+	// T1 맨 위 침식 진단 (-probe): 가운데 줄 swash 칸 (처음 바닥 −0.3 ~ +1.05 m) 의 0.1 s 시계열 [t, (W, HU, S=hC, B) × 칸] → _probe.bin · _probe.txt (칸 범위)
+	const bool bProbe = FParse::Param(*Params, TEXT("probe")) && Sc.G.bSus;
+	int32 PI0 = NX, PI1 = -1; TArray<float> ProbeTs, SusBuf;
+	if (bProbe) { for (int32 i = 0; i < NX; ++i) { const float b = Sc.BCellV[Jb * NX + i]; if (b <= 1.05f && b >= -0.3f) { PI0 = FMath::Min(PI0, i); PI1 = FMath::Max(PI1, i); } } }
 	// 물가 판정 수심 (기본 2cm) — 침투가 없어 되돌림 뒤 얇은 막이 남는다 (m3-log #7). Stockdon 은 비디오로 본 물가
 	float RunH = 0.02f; FParse::Value(*Params, TEXT("runh="), RunH);
 	float T = 0.f, NextRec = 0.f, FricX = Sc.G.FricX;
@@ -1232,6 +1237,12 @@ int32 RunWaveMeasure(const FString& Params)
 		{
 			// 가운데 줄 수위 시계열 (4 칸마다, float32) — 단면 SS · IG 분리 스펙트럼 (D-M3-16). 마른 칸은 바닥값
 			for (int32 i = 0; i < NX; i += 4) { RowTs.Add(W[Jb * NX + i]); }
+			if (bProbe && PI1 >= PI0)
+			{
+				Grid.DownloadSus(SusBuf);
+				ProbeTs.Add(T);
+				for (int32 i = PI0; i <= PI1; ++i) { const int32 k = Jb * NX + i; ProbeTs.Add(W[k]); ProbeTs.Add(HU[k]); ProbeTs.Add(SusBuf[k]); ProbeTs.Add(Sc.BCellV[k]); }
+			}
 		}
 		if (Sc.G.FricX > 0.f) { FricX = Zone.Update(W, Sc.BCellV, NX, NY, Sc.Dx, T); Grid.SetFricX(FricX); }
 		// 바다 쪽에서 땅 쪽으로: 처음 3 칸 연속 마른 곳 바로 앞의 젖은 칸 수면 (뒤에 남은 웅덩이는 무시)
@@ -1300,6 +1311,11 @@ int32 RunWaveMeasure(const FString& Params)
 	}
 	FFileHelper::SaveStringToFile(Csv, *Path, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 	FFileHelper::SaveArrayToFile(TArrayView<const uint8>((const uint8*)RowTs.GetData(), RowTs.Num() * sizeof(float)), *Path.Replace(TEXT(".csv"), TEXT("_row.bin")));
+	if (ProbeTs.Num() > 0)
+	{
+		FFileHelper::SaveArrayToFile(TArrayView<const uint8>((const uint8*)ProbeTs.GetData(), ProbeTs.Num() * sizeof(float)), *Path.Replace(TEXT(".csv"), TEXT("_probe.bin")));
+		FFileHelper::SaveStringToFile(FString::Printf(TEXT("i0 %d\ni1 %d\ndx %.4f\nj %d\n"), PI0, PI1, Sc.Dx, Jb), *Path.Replace(TEXT(".csv"), TEXT("_probe.txt")));
+	}
 	{
 		// 쇄파 판정량 진단 (m3-log #23): x 별 — 줄 평균 · 줄 최대 의 칸별 최대 |∇η| 와 최대 η_t/√(gH). 바깥 · 안쪽
 		auto DumpDiag = [&](FSandGridGpu& Gd, const FSandGridGpuInit& Pi, const TCHAR* Suffix)

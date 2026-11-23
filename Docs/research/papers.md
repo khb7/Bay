@@ -4529,3 +4529,35 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - 정리: 문헌상 NSW + 준정상 수송은 윗 swash 침식이 기본 (P&H · Zhu & Dodd 공통). 윗 swash 퇴적을 만드는 문헌 기작 = (a) 침강 지연 (T_s ~ h/w_s), (b) bore pre-suspended 고농도, (c) 소류 h 의존 · 내림 마찰 감소 (우리 -cfasym 이 (c) 의 마찰 쪽), (d) 행동 보정 bermslope. 시험 순서: (a) 는 옵션 하나라 먼저 (`-tsfac=`), (b) 다음.
 - **Zhu & Dodd (2020)** Adv. Water Res. 146:103756 doi 10.1016/j.advwatres.2020.103756 ✓ 초록 (원문 403): 연행 ∝ 이동상 bore 에너지 감쇠율 (해석식 · 새 shock 조건), bore 연행이 전단 연행보다 우세, bed-step 은 소류 특징이고 부유 연행이 그 성장을 막음. Jongedijk (2017, TU Delft MSc) △ 검색 요약: XBeach NH 는 오름 농도를 크게 과소 · swash 는 늘 침식 예측, TKE 보정으로 개선. Bakhtyar et al. (2009) △: 오름 순간 수송 > 내림.
 - 우리 구현 (T1, trend-check "T1 시험"): 도약 소산은 교과서 hydraulic jump 식 (Δh³/(4h₁h₂) × 유량) — Zhu & Dodd 2020 의 이동상 보정 · 연행 효율은 원문 미확인이라 k → k_b → Soulsby–van Rijn 경로 (XBeach 식 33 과 같은 꼴) 로 대신.
+
+### D-M7-27. swash 맨 위 침식 · 얇은 흐름 수송 상한 · 침투 (fix-list T1 계속, 2026-11-23)
+- **Li, Hu, Pähtz, He & Cao (2017)** J. Hydraul. Res. 55(1):114–120 doi 10.1080/00221686.2016.1212942 (arXiv 1608.06710) ✓ 원문: swash 위상 해상 모델의 표준 수송식 (Grass · Bagnold · MPM · van Rijn · Bailard) 은 얇은 swash 에서 함축 농도가 (1 − p) 의 최대 10⁵ 배. 시험용 상한 q = min(A_G u³, (1 − p) h u) 만 걸어도 결과가 **질적으로** 바뀜 — 표준식은 사건 뒤 swash 전체 침식 · bed-step, 상한식은 퇴적 영역이 넓고 최종 단면에 퇴적 (육향, 현장과 같은 방향) · bed-step 없음 · 혹. 원인: 표준식은 "얇은 수심이 실을 수 있는 모래 양을 제한" 하는 걸 무시. h 곱한 PH 식 (q = A h^k u³) 은 초과를 줄이지만 없애진 못함. 저자들은 상한을 "더 나은 모델" 이 아닌 민감도 시험으로 명시. Garcia & Parker (1991) 부유 농도 상한 0.3.
+- **Kelly & Dodd (2010)** JFM 661:316–340 ✓ 초록: 완전 결합 NSW–Exner 도 swash 전체 순 해향, 결합이 윗 1/3 의 해향 수송을 크게 줄임.
+- **Masselink & Li (2001)** Mar. Geol. 176 ✓ 초록: 침투는 오름–내림 비대칭을 키워 앞빈을 가파르게 하지만, 한 주기 침투량이 오름 부피의 ~2 % 를 넘어야 (K > 1 cm/s ≈ D50 > 1.5 mm) 효과. Butt et al. (2001) △: 임계 입경에서 침투 효과가 해향 → 육향으로 바뀜. → 우리 D50 0.25 mm 에선 **침투는 주 원인 아님** (후보에서 내림).
+- 우리 모델과 비교: C_eq 상한 0.5·C_max = 0.05 (XBeach) 는 Li 의 (1 − p) 0.6 보다 엄격 — 평형 농도는 이미 묶임. 단 hC_eq = A_ss Ex^2.4 는 상한 아래에선 h 무관 (q(u)). 측정으로 볼 것: 맨 위 침식 칸에서 (1) 상한이 실제로 걸리는 시간 비율, (2) 연행이 오름 · 내림 · 어느 수심 구간에서 나오는지.
+- **측정 (2026-11-23, t1probeTs · t1probeS, `tools_probe.py`)**: 맨 위 최대 침식 칸 (b0 +0.78–0.80) 의 순 연행은 거의 다 **내림 h 0.5–2 cm 얇은 막** (900 s 중 ~110 s) 에서 나옴 (+11–13 mm, morfac 전). 오름은 C (0.010–0.015) > C_eq (0.004–0.006) 라 침강만. 윗 swash 내림 C_eq 0.013–0.021 = 오름의 3–4 배 (C_eq ∝ 1/h), 상한 (0.05) 은 내림 시간의 15–30 % 만 걸림. 윗 swash 내림 이류 플럭스 = 오름의 1.5–2 배.
+- **Puleo et al. (2000) · Puleo 조석 주기 연구 (JCR)** △ 검색 요약: 부유 농도는 가속 오름 (bore · swash 앞) 에서 최대, 내림은 대체로 작음. 평균 오름 SSC 가 내림보다 46–108 % 큼. → 우리 모델 C_b > C_u 는 **반대 추세**.
+- **Lanckriet, Puleo & Masselink (2014)** JWPCOE "Comprehensive field study of swash-zone processes II: sheet flow sediment concentrations during quasi-steady backwash" △ 검색 요약: 내림 sheet-flow 층 두께 6–18 mm, 부피 농도 0.2–0.3 에서 선형 → 멱함수 전이. → 내림 막 h ≲ 2 cm 는 흐름 전체가 sheet-flow 층 — 수송은 부유가 아니라 sheet flow · 소류.
+- **Delft3D SedThr** △ (ESurf 2017 보충자료 morphology 파일): "minimum water depth for sediment computations", 예시 0.05 m (기본값은 미확인). 얕은 곳에선 부유사 원천을 계산하지 않는 관행.
+- 시험 (T1c): `-sushmin=` — h < 값이면 C_eq = 0 (연행 없음, 침강 · 이류만; 소류는 그대로). 값 = Lanckriet sheet-flow 상한 0.02 m · Delft3D 예시 0.05 m 두 가지.
+
+### D-M7-28. 얕은 경계의 묶인 IG — 감소계수 vs 깊은 경계 + 인공 경사 (fix-list T2 · T3, 2026-11-23)
+- **Deltares (2021) "Boundary condition guidelines for XBeach simulations"** (11205758-029-GEO-0003, 2021-03-19, Rijkswaterstaat BOI) ✓ 원문 (PDF 추출):
+  - Hasselmann (1962) 묶인 IG 는 얕은 경계에서 과대 — η = −S_xx / (ρ(gh − c_g²)), c_g → √(gh) 에서 발산. XBeach `nmax` 는 c_g ≤ nmax·√(gh) 로 자름 (적정값 미정).
+  - 4.2.1 시험 (Hs 9 m, Tp 12 s, 20 m 경계 vs 50 m): **경계 감소계수는 해법이 아님** — 경계 IG 를 줄여도 영역 안 짧은 파 군 강제가 국소 수심과 평형이 아니라 IG 가 금세 다시 커짐. 감소량과 무관. Zhang et al. (2020) 보정 · 룩업 표 · Reniers (2002) 모두 같은 이유로 부적합.
+  - 해법: **경계 수심 ≈ 3·Hs 이면서 n = c_g/c < 0.9**. 격자를 줄이려면 그 깊이까지 **인공 경사**: 시작 수심에서 n < 0.9 또는 Hm0/d < 0.3 이면 1:10, 아니면 (n > 0.9 · Hm0/d > 0.3) 1:50 → 물가 IG 오차 최대 20 %, 대부분 < 10 %. n > 0.96 은 시험 안 함. 경계 파고는 de-shoaling 으로 맞춤.
+- 우리 경우 (fix-list T2): 경계 3.3 m · n 0.97 → 지침 밖 (시험 범위도 밖). Deltares 결론대로면 fix-list T2 의 "경계 IG 감소계수" 안은 **버림**, 깊은 경계 + 인공 경사가 정답 — 단 깊은 경계 실행의 에너지 손실 (T3) 이 선결.
+
+### D-M7-29. 무작위 위상 (시드) 불확실성 (fix-list T5, 2026-11-23)
+- **Rutten, Torres-Freyermuth & Puleo (2021)** Coast. Eng. 166:103869 doi 10.1016/j.coastaleng.2021.103869 △ (초록 · NCK 요약): 같은 스펙트럼 · 다른 무작위 위상만으로 극한 처오름 불확실성 **최대 31 %** — 실행 한 번은 과소 · 과대 어느 쪽도 될 수 있음. 학회판: Hs 2.5 m · Tp 10 s, 이동상 7 h, 고정상 spin-up 75 min.
+- Duck 위상 실현 연구 △ (검색 요약): 쇄파대 안 IG 변동이 평균 IG 높이의 25 % 넘음. de Wit et al. (NCK 2023) △: 서로 다른 위상 100 회 앙상블 평균으로 확률 결과.
+- 우리 경우: 지금까지 A/B 시험은 모두 시드 1234 고정 — 설정 차이 비교 (같은 강제) 엔 오히려 유리하지만, **문헌 추세와의 절대 비교는 실현 하나**라 ±25–30 % 를 각오해야 함. T5 방향: 시드 옵션 (`-seed=`) 을 두고, 결론 실행은 시드 3–5 개로 산포 확인. 수렴 실현 수는 원문 미확인.
+
+### D-M7-30. 쇄파 지수의 주기 의존 (fix-list T4 사전 조사, 2026-11-23)
+- **Coastal Wiki "Breaker index"** (Battjes 1974 · Camenen & Larson 2007 인용) △: 쇄파점 γ_b ≈ 1.06 + 0.14 ln ξ (ξ = 쇄파점 Iribarren), 실험 산포 큼. ξ < 0.4 spilling · 0.4–2 plunging · > 2 surging. → 같은 경사에서 너울 (ξ 큼) 은 γ_b 가 커 **더 얕은 곳에서 부서짐** = "덜 부서짐" 의 일부는 물리. Kaminsky & Kraus (1993) 멱함수형은 원문 미확인.
+- 함의: T4 판정은 주기 의존을 이미 넣은 기준 (C1 의 γs = 0.19 + 1.05 β/kh, D-M7-12) 대비 초과분만 결함으로 봐야 함 — C1 판정이 그 기준이었으므로 T4 는 유지. Kennedy et al. (2000) 쇄파 시작 · 종료 상수 (η_t 문턱 · T*) 는 원문 (JWPCOE 126(1):39) 미열람.
+
+### D-M7-31. 분산 격자 비쇄파 수치 소산 — 재구성 · 제한자 (fix-list T3 사전 조사, 2026-11-23)
+- **Shi, Kirby, Harris, Geiman & Grilli (2012)** Ocean Modelling 43–44:36–51 (FUNWAVE-TVD; CACR-11-04 v2.0 보고서판 ✓ 원문 PDF): 옛 FUNWAVE (비엇갈림 FD + ABM4) 는 격자 Nyquist 근처 잡음 · 약한 불안정 → 주기적 소산 필터가 필요했고 쇄파 구역에서 더 자주 걸었음 (필터가 비쇄파 에너지도 깎는 원인). 새 판: 유한체적 MUSCL-TVD **최대 4 차** (Yamamoto 1998 · Erduran 2005, (κ1, κ2) = (1/3, 1)), **van Leer 제한자** — Erduran et al. (2005) 가 3 차에서 minmod 보다 정확함을 보였고 Tehranirad (2011) 처오름 시험으로 확인. Courant 0.5. 쇄파 = H/h > 0.8 (Tonelli & Petti 2009) 에서 NSWE 로 전환. 스펀지: R_sponge 0.85–0.95, A_sponge ~5.
+- 우리 바깥 격자 (SandGrid.usf): KP07 2 차 재구성 + **generalized minmod (θ 1.3)** — 극값 (파 마루 · 골) 에서 기울기를 깎아 1 차로 떨어짐 → 먼 거리 전파에서 진폭 손실. 6 m 경계 (484 m, Tp 12 s 면 ~5 파장) 에서 비쇄파 에너지 70 % 손실 (C25) 의 **1 순위 후보**.
+- T3 시험안: 평탄 6 m 수로 비쇄파 규칙파로 거리별 H 감쇠 측정 — θ 1.0 · 1.3 · 2.0 (KP07 허용 범위, 클수록 덜 소산) · 격자 25 → 12.5 cm. 감쇠가 θ · Δx 에 민감하면 재구성 문제 (→ 3 차 · van Leer 검토), 둔감하면 쇄파 판정 오작동 (ν 진단) · 스펀지 · 마찰 순으로.

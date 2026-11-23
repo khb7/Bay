@@ -50,6 +50,7 @@ struct FSandGridGpuInit
 	bool  bSus = false;             // T4b 부유사 (papers D-M3-25)
 	float SedD90 = 3e-4f;           // m — XBeach 예제 값 (근거 약함)
 	float SusTsfac = 0.1f, SusTsmin = 0.5f, SusCmax = 0.1f;   // XBeach 기본
+	float SusHmin = 0.f;   // T1c: h < 값이면 부유 연행 없음 (C_eq = 0) — sheet-flow 층 (Lanckriet 2014) · Delft3D SedThr (papers D-M7-27)
 	bool  bSedClosed = false;
 	bool  bSedKb = false;
 	bool  bBoreKb = false;          // T1: 안쪽 NSWE 격자 bore 난류 k → 부유사 C_eq (papers D-M7-26)

@@ -992,3 +992,10 @@ swash (b0 > 0) 전체 합 기준:
 - 새 옵션: `-tsfac=` `-tsmin=` (XBeach T_s 식 88 계수) · `-borekb` (안쪽 격자 BoreTkeCS — bore 도약 소산 → k → 부유사 C_eq 의 k_b). 기본 꺼짐.
 - 결과 (trend-check "T1 시험" 표): 너울 윗 swash −0.244 → −0.069 m²/m (a+b), 풍파 −0.836 → −0.625. 앞빈 1:23.6 → 1:19.1 (너울). 방향 대비는 커졌지만 너울도 여전히 윗 swash 순 침식 · 앞빈 완만. 최대 침식은 늘 swash 맨 위 (b0 +0.77).
 - 실행 태그: t1calmTs1 · t1stormTs1 · t1calmBk · t1stormBk · t1calmBkTs · t1stormBkTs.
+
+## 실행 #78 — T1 맨 위 침식 진단 · `-sushmin` (2026-11-23, 너울 · 풍파 6 건, morfac 10 × 900 s, -cfasym -sus -probe)
+- 회귀 수정: d7bae77 뒤 `-borekb` 없이 `-sus` 면 SedQCS 의 TkeRO 미바인딩으로 셰이더 검증 크래시 → TkeRO 를 늘 바인딩.
+- 새 옵션: `-probe` (가운데 줄 swash 칸 0.1 s 시계열 W · HU · S · B → `_probe.bin`), `-sushmin=` (h < 값이면 C_eq = 0, 기본 0).
+- 새 도구: `tools_probe.py` (칸별 연행 · 침강을 오름/내림 · 수심 구간별), `tools_budget.py` (바닥 변화를 소류 · 부유 플럭스 발산으로 분해).
+- 결과 (trend-check "T1 맨 위 침식 진단"): 원인 = 내림 얇은 막 부유 연행. `-sushmin` 0.02 ✘ (침식 이동 · 증가), 0.05 ✘ (부유 꺼짐, 풍파도 퇴적). 기준값 정정: 너울 −0.196 · 풍파 −0.852 (이전 표의 cfa*S 는 d9ffb61 · c42a430 전 실행).
+- 실행 태그: t1probeTs · t1probeS · t1cCalmH2 · t1cCalmH5 · t1cStormS · t1cStormH5.
