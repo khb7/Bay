@@ -208,7 +208,10 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 		double NestDepth = 3.3, NestDx = 0.25;
 		FParse::Value(Cmd, TEXT("nestdepth="), NestDepth);
 		FParse::Value(Cmd, TEXT("nestdx="), NestDx);
-		const double Ly = NY * Dx, XEnd = Xs + FMath::Pow(NestDepth / A, 1.5);
+		// T2 (papers D-M7-28, Deltares 2021 4.4): Dean 단면 끝 (NestDepth) 에서 인공 경사로 -nestext= 수심까지 — 경계 ≈ 3·Hs · n < 0.9. 경사 -nestextslope= (1:10, n > 0.9 · Hm0/d > 0.3 이면 1:50)
+		double ExtDepth = 0.0, ExtSlope = 0.1; FParse::Value(Cmd, TEXT("nestext="), ExtDepth); FParse::Value(Cmd, TEXT("nestextslope="), ExtSlope);
+		const double XDean = Xs + FMath::Pow(NestDepth / A, 1.5);
+		const double Ly = NY * Dx, XEnd = XDean + (ExtDepth > NestDepth ? (ExtDepth - NestDepth) / ExtSlope : 0.0);
 		const int32 NXo = FMath::CeilToInt(XEnd / NestDx), NYo = FMath::Max(8, FMath::RoundToInt(Ly / NestDx));
 		const double Dyo = Ly / NYo;
 		FSandGridGpuInit& O = Out.GO;
@@ -221,6 +224,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 		{
 			const double x = i * NestDx, y = j * Dyo;
 			double B = x >= Xs ? -A * FMath::Pow(x - Xs, 2.0 / 3.0) : (Xs - x) * Slope;
+			if (ExtDepth > NestDepth && x > XDean) { B = -NestDepth - (x - XDean) * ExtSlope; }
 			const double Ky = UE_TWO_PI / Ly;
 			B += 0.01 * FMath::Sin(2.0 * Ky * y + 0.4 * x) + 0.006 * FMath::Sin(6.0 * Ky * y - 1.7 * x);
 			O.BCorner[j * (NXo + 1) + i] = (float)B;
