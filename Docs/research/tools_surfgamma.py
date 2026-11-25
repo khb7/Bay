@@ -12,7 +12,10 @@ import sys
 import numpy as np
 
 D = 'C:/Users/onebe/Bay/BeachSimulator/Saved/MeshRuns/'
-A, Xs, Sl = 0.1, 19.52, 1 / 15
+import os
+A = float(os.environ.get('SG_A', '0.13'))   # Dean A (Narrabeen 기본 0.13, 이전 실행은 SG_A=0.1)
+Xs, Sl = 19.52, 1 / 15
+NEST = float(os.environ.get('SG_NEST', '5.5'))   # Dean 구간 끝 수심
 DT = 0.1
 G = 9.81
 
@@ -76,16 +79,17 @@ def main():
         if r:
             r['grid'] = 'in'
             rows.append(r)
-    for i in range(130, min(ro.shape[1], 837), 20):   # x ≤ 209 m (Dean 구간)
+    xdean = Xs + (NEST / A) ** 1.5
+    for i in range(130, min(ro.shape[1], int(xdean / 0.25)), 40):   # Dean 구간만
         r = stats(ro[:, i], i * 0.25 + 0.125, flo, fhi)
         if r:
             r['grid'] = 'out'
             rows.append(r)
     print(f'# {tag} band {flo}-{fhi} Hz, t0 {t0} s, inner rows {ni}')
-    print('grid  x(m)   h(m)  Hs(m)  Hs/h   beta    kh    b/kh   Tm')
+    print('grid  x(m)   h(m)  Hs(m)  Hs/h   beta    kh    b/kh   Tm   R96   비')
     for r in rows:
-        print('%-4s %6.1f %6.2f %6.2f %6.2f %6.3f %6.3f %6.3f %5.1f' % (
-            r['grid'], r['x'], r['h'], r['Hs'], r['g'], r['beta'], r['kh'], r['beta'] / r['kh'], r['Tm']))
+        print('%-4s %6.1f %6.2f %6.2f %6.2f %6.3f %6.3f %6.3f %5.1f %5.2f %5.2f' % (
+            r['grid'], r['x'], r['h'], r['Hs'], r['g'], r['beta'], r['kh'], r['beta'] / r['kh'], r['Tm'], 0.19 + 1.05 * r['beta'] / r['kh'], r['g'] / (0.19 + 1.05 * r['beta'] / r['kh'])))   # R96 = Raubenheimer et al. 1996 (D-M7-12)
 
 
 if __name__ == '__main__':

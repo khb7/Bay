@@ -1033,3 +1033,9 @@ swash (b0 > 0) 전체 합 기준:
 - Stockdon 대비 (R2 · S_IG · setup): 평균 너울 nbS 1.41 · 1.09 · 1.83 / 혼합 nbMix 1.26 · 1.06 · 1.74 / 폭풍 H0 3 m nbStorm 1.40 · 0.87 · 1.81.
 - 분리: A 0.1 (nbSa10) 1.22 · 1.28 · 1.33 / 이전 파랑 H0 1.5 Tp 12 (nbSt12) 1.26 · 1.00 · 1.72 → setup 과대는 Dean A 가 원인 (#84 같은 파랑 A 0.1 은 1.25). Raubenheimer 2001 과 반대 방향 → fix-list T8.
 - 실행 태그: nbS · nbMix · nbStorm · nbSa10 · nbSt12.
+
+## #86 — T4 재측정 (Narrabeen 실행, 2026-11-25, 새 실행 없음)
+- `tools_surfgamma.py` Dean A · Dean 끝 수심 환경변수 (SG_A 0.13 · SG_NEST 5.5), Raubenheimer 1996 γs 와 비 열 추가.
+- nbS: 쇄파 시작 x ≈ 145 m (h 3.3 m, Hs/h 0.55). 쇄파대 (h 1–2.5 m) Hs/h 0.69–0.90 = R96 의 ~3 배, 안쪽 격자 h < 0.8 m 는 2.4–3.4 배. A 0.1 (nbSa10) 은 안쪽 0.86–0.92 로 조금 낮음 — 가파를수록 물가까지 파고가 남음 = T8 과 같은 뿌리 (소산 부족).
+- 쇄파 ν > 0 시간 (`_diago` on_mean / 780 s): 쇄파대 4–6 %, 3.3 m 보다 깊은 곳 0. 문턱 η_t ≥ 0.3√(gh) 는 Bacigaluppi 2019 의 MS92 보정값 (D-M3-21) 이라 판정 값 자체는 문헌 범위.
+- 판단: 현장 비교는 입력 (경사 · 사주) 불확실이 섞임 → 쇄파 소산은 실험실 기준 (Ting & Kirby 1994 · Hansen & Svendsen 1979: H(x) · setup 실측) 으로 분리 검증 필요.

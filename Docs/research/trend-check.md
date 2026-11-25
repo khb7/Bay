@@ -534,3 +534,7 @@
 - 기준 해변을 Narrabeen 으로 고정 (papers D-M7-35). 기본값: D50 0.3 mm · Dean A 0.13 · H0 1.6 m · Tp 10 s · 10 m 경계.
 - 처오름 R2 1.41 · S_IG 1.09 · setup 1.83 × Stockdon (평균 너울). setup 과대는 Dean A 를 0.13 으로 키운 탓 (A 0.1 이면 1.33) — 문헌 (Raubenheimer 2001) 은 쇄파대가 가파를수록 setup 이 작아야 함 → **T8 새 항목**.
 - 실측 단면 (Dryad 98 MB) 미수령 — A · 전면 경사 · 사주는 아직 문헌 추정값.
+
+### T4 재측정 — Narrabeen (2026-11-25, m3-log #86)
+- 쇄파대 Hs/h 가 Raubenheimer 1996 의 ~3 배 (h 1–2.5 m), 물가 쪽 2.4–3.4 배. 쇄파 ν 켜짐 시간 4–6 %. Dean A 가 클수록 물가 파고 큼 → **T8 (setup 과대) 과 같은 원인 후보 = 쇄파 소산 부족**.
+- 다음: 실험실 쇄파 기준 (Ting & Kirby 1994 1:35 · Hansen & Svendsen 1979) 으로 H(x) · setup 을 직접 비교 — 현장 입력 불확실 제거.
