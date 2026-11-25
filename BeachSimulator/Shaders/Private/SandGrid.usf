@@ -92,6 +92,7 @@ float BreakStop;         // 쇄파 종료 ε (Tonelli & Petti 지속, papers D-M
 RWStructuredBuffer<float2> BrkRW;  // 칸별 (쇄파 상태 0/1, 지난 판정 때 수위 w) — 서브스텝 · 프레임을 넘어 유지 (이번 판정 쓰기)
 StructuredBuffer<float2> BrkRO;    // 지난 판정 (핑퐁 — 이웃 상태를 경쟁 없이 읽는다)
 float BreakSlope;
+float BreakEps;
 uint  BreakRoller;       // 1: 쇄파 칸을 묶어 roller 길이로 넓힘 (Kazolea & Ricchiuto 2018 · Bacigaluppi 2019, papers D-M3-22)
 float BreakTbrk;         // 3 (FUNWAVE 나이): 쇄파 지속 시간 T_brk (s) — FUNWAVE 는 입사 주기
 RWStructuredBuffer<float2> BrkDiagRW;   // 진단: 칸별 (최대 |∇η|, 최대 η_t/√(gH)) 누적 (m3-log #23)        // tan φ_c (기울기 쇄파 조건, 0 이면 끔)
@@ -508,7 +509,9 @@ void BreakCS(uint3 Tid : SV_DispatchThreadID)
 		float Age = Prev.x;
 		if (h > HDry && H0s > HDry)
 		{
-			if (EtaT >= T1 && (Age <= 0.f || Age > BreakTbrk)) { Age = Dt; }
+			// 시작 보조 (D-M7-41): MS92 는 덜 천수돼 앞면 η_t 가 문턱에 잘 못 닿음 (m3-log #88) → 마루 높이 |η|/h₀ 판정과 OR
+			const bool bEpsOn = BreakEps > 0.f && abs(w - SeaLevel) / H0s > BreakEps;
+			if ((EtaT >= T1 || bEpsOn) && (Age <= 0.f || Age > BreakTbrk)) { Age = Dt; }
 			else if (Age > 0.f) { Age += Dt; }
 			else if (EtaT >= T2)
 			{

@@ -4654,3 +4654,8 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - **Celeris-WebGPU** ✓ (`Pass_Breaking.wgsl`): Kennedy 원식, η_t,I 0.50c · η_t,F 0.15c (c = √(g·전체 수심)), T* 5√(h/g), B = clamp(η_t/η_t* − 1, 0, 1), **ν = B·δ·h·η_t, δ = 2.0** (상한 dx·dy/dt), η_t < η_t* 면 나이 0. 적용 ∂x(νP_x) + ½∂y(νP_y) + ½∂y(νQ_x). 분산 계수는 정지 수심만 · 지형 바뀔 때만 갱신 · PCR, **마른 칸 3 칸 이내는 분산 끔**. 쇄파 중 분산 유지. 스펀지 20 칸, 기본 θ 2.
 - **XBeach nonh** ✓ (`nonh.F90`): dzdt > maxbrsteep(0.4)·√(gh) 시작, 이웃 쇄파면 0.1, **dzdt < 0 까지 앞면 전체 쇄파 · 그 칸 정수압 (분산 끔)** → 운동량 보존 기법이 충격으로 소산. Smagorinsky + breakviscfac 1.5. 사태 wetslp 0.3 · dryslp 1.0 · hswitch 0.1 m · dzmax 0.05 m/s. 부유사 Ts = max(0.1 h/w_s, 0.5 s) (우리와 같음).
 - **판단**: 세 코드 중 **쇄파 중 분산을 켜고 ν 도 가장 작은 것이 우리**. 후보 ① FUNWAVE 그대로 (Cbrk2 0.35 · 전체 수심) ② Kennedy/Celeris 동적 ν ③ XBeach 식 앞면 정수압 (하이브리드).
+
+### D-M7-41. 쇄파 시작 보조 판정 |η|/h₀ (2026-11-25, m3-log #88)
+- 근거: FUNWAVE-TVD 하이브리드 기본 판정 |η|/max(h, MinDepthFrc) > SWE_ETA_DEP 0.8 ✓ (`masks.F`, D-M7-40) · Tonelli & Petti 2009 ε = A/h > 0.8 (Bacigaluppi 2019 ✓ 원문, D-M3-17: 경사면 고립파에서 가장 일찍 켜짐, 막대 위에선 실패). Kazolea 2014 류 하이브리드도 두 판정 OR (기울기 OR η_t, D-M3-21).
+- 우리 사용: 분산 전환이 아니라 **FUNWAVE 나이 판정의 시작 조건에만 OR** — 나이 · 번짐 · ν 는 그대로. 시작 칸이 마루라 η_t ≈ 0 이어도 아래쪽 이웃 (앞면, η_t > Cbrk2) 으로 번져 ν 가 앞면에 걸림.
+- 주의: Narrabeen 실제 사주 (D-M7-36) 를 넣으면 막대 위 실패 사례에 해당할 수 있음 — 사주 단면 시험 때 재확인.

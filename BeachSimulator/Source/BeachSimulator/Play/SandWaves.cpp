@@ -158,6 +158,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	// -tke (papers D-M7-3): Kazolea & Ricchiuto 2018 TKE 와점성 — Hansen & Svendsen 평면 해변 값 γ 0.5 · κ 0.8 · σ 0.4, 영역 = roller 넓힘 + Fr 종료
 	if (FParse::Param(Cmd, TEXT("tke"))) { G.bTke = true; G.BreakRatio = 0.5f; G.bBreakRoller = true; FParse::Value(Cmd, TEXT("tkekappa="), G.TkeKappa); FParse::Value(Cmd, TEXT("tkesigma="), G.TkeSigma); }
 	FParse::Value(Cmd, TEXT("breakratio="), G.BreakRatio);
+	FParse::Value(Cmd, TEXT("breakepsor="), G.BreakEps);   // BreakMode 3 시작 보조 |η|/h₀ (D-M7-41)
 	FParse::Value(Cmd, TEXT("eddydelta="), G.EddyDelta);
 	FParse::Value(Cmd, TEXT("breaktbrk="), G.BreakTbrk);
 	if (FParse::Param(Cmd, TEXT("breakroller"))) { G.bBreakRoller = true; }   // papers D-M3-22   // T_brk (s). FUNWAVE-TVD init.F 기본 20 s
@@ -218,7 +219,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 		const int32 NXo = FMath::CeilToInt(XEnd / NestDx), NYo = FMath::Max(8, FMath::RoundToInt(Ly / NestDx));
 		const double Dyo = Ly / NYo;
 		FSandGridGpuInit& O = Out.GO;
-		O.NX = NXo; O.NY = NYo; O.Dx = (float)NestDx; O.Dy = (float)Dyo; O.Manning = Manning; O.Ks = G.Ks; O.BreakStop = G.BreakStop; O.BreakMode = G.BreakMode; O.BreakRatio = G.BreakRatio; O.BreakSlope = G.BreakSlope; O.EddyDelta = G.EddyDelta; O.BreakTbrk = G.BreakTbrk; O.bBreakRoller = G.bBreakRoller; O.bTke = G.bTke; O.TkeKappa = G.TkeKappa; O.TkeSigma = G.TkeSigma;
+		O.NX = NXo; O.NY = NYo; O.Dx = (float)NestDx; O.Dy = (float)Dyo; O.Manning = Manning; O.Ks = G.Ks; O.BreakStop = G.BreakStop; O.BreakMode = G.BreakMode; O.BreakRatio = G.BreakRatio; O.BreakSlope = G.BreakSlope; O.BreakEps = G.BreakEps; O.EddyDelta = G.EddyDelta; O.BreakTbrk = G.BreakTbrk; O.bBreakRoller = G.bBreakRoller; O.bTke = G.bTke; O.TkeKappa = G.TkeKappa; O.TkeSigma = G.TkeSigma;
 		FParse::Value(Cmd, TEXT("otheta="), O.Theta);
 		O.bForceLongSolve = FParse::Param(Cmd, TEXT("forcelong"));   // 검증: 긴 줄 솔버를 짧은 줄에도   // T3: 바깥 격자 KP07 minmod θ (기본 1.3, 1–2 허용 — 클수록 덜 소산, papers D-M7-31)
 		O.bOpenEast = true; O.bPeriodicY = true; O.bDispersive = true; O.bBoundIg = !FParse::Param(Cmd, TEXT("igoff"));

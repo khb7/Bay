@@ -23,6 +23,7 @@ struct FSandGridGpuInit
 	float IgGain = 0.f;             // T3b 장주기파: η_IG = IgGain·(A² − Σa²), A = 성분 포락선. 0 이면 끔
 	bool  bDispersive = false;      // T3c Madsen & Sørensen 1992 Boussinesq (Celeris 방식). 줄 길이 ≤ 1024, 경계는 벽으로 (열린 · 주기 경계 근처 처리는 c4)
 	float BreakStop = 0.3f;         // 쇄파 종료 ε — 켜진 칸은 ε < 이 값까지 NSW 유지 (Tonelli & Petti, papers D-M3-17). 0 이면 순간 판정
+	float BreakEps = 0.f;           // BreakMode 3 시작 보조: |η|/h₀ > 값 이면 (η_t 조건과 OR) — FUNWAVE SWE_ETA_DEP · Tonelli-Petti 0.8 (papers D-M7-41). 0 이면 끔
 	float BreakSlope = 0.f;         // BreakMode 2 기울기 조건 tan φ_c (Kazolea & Ricchiuto 2018: φ_c 30° → 0.577). 0 이면 끔
 	float EddyDelta = 1.2f;
 	bool  bBreakRoller = false;

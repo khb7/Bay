@@ -1046,3 +1046,11 @@ swash (b0 > 0) 전체 합 기준:
 - Stockdon 대비 (setup · S_inc · S_IG · R2): 너울 nb2S 2.02 · 1.05 · 1.51 · 1.75 / 혼합 nb2Mix 1.89 · 1.09 · 1.48 · 1.62 / 폭풍 (Hs 2.74 · Tp 12) nb2Storm 1.88 · 0.62 · 0.46 · 1.19. 경계 IG 반사 0.42–0.75.
 - 가파른 실측 단면에서 setup 과대가 커짐 (T8 방향 그대로). 문헌 · 소스 대조 (D-M7-38 · 40): 우리 정적 ν (0.15 h√gh, 분산 켬) 가 FUNWAVE (0.35 (h+η)√(g(h+η))) · Celeris (2 h η_t) · XBeach (앞면 정수압) 중 가장 약함 → 다음 시험 `-breakkennedy` · `-breakstop=0.35` · FUNWAVE 기본 (0.65/0.35).
 - 실행 태그: nb2S · nb2Mix · nb2Storm.
+
+## 실행 #88 — 쇄파 점성 크기 시험: 효과 없음 → 원인은 판정 (2026-11-25, 3 건, 900 s, 너울)
+- `-breakkennedy` (동적 ν = 1.44 h η_t) · `-breakstop=0.35` (FUNWAVE Cbrk2) · `-breakratio=0.65 -breakstop=0.35` (FUNWAVE 기본): Stockdon 비 setup 2.11 · 2.14 · 2.17, R2 1.81 · 1.86 · 1.91 — 기준 nb2S (2.02 · 1.75) 와 거의 같거나 나쁨.
+- 바깥 격자 Hs (x m: Hs/h) 네 실행 모두 같음: 60: 1.25/2.35 · 50: 1.20/1.94 · 42: 1.09/1.58 · 34: 1.22/1.19 — **h 2.4 → 1.2 m 에서 감쇠 없음** (실제 쇄파면 Hs ≈ 0.5 h).
+- `_diago` 판정량 최대 η_t/√(gh): x 60 0.35–0.43 · x 80 0.25 — 시작 0.3 에 거의 안 닿고, 켜짐 시간 x 40 에서만 4–32 s. ν 를 몇 배로 해도 **켜지는 곳이 없어** 무효. 원인 = MS92 덜 천수 (D-M3-21) 로 앞면 η_t 가 작음.
+- 처방 (papers D-M7-41): 시작 조건에 마루 높이 |η|/h₀ > ε 를 OR (`-breakepsor=`, FUNWAVE SWE_ETA_DEP · Tonelli-Petti 0.8). 시험 nb2E8 · nb2E6 · nb2E8F.
+- 실행 태그: nb2Ken · nb2Fw35 · nb2Fw.
+- **결과 (nb2E8 · nb2E6 · nb2E8F)**: 효과 없음 — Stockdon 비 · 바깥 Hs 가 nb2S 와 소수 둘째 자리까지 같음, 켜짐 시간도 같음. 마루 칸은 η_t ≈ 0 이라 ν 조건 (η_t > Cbrk2) 을 못 넘고, 나이가 다음 파 (Tp ≈ T_brk) 전에 만료 · 번짐은 나이 > dx/c 필요. → 앞면 순간 ν 구조 자체가 소산 부족. 다음: `-tke` · `-breakroller` (분산 버그 #83 뒤 미시험) — nb2Tke · nb2Rol · nb2TkeB 진행 중.
