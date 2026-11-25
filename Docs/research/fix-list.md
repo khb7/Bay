@@ -57,6 +57,7 @@
 | T6 | 표면 수분 띠 1/2 높이 (Carsel α) · 젖은 색 곡선 느림 · 내륙 지하수 overheight 없음 | C8 · C19 · C10 | 해빈 모래 vG (Hallin 2023) · 색 곡선 S0 ~0.05 · 지하수 초기 overheight |
 | T7 | 입자: cohesion 문턱이 젖은 쪽 · 침출력 없음 | C9 · C17 | 문턱을 Pakpour · Scheel 값으로 · 침출대 유효응력 |
 | T8 | setup 이 쇄파대를 가파르게 (Dean A 0.10 → 0.13) 하면 커짐 (+38 %) — Raubenheimer 2001 은 완만할수록 큼 | Narrabeen 기본값 (m3-log #85) | 반대 방향 → 모델 결함 후보. 안쪽 격자 경계 수심 (0.58 → 0.76 m) · roller 운동량 · Hanslow & Nielsen 1993 NSW 현장 setup 과 대조 |
+| O1 | 최적화: 새 기본 (Narrabeen 10 m 경계 1359 칸 · 긴 줄 CR 솔버 · A 0.2) 비용 미측정. 프레임 ~12 ms 중 렌더 스레드 ~10 ms (#66, 타일 꺼도 10.4) 가 시뮬 GPU (~6 ms) 보다 큼 | m3-log #30–#35 · #66 · #84 | ① 새 기본 `-puretime` + Insights 패스별 ② 렌더 10 ms 내역 ③ 바깥 격자 깊은 쪽 칸 (25 → 50 cm, 파장 ~88 m) · 서브스텝 수 ④ morph · 부유사 패스 비용. 문헌: Celeris (Tavakkol & Lynett 2017) · GPU 삼중대각 (Zhang, Cohen & Owens 2010) |
 
 ## 끝난 것 (참고)
 - 처오름이 땅끝까지 → 후빈 고정 지형 (#70–71)

@@ -33,3 +33,6 @@ Desktop.ini
 .ignore
 
 Docs/research/pdf/
+
+# Narrabeen 자료 (Turner et al. 2016, Dryad doi:10.5061/dryad.28g01) — 원자료, 커밋 안 함
+Docs/research/csv/

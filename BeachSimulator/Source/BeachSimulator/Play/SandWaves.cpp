@@ -109,9 +109,9 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	const double XsBase = 0.45 * NX * Dx;
 	NX += LandCells;
 	// 해변 단면 (papers D-M3-6): 물가 x_s 에서 바다 쪽(+x) Dean h = A·(x − x_s)^(2/3), 땅 쪽 직선 (기본 1:15)
-	double Slope = 1.0 / 15.0; { double Inv = 0; if (FParse::Value(Cmd, TEXT("beachslope="), Inv) && Inv > 0) { Slope = 1.0 / Inv; } }   // -beachslope=10 → 1:10
-	// 기준 해변 Narrabeen (papers D-M7-35): D50 0.3 mm → Dean (1987) A ≈ 0.13 (이전 0.1 = 0.2 mm). -deana= 로 바꿈
-	double A = 0.13; FParse::Value(Cmd, TEXT("deana="), A);
+	double Slope = 1.0 / 11.0;   // Narrabeen 전면 tanβ 중앙 0.074–0.093 (월별 측량 1976–2019, D-M7-36). 이전 1:15 { double Inv = 0; if (FParse::Value(Cmd, TEXT("beachslope="), Inv) && Inv > 0) { Slope = 1.0 / Inv; } }   // -beachslope=10 → 1:10
+	// 기준 해변 Narrabeen: 실측 단면 맞춤 A 중앙 0.19 (가운데 PF2–PF6 0.21–0.23, 해저 측량 2011–2015, papers D-M7-36). 입경식 0.13 (D-M7-35) 보다 가파름. -deana= 로 바꿈
+	double A = 0.2; FParse::Value(Cmd, TEXT("deana="), A);
 	const double Xs = XsBase + LandCells * Dx;   // 땅 45% + 추가 폭 — 처오름이 뒷벽에 닿지 않게 (m3-log #5 · #16)
 	TArray<float>& BCorner = Out.BCorner;
 	BCorner.SetNum((NX + 1) * (NY + 1));
@@ -127,7 +127,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	const float H0 = -BCorner[NX];   // 경계 정지 수심
 	float Hs = (float)(1.416 * 0.42 * H0);   // 쇄파대 포화 H_rms = 0.42·h (Thornton & Guza 1982)
 	FParse::Value(Cmd, TEXT("wavehs="), Hs);
-	double SwellFrac = 0.6, SwellTp = 10.0, WindTp = 5.0;   // Narrabeen 심해 Tp ≅ 10 s (D-M7-35, 이전 12)
+	double SwellFrac = 0.6, SwellTp = 9.5, WindTp = 5.0;   // Narrabeen 10 m 지점 Tp 중앙 9.4 s (D-M7-36, 이전 12)
 	FParse::Value(Cmd, TEXT("swellfrac="), SwellFrac);
 	FParse::Value(Cmd, TEXT("swelltp="), SwellTp);
 	FParse::Value(Cmd, TEXT("windtp="), WindTp);
@@ -188,7 +188,7 @@ void BuildWaveScene(const TCHAR* Cmd, FWaveScene& Out)
 	G.Waves = MakeWaves(Hs, SwellFrac, SwellTp, WindTp, Seed, H0, NY * Dx, MeanDeg, SwellSpread, WindSpread, false, bEq);
 	// T3b 장주기파 (B 안, m3-plan): 경계 IG 유의파고 = IgCoef · H₀(먼바다). 이론 식(LH&S 1962)은 쇄파 수심에선 발산 · 깊은 곳 + Green 법칙은
 	// 관측의 수십 분의 1 이라 (m3-log #7) 관측(Stockdon IG swash)에 맞춰 계수 하나를 정한다. 부호 = 파군 밑 수위 하강이 풀려 들어온다
-	double DeepH0 = 1.6, IgCoef = 0.25;   // Narrabeen 심해 평균 Hs ≅ 1.6 m (D-M7-35, 이전 1.0)
+	double DeepH0 = 1.0, IgCoef = 0.25;   // nesting 이면 바깥 경계 (10 m) Hs 그대로 (천수 안 함). Narrabeen 10 m 지점 Hs 중앙 0.97 · 평균 1.06 · 99 % 2.74 m (D-M7-36) — 심해 1.6 m 는 만 안쪽 굴절 · 차폐로 줄어듦
 	FParse::Value(Cmd, TEXT("waveh0="), DeepH0);
 	FParse::Value(Cmd, TEXT("igcoef="), IgCoef);
 	{

@@ -4595,3 +4595,62 @@ Pure Data로 자연음을 직접 만들어보는 구성이고, **바람·물·�
 - **측정 (m3-log #85)**: Narrabeen 기본값 (A 0.13 · H0 1.6 · Tp 10 · 10 m 경계) 너울 R2 1.41 · S_IG 1.09 · setup 1.83 × Stockdon. A 만 0.1 로 → setup 1.33 · R2 1.22. 같은 파랑 (H0 1.5 Tp 12) 에서 A 0.13 → setup 1.72 (A 0.1 은 1.25, #84).
 - **Raubenheimer, Guza & Elgar (2001)** JGR 106(C3) △ (초록, doi 10.1029/2000JC000572): 물가 setup 은 쇄파대 전체 지형에 좌우되며 **쇄파대 경사 (평균 수심/폭) 가 완만할수록 커짐**. 물가 쪽으로 갈수록 모델 과소. → 우리 모델은 반대 방향 (가파를수록 커짐) — fix-list T8.
 - **Hanslow & Nielsen (1993)** △ (검색 요약): 소산 해변 최대 setup 은 경사 무관. NSW 현장 자료 — Narrabeen 대조용으로 원문 확인 필요.
+
+### D-M7-36. Narrabeen 실측 단면 · 파랑 · 조석 분석 (2026-11-25, `tools_narrabeen.py`)
+- 자료: Turner et al. (2016) Dryad 갱신판 ✓ (측량 1976-04 ~ 2019-11, 단면 PF1 · 2 · 4 · 6 · 8 각 ~650 회 · 해저 측량 2011–2015 11 회 · 10 m 지점 시간별 파랑 1979– · 15 분 조석). Docs/research/csv/ (커밋 안 함). 사용 조건: Data Descriptor 인용.
+- **전면 경사** (z −0.5 ~ +1.0 m AHD 직선, 월별): tanβ 중앙 PF1 0.092 · PF2 0.089 · PF4 0.087 · PF6 0.093 · PF8 0.074 (사분위 0.06–0.12) → **≈ 1:11** (지금 1:15 는 완만).
+- **Dean A** (물가 z 0 기준, h 0.5–10 m 맞춤): 중앙 PF1 0.175 · PF2 0.215 · PF4 0.228 · PF6 0.210 · PF8 0.146, 전체 0.191 → **≈ 0.2**. 입경식 0.13 (D-M7-35) 보다 ~1.5 배 가파름 — Bosboom & Stive 의 "같은 입경에서 ~2 배 차" 범위. 물가에서 수심 3.3 / 5.5 m 까지 ≈ 80 / 140 m (Dean A 0.2 → 5.5 m 에서 144 m 와 맞음), 10 m 까지 250–480 m.
+- **5.5 → 10 m 실제 경사 1:27–1:70** — 우리 1:10 인공 경사는 지침 (Deltares) 대로 계산 절약용, 실제와 다름 (경계 근처라 영향 작다고 봄 — #84 6 m · 11 m 수렴).
+- **사주**: 대부분 측량에서 물가 40–100 m · Dean 맞춤보다 +0.4–2.6 m 높은 혹 (중앙 +1 m). PF8 (남쪽) 은 250–300 m. **Dean 단면에 없음** — 맞춤 rms 0.2–0.8 m 의 대부분.
+- **파랑 (PF4 앞 10 m, 1979–)**: Hs 평균 1.06 · 중앙 0.97 · 95 % 1.95 · 99 % 2.74 · 최대 5.27 m. Tp 중앙 9.4 s (사분위 8.2–11.0), Hs > 3 m 일 때 12.1 s. 방향 중앙 104° TN (91–111). → 심해 1.6 m 가 만 안에서 ~1.0 m 로 (굴절 · Long Reef 차폐). 우리 `-waveh0` 는 바깥 경계 (10 m) Hs 그대로라 **이 값을 바로 씀**.
+- **조석**: −0.93 ~ +1.12 m AHD (1–99 % −0.74 ~ +0.86) — 모델 없음 (후속).
+- **기본값 결정**: A 0.2 · 전면 1:11 · 경계 Hs 1.0 m · Tp 9.5 s · 경계 10 m. 사주 · 조석은 후속.
+
+### D-M7-37. 병렬 문헌 조사 5 묶음 (2026-11-25, 서브에이전트 — ✓ 원문 · △ 초록/2 차)
+**(1) 쇄파 기준 · 식 계수**
+- **Raubenheimer, Guza & Elgar (1996)** ✓ 원문 (WHOI Publications/049.pdf): γs = (0.19 ± 0.09) + (1.05 ± 0.15) β/kh, r ≈ 0.8, **포화 쇄파대 센서만**, 2288 점 bin 가중 회귀. → D-M3-21 의 "계수 미확인" 해소.
+- **Raubenheimer, Guza & Elgar (2001)** ✓ 원문 (WHOI 069.pdf) 식 (10): **η_shore/H_s0 = 0.019 + 0.003/β_av** (RMS 0.06, 사주 해변 0.01 ≤ β_av ≤ 0.04). β_av = h_av/Δx, Δx = 물가 ~ 쇄파대 바깥 끝 (γs > 0.45 가장 바다 쪽, △ OCR). 상수 맞춤 0.26 (RMS 0.10). Iribarren 형 대안 0.336 − 0.628 β_av/√(H_s0/L0) (△ 분모).
+- **Kennedy et al. (2000)** △ (2 차: Engineer 53(2) 2020): ν = B δ_b² (h+η) η_t, δ_b 1.2, η_t^(I) 0.65√(gh) → η_t^(F) 0.15√(gh) 를 T* = 5√(h/g) 동안 선형, B = 1 (η_t ≥ 2η_t*) · 0 (≤ η_t*) · 중간 η_t/η_t* − 1 (원문 확인 필요). 재보정: Chen 2000 사주 0.35 · Choi 0.45.
+- **Ting & Kirby 1994** △: h 0.40 m + 1:35, spilling H 0.125 T 2 s · plunging H 0.128 T 5 s. **Hansen & Svendsen 1979** ✓ (Bacigaluppi · K&R 2018): h0 0.36 m, 1:34.26 (논문마다 32.26 오타), 051041 T 2 s H 0.036 · 031041 T 3.33 s H 0.043. **두 실험 모두 수치 파일 공개본 없음** (FUNWAVE simple_cases 에도 없음) → 그림 디지타이즈 또는 저자 요청.
+**(2) setup 과대 원인**
+- 문헌의 위상 해상 모델 setup 오차는 대부분 **과소** (roller 누락 · swash — Apotsos 2007 △, Martins 2022 △, Guérin 2018 △ 3D 순환 ≤ 17 %). 우리 과대는 반대 → roller 누락은 원인 아님.
+- Kazolea & Ricchiuto 2018 △: Kennedy 형 와점성은 "the amount of viscosity obtained is not enough" (정상 도수). Karambas 계열 △: 운동량 보존 안 되면 안쪽 setup 매우 나쁨 (파고 감쇠는 괜찮음).
+- 판단: **소산 부족 → 남은 운동량 플럭스가 물가에서 setup 으로**. 쇄파대 가파를수록 소산 거리 짧아 커짐 (T8 설명). 점검: setup 측정 정의 (Stockdon = 움직이는 물가 처오름 평균, 젖음 문턱 차이) 도.
+- Hanslow & Nielsen 1993 0.38 H0rms 계수 원문 미확인.
+**(3) Narrabeen 검증 자료**
+- Beuzen et al. 2019 NHESS ✓: 고정 lidar 1 년 시간별 처오름 8328 건 — **원자료 비공개**, GP 학습/시험 466 건만 공개 (Zenodo 10.5281/zenodo.3401739 · GitHub). Stockdon RMSE 0.36 m · B 0.21 m (부호 △).
+- Harley et al. 2017 Sci. Rep. ✓ (2016-06 ECL): 심해 Hm0 6.5 m · 74 h · 106° · 최고 수위 1.29 m → **Narrabeen 육상부 평균 −103 m³/m**. 비교: 1997 8.4 m/152° −76 · 2007 6.9 m/149° −73 · 2015 8.1 m/160° −62 · 1986 7.2 m/136° −58 — 파향이 Hs 보다 중요.
+- Phillips et al. 2019 JGR-ES ✓: 2015-04 폭풍 뒤 76 일 berm 회복, 조석 주기별 1–2 m³/m/day (흔함), 순 0.7 m³/m/day, berm 높이는 대조–소조 총수위 지배. 자료 Dryad doi:10.5061/dryad.774c492 (424 KB). Phillips 2017 △: 해안선 회복 ~0.2 m/day, 사주 붙으면 3–4 배.
+- Short 1985 ✓: 이안류 간격 침식기 300–500+ m · 퇴적기 170–250 m.
+**(4) 조석**
+- 최소 구현: 경계 평균 수위 η₀(t) (M2, 진폭 0.6–0.9 m, 시작 ramp) · 지하수 바다 쪽 수두 = 평균 수위 (seepage face 허용) · 한 주기 spin-up · **morfac 은 바닥에만 (조석 압축 금지 — 지하수 감쇠 길이가 √MF 로 틀어짐)** · 비교는 주기 끝에서만 (Reyns ✓, Roelvink 2006 △).
+- XBeach zs0file ✓ · SWASH BOUNDCOND FOURIER/SERIES + SMOOTHING ✓. Housego 2023 ✓: 과고 ~ kA² cotβ (Nielsen 1990), 현장 감쇠율이 위상 지연율의 2–3 배. 우리 값 (K 5e-4, Sy 0.3) 감쇠 길이 11–15 m · 과고 0.2–0.3 m (계산 △). Turner 1997 △ NSW 지하수 평균 > MSL + 1.2 m.
+- 상승 조석 = swash 퇴적 · 하강 = 침출로 침식 (Duncan 1964 · Turner 1993 · Masselink & Turner 2012 △).
+**(5) GPU 최적화**
+- Celeris Advent ✓ (CPC 2017): MS92 + KP07 FVM-FDM, 삼중대각 CR (Zhang 2010), 단정밀도로 충분. Celeris-WebGPU 소스 ✓: **Madsen 모드는 삼중대각 계수를 지형이 바뀔 때만 갱신**, Courant 0.15 (P-C 0.25).
+- Zhang, Cohen & Owens 2010 ✓: 시간은 일량보다 단계 수에 좌우, 64–128 은 PCR, 512 이상은 CR+PCR 혼합 유리, 큰 시스템은 CR 몇 단계로 줄여 shared 로.
+- FUNWAVE 체크리스트 ✓ "DX/h > 1/15" — 우리 25 cm 는 h > 3.75 m 에서 위반 (10 m 경계 dx/h 0.025). 파장당 80–100 점 △ 이면 10 m · Tp 10 s (L ≈ 94 m) 에서 dx ~1 m 가능. one-way nesting 격자비 ≤ 4 △ (Choi 2022) — 우리 0.25 → 0.05 = 5.
+- 후보 (효과 순, 추정): ① 지형 고정 동안 PCR 계수 미리 분해 (morph · 쇄파 깊이 바뀌면 갱신) ② 바깥 깊은 쪽 dx 0.5–1 m (칸 · 서브스텝 동시 감소) ③ y 줄 (N 51) 작은 PCR/Thomas ④ x 줄 CR 2 단계 + 512 PCR ⑤ Courant 0.13 → 0.15–0.25. 정밀도는 fp32 유지.
+
+### D-M7-38. 쇄파 소산 보강 — FUNWAVE 기본은 하이브리드, 우리 정적 ν 는 Kennedy 의 1/3–1/6 (2026-11-25, 서브에이전트)
+- **FUNWAVE-TVD 문서 ✓** "Default is shock-capturing type breaking" (SWE_ETA_DEP ≈ 0.8, 셀에서 분산 끄고 NSWE). **breaker.F 소스 ✓** 주석: 충격 포착 쇄파일 때 "this subroutine is only used for demonstration or calculating bubbles or foam". 기본 분기 ν = (h+η)·Cbrk2·√(gh) (= 우리 포트), `VIS_KENNEDY_ORIGINAL` 분기 ν = cap1·|η_t|·B. T_brk = 10√(h/g) 식은 주석 처리. → **우리는 FUNWAVE 의 보조 기능만 옮기고 분산은 켠 채 — 실제 소산 기구 (충격 포착) 가 빠져 있음.**
+- **Kennedy 2000** ✓ (2 차: Papoutsellis 2019 §3.1 · FUNWAVE 문서): ν = B δ_b² (h+η) η_t (동적), δ_b 1.2, B = 0 (η_t ≤ η_t*) · η_t/η_t* − 1 · 1 (≥ 2η_t*), η_t* = 0.65√(gh) → 0.15√(gh) 를 T* = 5√(h/g) 동안 선형. Vincent & Briggs 재보정 0.45/0.35. 쇄파 중 η_t 0.3–0.6√(gh) 면 ν ≈ 0.43–0.86 h√(gh) — **우리 0.15 h√(gh) 의 3–6 배** (계산).
+- Papoutsellis 2019 ✓: Kennedy 형 EVM 도 Ting & Kirby 에서 setup **과소** — 문헌 오차 방향은 과소. Cienfuegos 2010 △: Kennedy 는 안쪽 쇄파대 파고 과대 (원저자도 보고).
+- Bacigaluppi 2019 ✓: 하이브리드 기본 γ 0.6 (0.3 은 막대 시험만) + 기울기 φ 30°, 종료 Fr_b < 1.3. 하이브리드는 격자를 고울수록 "instabilities, that lead to a blow up". Kazolea & Ricchiuto 2018 (인용 ✓): EVM 은 격자 둔감, 하이브리드 민감.
+- **켜짐 시간 4–6 %**: 1 차 수치 없음. 추정 (ν 는 앞면만, 앞면 길이 1–2H / 파장) 3–7 % → **이상하지 않음 — 문제는 ν 크기 · 분산 켠 채 앞면이 undular 로 퍼짐**.
+- Schäffer, Madsen & Deigaard 1993 ✓ (CE 20:185): MS 계열용 roller (국소 경사 판정). 상수 φ_B 20° (MSS97) / 32° · φ_0 10° · t½ T/5 · f_δ 1.5 · roller 속도 1.3√(gh) △.
+- **시도 순서**: ① ν 를 Kennedy 원식 (동적 · B 램프 · η_t* 감소) ② 시작 문턱 0.3 vs 0.45/0.35 · 0.65/0.15 비교 ③ 쇄파 칸 분산 끄기 (하이브리드, H/h > 0.8 · Fr_b < 1.3) — 격자 불안정 위험이라 ① 뒤 ④ Schäffer roller ⑤ T_brk = 10√(h/g).
+
+### D-M7-39. 공개 검증 자료 (2026-11-25, 서브에이전트 — 받지 않음)
+- **USGS DS602 (Stockdon & Holman 2011)** ✓ 퍼블릭 도메인, https://pubs.usgs.gov/ds/602/ — Stockdon 2006 의 10 개 실험 원자료 txt 9 개 (소형): 날짜 · R2 · setup · S · S_inc · S_IG · H0 · Tp · β_f. → 지금 쓰는 Stockdon **식 대신 개별 점 · 산포와 직접 비교** (특히 Duck 계열 β_f ~0.1 · Narrabeen 비슷한 조건만 골라).
+- **GLOBEX** ✓ (Zenodo 4009405, CC-BY, 3.2 GB): Scheldt flume 1:80, 7 조건, η · u 고해상도 — 쇄파대 H 감쇠 · IG · setup 실험실 기준 (Ting & Kirby 대체 후보, 단 완만 경사).
+- **FRF Duck THREDDS** △ (chldata.erdc.dren.mil — 이 PC 에서 접속 불가, TCP reset): 횡단 게이지 xp125/150/200m · AWAC 4.5/6/11 m · lidarWaveGauge (쇄파대 안 가상 게이지) · lidarWaveRunup (2015–) · 측량 transect. Brodie 2015 JTECH: lidar 쇄파대 Hs · setup 이 압력계와 일치.
+- CIEM Hydralab+ ✓ (Zenodo 1404709 신판 확인 필요) · Saltburn lidar η(x,t) ✓ (Bath 10.15125/BATH-00540, 183 MB).
+- **swash 퇴적 자료 (BARDEX II · Puleo 2014 · CROSSTEX · Gallagher 1998) · 고전 쇄파 실험 (Ting & Kirby · Hansen & Svendsen · LIP11D · Boers) 공개 저장소 없음** — 저자 요청 · 그림 디지타이즈.
+
+### D-M7-40. 오픈소스 쇄파 구현 대조 — FUNWAVE · Celeris · XBeach 소스 (2026-11-25, 서브에이전트 ✓ 소스 줄)
+- **FUNWAVE-TVD master** ✓: `io.F` 기본 **VISCOSITY_BREAKING = TRUE** (D-M3-21 의 FALSE 기록 정정 필요 — 판 차이), Cbrk1 0.65 · **Cbrk2 0.35**, T_brk 20 s, MinDepthFrc 0.1. `breaker.F`: √(gH) 와 ν 의 H 는 **전체 수심 h+η** — ν = (h+η)·Cbrk2·√(g(h+η)), 앞면만 (AGE ∈ (0, T_brk) · η_t > Cbrk2√(gH)). `sources.F`: ν 를 ∂x(ν∂x(HU)) + ∂y(ν∂y(HU)) 로 HU · HV 양 방향. 점성 모드면 SWE 전환 꺼짐 (분산 전역 켬). 하이브리드 (`masks.F` MASK9, |η|/h ≤ 0.8 이고 3×3 젖음일 때만 분산, 이력 없음) 는 rip_2d · car_mase_kirby 예제.
+- **→ 우리와 차이**: 우리 정적 ν = h · BreakStop(0.15) · √(gh) — **계수 0.15 vs FUNWAVE 0.35, 수심 h vs h+η** → η/h ~0.5 에서 FUNWAVE 가 ~4 배 (계산). 시작 문턱 우리 0.3 vs 0.65.
+- **Celeris-WebGPU** ✓ (`Pass_Breaking.wgsl`): Kennedy 원식, η_t,I 0.50c · η_t,F 0.15c (c = √(g·전체 수심)), T* 5√(h/g), B = clamp(η_t/η_t* − 1, 0, 1), **ν = B·δ·h·η_t, δ = 2.0** (상한 dx·dy/dt), η_t < η_t* 면 나이 0. 적용 ∂x(νP_x) + ½∂y(νP_y) + ½∂y(νQ_x). 분산 계수는 정지 수심만 · 지형 바뀔 때만 갱신 · PCR, **마른 칸 3 칸 이내는 분산 끔**. 쇄파 중 분산 유지. 스펀지 20 칸, 기본 θ 2.
+- **XBeach nonh** ✓ (`nonh.F90`): dzdt > maxbrsteep(0.4)·√(gh) 시작, 이웃 쇄파면 0.1, **dzdt < 0 까지 앞면 전체 쇄파 · 그 칸 정수압 (분산 끔)** → 운동량 보존 기법이 충격으로 소산. Smagorinsky + breakviscfac 1.5. 사태 wetslp 0.3 · dryslp 1.0 · hswitch 0.1 m · dzmax 0.05 m/s. 부유사 Ts = max(0.1 h/w_s, 0.5 s) (우리와 같음).
+- **판단**: 세 코드 중 **쇄파 중 분산을 켜고 ν 도 가장 작은 것이 우리**. 후보 ① FUNWAVE 그대로 (Cbrk2 0.35 · 전체 수심) ② Kennedy/Celeris 동적 ν ③ XBeach 식 앞면 정수압 (하이브리드).

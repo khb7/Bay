@@ -13,8 +13,8 @@ import numpy as np
 
 D = 'C:/Users/onebe/Bay/BeachSimulator/Saved/MeshRuns/'
 import os
-A = float(os.environ.get('SG_A', '0.13'))   # Dean A (Narrabeen 기본 0.13, 이전 실행은 SG_A=0.1)
-Xs, Sl = 19.52, 1 / 15
+A = float(os.environ.get('SG_A', '0.2'))   # Dean A (Narrabeen 실측 0.2 · D-M7-36. nb* 실행 0.13, 그 전 0.1)
+Xs, Sl = 19.52, 1 / float(os.environ.get('SG_SL', '11'))   # 전면 1:11 (D-M7-36, 이전 실행 SG_SL=15)
 NEST = float(os.environ.get('SG_NEST', '5.5'))   # Dean 구간 끝 수심
 DT = 0.1
 G = 9.81
